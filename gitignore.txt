@@ -1,0 +1,4 @@
+manager_data.db
+ics_exports/
+__pycache__/
+*.pyc
