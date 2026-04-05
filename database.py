@@ -98,6 +98,16 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            google_id TEXT UNIQUE NOT NULL,
+            email TEXT NOT NULL,
+            name TEXT,
+            picture TEXT,
+            last_login TEXT DEFAULT (datetime('now')),
+            created_at TEXT DEFAULT (datetime('now'))
+        );
     """)
     conn.commit()
     conn.close()
@@ -123,6 +133,37 @@ def get_config(key, default=None):
     row = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
     conn.close()
     return row["value"] if row else default
+
+
+def upsert_user(google_id, email, name=None, picture=None):
+    """Insert or update a user record on login."""
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO users (google_id, email, name, picture, last_login) "
+        "VALUES (?, ?, ?, ?, datetime('now')) "
+        "ON CONFLICT(google_id) DO UPDATE SET "
+        "email = excluded.email, name = excluded.name, "
+        "picture = excluded.picture, last_login = datetime('now')",
+        (google_id, email, name, picture),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user_by_google_id(google_id):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM users WHERE google_id = ?", (google_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_users():
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM users ORDER BY last_login DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def get_all_config():
