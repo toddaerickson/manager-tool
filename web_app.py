@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 
 import database as db
 import templates
+import auth
 
 # ---------------------------------------------------------------------------
 # App config
@@ -528,8 +529,29 @@ def page_configuration():
 # ---------------------------------------------------------------------------
 
 def main():
+    # ── Authentication gate ──────────────────────────────────────────────
+    if not auth.require_auth():
+        return  # Login page is shown; stop here
+
+    # ── Sidebar ──────────────────────────────────────────────────────────
     with st.sidebar:
         st.title("Manager Tool")
+
+        # Show logged-in user info
+        user = auth.get_current_user()
+        if user:
+            col_pic, col_name = st.columns([1, 3])
+            with col_pic:
+                if user.get("picture"):
+                    st.image(user["picture"], width=40)
+            with col_name:
+                st.markdown(f"**{user.get('name', '')}**")
+                st.caption(user.get("email", ""))
+            if st.button("Sign out", use_container_width=True):
+                auth.logout()
+                st.rerun()
+            st.divider()
+
         st.caption("OVERVIEW")
         page = st.radio(
             "Navigate",
