@@ -3,20 +3,20 @@ Google OAuth 2.0 authentication for the Manager Tool Streamlit app.
 
 Setup:
     1. Go to https://console.cloud.google.com/apis/credentials
-    2. Create an OAuth 2.0 Client ID (Web application)
-    3. Add authorized redirect URI: http://localhost:8501/
-       (or your deployed URL)
-    4. Set environment variables or use the Configuration page:
+    2. Create an OAuth 2.0 Client ID (Application type: Web application)
+    3. Add your deployed URL as an Authorized redirect URI
+       (e.g. https://your-app.streamlit.app/ or https://your-domain.com/)
+    4. Provide credentials via environment variables (recommended for prod):
         GOOGLE_CLIENT_ID=<your-client-id>
         GOOGLE_CLIENT_SECRET=<your-client-secret>
+        OAUTH_REDIRECT_URI=https://your-app.example.com/
+       Or configure them in-app on the first-run setup screen.
 
     Optionally restrict access to specific email domains or addresses
     via the ALLOWED_EMAILS or ALLOWED_DOMAIN environment variables.
 """
 
 import os
-import json
-import hashlib
 import secrets
 from urllib.parse import urlencode
 
@@ -37,23 +37,40 @@ def _get_oauth_config():
 
 
 def _get_redirect_uri():
-    """Build the OAuth redirect URI from the current Streamlit URL."""
-    return os.environ.get(
-        "OAUTH_REDIRECT_URI",
-        db.get_config("oauth_redirect_uri", "http://localhost:8501/"),
-    )
+    """Determine the OAuth redirect URI.
+
+    Priority:
+        1. OAUTH_REDIRECT_URI environment variable  (best for production)
+        2. Database config 'oauth_redirect_uri'      (set via in-app form)
+        3. Auto-detect from Streamlit request headers (convenience fallback)
+    """
+    # Explicit configuration takes priority
+    explicit = os.environ.get("OAUTH_REDIRECT_URI") or db.get_config("oauth_redirect_uri")
+    if explicit:
+        return explicit
+
+    # Auto-detect from request headers (works behind proxies / cloud hosts)
+    try:
+        headers = st.context.headers
+        host = headers.get("X-Forwarded-Host") or headers.get("Host") or ""
+        proto = headers.get("X-Forwarded-Proto") or "https"
+        if host:
+            return f"{proto}://{host}/"
+    except Exception:
+        pass
+
+    # Last resort — local dev
+    return "http://localhost:8501/"
 
 
 def _is_email_allowed(email):
     """Check if the email is allowed to access the app."""
-    # Check allowed emails list (comma-separated)
     allowed_emails = os.environ.get("ALLOWED_EMAILS") or db.get_config("allowed_emails")
     if allowed_emails:
         emails = [e.strip().lower() for e in allowed_emails.split(",")]
         if email.lower() in emails:
             return True
 
-    # Check allowed domain
     allowed_domain = os.environ.get("ALLOWED_DOMAIN") or db.get_config("allowed_domain")
     if allowed_domain:
         domain = email.lower().split("@")[-1]
@@ -79,7 +96,7 @@ SCOPES = "openid email profile"
 
 
 def _build_auth_url(client_id, redirect_uri):
-    """Generate the Google OAuth authorization URL with PKCE / state."""
+    """Generate the Google OAuth authorization URL with state protection."""
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(16)
     st.session_state["oauth_state"] = state
@@ -109,14 +126,13 @@ def _exchange_code(code, client_id, client_secret, redirect_uri):
             "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         },
-        timeout=10,
+        timeout=15,
     )
     token_resp.raise_for_status()
     tokens = token_resp.json()
 
-    # Fetch user profile
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
-    user_resp = requests.get(GOOGLE_USERINFO_URL, headers=headers, timeout=10)
+    user_resp = requests.get(GOOGLE_USERINFO_URL, headers=headers, timeout=15)
     user_resp.raise_for_status()
     return user_resp.json()
 
@@ -146,8 +162,7 @@ def logout():
 # ---------------------------------------------------------------------------
 
 def _render_login_page():
-    """Render a clean, user-friendly login page."""
-    # Center the login card
+    """Render a clean, centred login page."""
     col1, col2, col3 = st.columns([1, 2, 1])
 
     with col2:
@@ -169,24 +184,27 @@ def _render_login_page():
             st.warning(
                 "Google OAuth is not configured yet.  \n"
                 "Set **GOOGLE_CLIENT_ID** and **GOOGLE_CLIENT_SECRET** "
-                "as environment variables, or expand the section below "
-                "to configure them now."
+                "as environment variables, or configure them below."
             )
             with st.expander("Configure Google OAuth Credentials"):
+                detected_uri = _get_redirect_uri()
                 st.markdown(
                     "1. Go to [Google Cloud Console]"
                     "(https://console.cloud.google.com/apis/credentials)  \n"
                     "2. Create an **OAuth 2.0 Client ID** "
-                    "(Application type: *Web application*)  \n"
-                    "3. Add **Authorized redirect URI**: "
-                    "`http://localhost:8501/`  \n"
-                    "4. Copy the Client ID and Client Secret below."
+                    "(type: *Web application*)  \n"
+                    "3. Add your **Authorized redirect URI** — use the "
+                    "same value you enter below  \n"
+                    "4. Copy the Client ID and Secret here."
                 )
                 with st.form("oauth_config_form"):
                     cid = st.text_input("Google Client ID")
                     csec = st.text_input("Google Client Secret", type="password")
                     redirect = st.text_input(
-                        "Redirect URI", value="http://localhost:8501/"
+                        "Redirect URI (your deployed app URL, ending with /)",
+                        value=detected_uri,
+                        help="Must exactly match an Authorized redirect URI "
+                             "in your Google Cloud Console project.",
                     )
                     allowed = st.text_input(
                         "Allowed emails (comma-separated, blank = all)",
@@ -222,33 +240,25 @@ def _render_login_page():
             use_container_width=True,
         )
 
-        st.markdown(
-            """
-            <p style="text-align: center; color: gray; font-size: 0.85rem;
-                       margin-top: 1.5rem;">
-                You will be redirected to Google to authenticate.<br>
-                Only authorized accounts can access this app.
-            </p>
-            """,
-            unsafe_allow_html=True,
+        st.caption(
+            "You will be redirected to Google to authenticate. "
+            "Only authorized accounts can access this app."
         )
 
 
 # ---------------------------------------------------------------------------
-# Main auth gate — call this at the top of your app
+# Main auth gate
 # ---------------------------------------------------------------------------
 
 def require_auth():
     """Gate the app behind Google OAuth.
 
-    Returns True if the user is authenticated and should see the app.
+    Returns True if the user is authenticated.
     Returns False if the login page is being shown instead.
     """
-    # Already logged in
     if is_authenticated():
         return True
 
-    # Check for OAuth callback (code in query params)
     params = st.query_params
     code = params.get("code")
     state = params.get("state")
@@ -282,7 +292,6 @@ def require_auth():
             _render_login_page()
             return False
 
-        # Store user in session and DB
         st.session_state["authenticated"] = True
         st.session_state["user"] = {
             "email": email,
@@ -297,10 +306,8 @@ def require_auth():
             picture=user_info.get("picture", ""),
         )
 
-        # Clear query params and reload
         st.query_params.clear()
         st.rerun()
 
-    # No code — show login page
     _render_login_page()
     return False
