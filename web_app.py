@@ -1505,31 +1505,11 @@ def main():
         "Configuration": page_configuration,
     }
 
-        # Grouped navigation (#1)
-        current = st.session_state.get("page", "Dashboard")
-        for group_label, items in NAV_GROUPS:
-            # Overview group has no expander — always visible
-            if group_label == "Overview":
-                for btn_label, page_key in items.items():
-                    btype = "primary" if current == page_key else "secondary"
-                    if st.button(btn_label, key=f"nav_{page_key}",
-                                 use_container_width=True, type=btype):
-                        navigate(page_key)
-                        st.rerun()
-            else:
-                group_active = current in items.values()
-                with st.expander(f"**{group_label}**", expanded=group_active):
-                    for btn_label, page_key in items.items():
-                        btype = "primary" if current == page_key else "secondary"
-                        if st.button(btn_label, key=f"nav_{page_key}",
-                                     use_container_width=True, type=btype):
-                            navigate(page_key)
-                            st.rerun()
-
-    # ── Page dispatch ──
-    handler = DISPATCH.get(st.session_state.get("page", "Dashboard"),
-                           page_dashboard)
-    handler()
+    handler = dispatch.get(page)
+    if handler:
+        handler()
+    else:
+        page_dashboard()
 
 
 main()
