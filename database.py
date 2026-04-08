@@ -180,7 +180,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS team_members (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            manager_id INTEGER NOT NULL DEFAULT 0,
+            manager_id INTEGER,
             name TEXT NOT NULL,
             email TEXT,
             role TEXT,
@@ -193,7 +193,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            manager_id INTEGER NOT NULL DEFAULT 0,
+            manager_id INTEGER,
             title TEXT NOT NULL,
             event_type TEXT NOT NULL CHECK(event_type IN
                 ('check_in', 'coaching', 'one_on_one', 'quarterly_review', 'other')),
@@ -215,7 +215,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS action_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            manager_id INTEGER NOT NULL DEFAULT 0,
+            manager_id INTEGER,
             event_id INTEGER,
             description TEXT NOT NULL,
             assignee TEXT,
@@ -263,7 +263,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS journal_entries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            manager_id INTEGER NOT NULL DEFAULT 0,
+            manager_id INTEGER,
             entry_date TEXT NOT NULL,
             entry_type TEXT NOT NULL DEFAULT 'daily'
                 CHECK(entry_type IN ('daily', 'weekly', 'reflection')),
@@ -279,7 +279,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS self_assessments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            manager_id INTEGER NOT NULL DEFAULT 0,
+            manager_id INTEGER,
             week_date TEXT NOT NULL,
             dimension TEXT NOT NULL,
             score INTEGER NOT NULL CHECK(score BETWEEN 1 AND 5),

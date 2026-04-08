@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS managers (
 
 CREATE TABLE IF NOT EXISTS team_members (
     id SERIAL PRIMARY KEY,
-    manager_id INTEGER NOT NULL DEFAULT 0 REFERENCES managers(id) ON DELETE CASCADE,
+    manager_id INTEGER,
     name TEXT NOT NULL,
     email TEXT,
     role TEXT,
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS team_members (
 
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,
-    manager_id INTEGER NOT NULL DEFAULT 0 REFERENCES managers(id) ON DELETE CASCADE,
+    manager_id INTEGER,
     title TEXT NOT NULL,
     event_type TEXT NOT NULL CHECK(event_type IN
         ('check_in', 'coaching', 'one_on_one', 'quarterly_review', 'other')),
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE TABLE IF NOT EXISTS action_items (
     id SERIAL PRIMARY KEY,
-    manager_id INTEGER NOT NULL DEFAULT 0 REFERENCES managers(id) ON DELETE CASCADE,
+    manager_id INTEGER,
     event_id INTEGER REFERENCES events(id),
     description TEXT NOT NULL,
     assignee TEXT,
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS config (
 
 CREATE TABLE IF NOT EXISTS journal_entries (
     id SERIAL PRIMARY KEY,
-    manager_id INTEGER NOT NULL DEFAULT 0 REFERENCES managers(id) ON DELETE CASCADE,
+    manager_id INTEGER,
     entry_date TEXT NOT NULL,
     entry_type TEXT NOT NULL DEFAULT 'daily'
         CHECK(entry_type IN ('daily', 'weekly', 'reflection')),
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS journal_entries (
 
 CREATE TABLE IF NOT EXISTS self_assessments (
     id SERIAL PRIMARY KEY,
-    manager_id INTEGER NOT NULL DEFAULT 0 REFERENCES managers(id) ON DELETE CASCADE,
+    manager_id INTEGER,
     week_date TEXT NOT NULL,
     dimension TEXT NOT NULL,
     score INTEGER NOT NULL CHECK(score BETWEEN 1 AND 5),
