@@ -307,6 +307,37 @@ def get_config(key, default=None):
     return row["value"] if row else default
 
 
+def upsert_user(google_id, email, name=None, picture=None):
+    """Insert or update a user record on login."""
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO users (google_id, email, name, picture, last_login) "
+        "VALUES (?, ?, ?, ?, datetime('now')) "
+        "ON CONFLICT(google_id) DO UPDATE SET "
+        "email = excluded.email, name = excluded.name, "
+        "picture = excluded.picture, last_login = datetime('now')",
+        (google_id, email, name, picture),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user_by_google_id(google_id):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM users WHERE google_id = ?", (google_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_users():
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM users ORDER BY last_login DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_all_config():
     conn = get_connection()
     rows = conn.execute("SELECT key, value FROM config ORDER BY key").fetchall()

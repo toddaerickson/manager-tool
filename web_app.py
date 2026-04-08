@@ -111,20 +111,9 @@ def _show_auth_screen():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def show_toast():
-    """Display and clear any pending toast message from session_state."""
-    if "toast" in st.session_state:
-        kind, msg = st.session_state.pop("toast")
-        if kind == "success":
-            st.success(msg)
-        elif kind == "error":
-            st.error(msg)
-        elif kind == "warning":
-            st.warning(msg)
-
-
-def set_toast(kind, msg):
-    st.session_state["toast"] = (kind, msg)
+def navigate(page_name):
+    """Set the active page in session state."""
+    st.session_state["page"] = page_name
 
 
 def df_from(rows, columns=None):
@@ -176,6 +165,40 @@ def render_coaching_pane(notes_text, context_type="journal", member_name=None,
 
 
 # ---------------------------------------------------------------------------
+# Confirmation dialogs  (#2)
+# ---------------------------------------------------------------------------
+
+@st.dialog("Confirm: Complete Event")
+def confirm_complete_event(event_id, title):
+    st.write(f"Mark **{title}** (#{event_id}) as completed?")
+    notes = st.text_area("Meeting notes (optional)")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Complete", type="primary", use_container_width=True):
+            db.complete_event(int(event_id), notes=notes or None)
+            st.toast(f"Event #{event_id} completed.", icon="\u2705")
+            st.rerun()
+    with c2:
+        if st.button("Cancel", use_container_width=True):
+            st.rerun()
+
+
+@st.dialog("Confirm: Complete Action Item")
+def confirm_complete_action(action_id, description):
+    st.write(f"Mark action item **#{action_id}** as completed?")
+    st.caption(description)
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Complete", type="primary", use_container_width=True):
+            db.complete_action_item(int(action_id))
+            st.toast(f"Action #{action_id} completed.", icon="\u2705")
+            st.rerun()
+    with c2:
+        if st.button("Cancel", use_container_width=True):
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
 # Pages
 # ---------------------------------------------------------------------------
 
@@ -222,11 +245,33 @@ def page_dashboard():
     c3.metric("\u26A0\uFE0F Pending" if pending_n > 0 else "\U0001F4CB Pending", pending_n)
     c4.metric("\U0001F525 Streak", f"{streak} days")
 
+    # -- Quick-action cards (#5) --
+    st.subheader("Quick Actions")
+    qa1, qa2, qa3, qa4 = st.columns(4)
+    with qa1:
+        if st.button("\U0001F4C5  Schedule 1:1", use_container_width=True):
+            navigate("Schedule Event")
+            st.rerun()
+    with qa2:
+        if st.button("\U0001F4DD  Log Feedback", use_container_width=True):
+            navigate("Record Feedback")
+            st.rerun()
+    with qa3:
+        if st.button("\U0001F464  Add Member", use_container_width=True):
+            navigate("Add Member")
+            st.rerun()
+    with qa4:
+        if st.button("\U0001F6A8  View Overdue", use_container_width=True):
+            navigate("Action Items")
+            st.rerun()
+
+    # -- Tables --
     if summary["upcoming_events"]:
         st.subheader("Upcoming Events This Week")
         st.dataframe(
             df_from(summary["upcoming_events"],
-                    ["id", "title", "event_type", "scheduled_date", "scheduled_time", "participant_name"]),
+                    ["id", "title", "event_type", "scheduled_date",
+                     "scheduled_time", "participant_name"]),
             use_container_width=True, hide_index=True,
         )
 
@@ -275,26 +320,23 @@ def page_dashboard():
 
 def page_schedule_event():
     st.title("Schedule an Event")
-    show_toast()
 
     type_keys = list(templates.EVENT_TYPES.keys())
     type_labels = [templates.EVENT_TYPES[t]["label"] for t in type_keys]
     names, name_map = member_options()
 
+    # Single-column form for mobile (#7)
     with st.form("schedule_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            event_label = st.selectbox("Event Type", type_labels)
-            title = st.text_input("Title (leave blank for default)")
-            date = st.date_input("Date", value=datetime.now().date())
-            time_val = st.time_input("Time", value=datetime.strptime("10:00", "%H:%M").time())
-        with col2:
-            participant = st.selectbox("Participant", ["(none)"] + names)
-            duration = st.number_input("Duration (min)", value=30, min_value=5, step=5)
-            location = st.text_input("Location / meeting link")
-            gen_agenda = st.checkbox("Generate agenda from template")
-
-        submitted = st.form_submit_button("Schedule Event")
+        event_label = st.selectbox("Event Type", type_labels)
+        title = st.text_input("Title (leave blank for default)")
+        participant = st.selectbox("Participant", ["(none)"] + names)
+        date = st.date_input("Date", value=datetime.now().date())
+        time_val = st.time_input("Time",
+                                 value=datetime.strptime("10:00", "%H:%M").time())
+        duration = st.number_input("Duration (min)", value=30, min_value=5, step=5)
+        location = st.text_input("Location / meeting link")
+        gen_agenda = st.checkbox("Generate agenda from template")
+        submitted = st.form_submit_button("Schedule Event", use_container_width=True)
 
     if submitted:
         idx = type_labels.index(event_label)
@@ -302,7 +344,8 @@ def page_schedule_event():
         member_name = participant if participant != "(none)" else None
         member_id = name_map.get(participant) if member_name else None
         final_title = title or templates.get_default_title(event_type, member_name)
-        agenda = templates.generate_agenda(event_type, member_name) if gen_agenda else None
+        agenda = (templates.generate_agenda(event_type, member_name)
+                  if gen_agenda else None)
 
         eid = db.create_event(
             title=final_title, event_type=event_type,
@@ -313,13 +356,12 @@ def page_schedule_event():
             location=location or None,
             agenda=agenda,
         )
-        set_toast("success", f"Event #{eid} scheduled: {final_title}")
+        st.toast(f"Event #{eid} scheduled: {final_title}", icon="\U0001F4C5")
         st.rerun()
 
 
 def page_upcoming_events():
     st.title("Upcoming Events (Next 14 Days)")
-    show_toast()
 
     events = db.get_upcoming_events(days=14)
     if events:
@@ -351,57 +393,135 @@ def page_upcoming_events():
                 key_suffix="event_complete")
     else:
         st.info("No upcoming events scheduled.")
+        return
+
+    # Inline editing with data_editor (#3)
+    edit_df = pd.DataFrame(events)
+    edit_df["complete"] = False
+    display_cols = ["complete", "id", "title", "event_type", "scheduled_date",
+                    "scheduled_time", "participant_name"]
+    display_cols = [c for c in display_cols if c in edit_df.columns]
+    view = edit_df[display_cols].copy()
+    view.columns = [c.replace("_", " ").title() for c in view.columns]
+
+    edited = st.data_editor(
+        view,
+        use_container_width=True,
+        hide_index=True,
+        disabled=[c for c in view.columns if c != "Complete"],
+        column_config={
+            "Complete": st.column_config.CheckboxColumn("Done?", default=False),
+        },
+        key="upcoming_editor",
+    )
+
+    # Check for rows the user ticked
+    checked = edited[edited["Complete"]].reset_index(drop=True)
+    if not checked.empty:
+        row = checked.iloc[0]
+        eid = int(row["Id"])
+        title = row["Title"]
+        confirm_complete_event(eid, title)
 
 
 def page_event_history():
     st.title("Event History")
-    events = db.list_events(status="completed", limit=30)
+
+    # Search and filtering (#4)
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        search = st.text_input("Search by title", key="eh_search")
+    with f2:
+        type_filter = st.selectbox(
+            "Event type",
+            ["All"] + list(templates.EVENT_TYPES.keys()),
+            key="eh_type",
+        )
+    with f3:
+        date_range = st.date_input(
+            "Date range", value=[], key="eh_dates",
+            help="Select start and end date to filter",
+        )
+
+    kwargs = {"status": "completed", "limit": 100}
+    if type_filter != "All":
+        kwargs["event_type"] = type_filter
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        kwargs["from_date"] = date_range[0].strftime("%Y-%m-%d")
+        kwargs["to_date"] = date_range[1].strftime("%Y-%m-%d")
+
+    events = db.list_events(**kwargs)
+
+    if search:
+        events = [e for e in events
+                  if search.lower() in (e.get("title") or "").lower()]
+
     if events:
         st.dataframe(
             df_from(events, ["id", "title", "event_type", "scheduled_date",
-                             "participant_name", "status"]),
+                             "participant_name", "notes"]),
             use_container_width=True, hide_index=True,
         )
+        st.caption(f"{len(events)} event(s) found")
     else:
-        st.info("No completed events yet.")
+        st.info("No completed events match your filters.")
 
 
 # -- People -----------------------------------------------------------------
 
 def page_team_roster():
     st.title("Team Roster")
-    show_toast()
 
     members = db.list_team_members()
-    if members:
-        st.dataframe(
-            df_from(members, ["id", "name", "email", "role", "start_date"]),
-            use_container_width=True, hide_index=True,
-        )
-        mid = st.selectbox("Select a member for details",
-                           options=[m["id"] for m in members],
-                           format_func=lambda x: next(
-                               (f"{m['name']} (ID {m['id']})" for m in members if m["id"] == x), str(x)))
-
-        if st.button("View Details"):
-            st.session_state["detail_member_id"] = mid
-
-        if "detail_member_id" in st.session_state:
-            summary = db.get_member_summary(st.session_state["detail_member_id"])
-            if summary:
-                _render_member_detail(summary)
-    else:
+    if not members:
         st.info("No team members yet. Use **Add Member** to add someone.")
+        return
+
+    # Search (#4)
+    search = st.text_input("Search by name, email, or role", key="tr_search")
+    if search:
+        q = search.lower()
+        members = [m for m in members
+                   if q in (m.get("name") or "").lower()
+                   or q in (m.get("email") or "").lower()
+                   or q in (m.get("role") or "").lower()]
+
+    if not members:
+        st.warning("No members match your search.")
+        return
+
+    st.dataframe(
+        df_from(members, ["id", "name", "email", "role", "start_date"]),
+        use_container_width=True, hide_index=True,
+    )
+
+    mid = st.selectbox(
+        "Select a member for details",
+        options=[m["id"] for m in members],
+        format_func=lambda x: next(
+            (f"{m['name']} (ID {m['id']})" for m in members if m["id"] == x),
+            str(x),
+        ),
+    )
+
+    if st.button("View Details"):
+        st.session_state["detail_member_id"] = mid
+
+    if "detail_member_id" in st.session_state:
+        summary = db.get_member_summary(st.session_state["detail_member_id"])
+        if summary:
+            _render_member_detail(summary)
 
 
 def _render_member_detail(summary):
     m = summary["member"]
     st.divider()
     st.subheader(f"Member: {m['name']}")
-    col1, col2, col3 = st.columns(3)
-    col1.markdown(f"**Role:** {m.get('role', 'N/A')}")
-    col2.markdown(f"**Email:** {m.get('email', 'N/A')}")
-    col3.markdown(f"**Start:** {m.get('start_date', 'N/A')}")
+    st.markdown(
+        f"**Role:** {m.get('role', 'N/A')} &nbsp;&nbsp; "
+        f"**Email:** {m.get('email', 'N/A')} &nbsp;&nbsp; "
+        f"**Start:** {m.get('start_date', 'N/A')}"
+    )
     if m.get("notes"):
         st.markdown(f"**Notes:** {m['notes']}")
 
@@ -423,7 +543,8 @@ def _render_member_detail(summary):
         for fb in summary["feedback"][:5]:
             color = "green" if fb["feedback_type"] == "positive" else "orange"
             st.markdown(
-                f":{color}[**{fb['feedback_type'].upper()}**] — {fb['created_at'][:10]}  \n"
+                f":{color}[**{fb['feedback_type'].upper()}**] "
+                f"— {fb['created_at'][:10]}  \n"
                 f"&nbsp;&nbsp;**S:** {fb.get('situation', 'N/A')}  \n"
                 f"&nbsp;&nbsp;**B:** {fb.get('behavior', 'N/A')}  \n"
                 f"&nbsp;&nbsp;**I:** {fb.get('impact', 'N/A')}"
@@ -432,18 +553,15 @@ def _render_member_detail(summary):
 
 def page_add_member():
     st.title("Add Team Member")
-    show_toast()
 
+    # Single-column form (#7)
     with st.form("add_member"):
         name = st.text_input("Full Name *")
-        col1, col2 = st.columns(2)
-        with col1:
-            email = st.text_input("Email")
-            role = st.text_input("Role / Title")
-        with col2:
-            start_date = st.date_input("Start Date", value=datetime.now().date())
-            notes = st.text_input("Notes")
-        submitted = st.form_submit_button("Add Member")
+        email = st.text_input("Email")
+        role = st.text_input("Role / Title")
+        start_date = st.date_input("Start Date", value=datetime.now().date())
+        notes = st.text_input("Notes")
+        submitted = st.form_submit_button("Add Member", use_container_width=True)
 
     if submitted:
         if not name:
@@ -453,7 +571,7 @@ def page_add_member():
                 name, email or None, role or None,
                 start_date.strftime("%Y-%m-%d"), notes or None,
             )
-            set_toast("success", f"Added {name} (ID: {mid})")
+            st.toast(f"Added {name} (ID: {mid})", icon="\u2705")
             st.rerun()
 
 
@@ -461,42 +579,54 @@ def page_add_member():
 
 def page_action_items():
     st.title("Pending Action Items")
-    show_toast()
 
     actions = db.get_pending_action_items()
-    if actions:
-        st.dataframe(
-            df_from(actions, ["id", "description", "assignee", "due_date", "status", "event_title"]),
-            use_container_width=True, hide_index=True,
-        )
-        today = datetime.now().strftime("%Y-%m-%d")
-        overdue = [a for a in actions if a.get("due_date") and a["due_date"] < today]
-        if overdue:
-            st.warning(f"{len(overdue)} overdue action item(s)!")
-
-        with st.form("complete_action"):
-            aid = st.number_input("Action ID to complete", min_value=1, step=1)
-            if st.form_submit_button("Mark Complete"):
-                db.complete_action_item(int(aid))
-                set_toast("success", f"Action item #{aid} completed.")
-                st.rerun()
-    else:
+    if not actions:
         st.success("No pending action items. You're caught up!")
+        return
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    overdue = [a for a in actions if a.get("due_date") and a["due_date"] < today]
+    if overdue:
+        st.warning(f"{len(overdue)} overdue action item(s)!")
+
+    # Inline editing with data_editor (#3)
+    edit_df = pd.DataFrame(actions)
+    edit_df["complete"] = False
+    display_cols = ["complete", "id", "description", "assignee", "due_date",
+                    "status", "event_title"]
+    display_cols = [c for c in display_cols if c in edit_df.columns]
+    view = edit_df[display_cols].copy()
+    view.columns = [c.replace("_", " ").title() for c in view.columns]
+
+    edited = st.data_editor(
+        view,
+        use_container_width=True,
+        hide_index=True,
+        disabled=[c for c in view.columns if c != "Complete"],
+        column_config={
+            "Complete": st.column_config.CheckboxColumn("Done?", default=False),
+        },
+        key="action_editor",
+    )
+
+    checked = edited[edited["Complete"]].reset_index(drop=True)
+    if not checked.empty:
+        row = checked.iloc[0]
+        confirm_complete_action(int(row["Id"]), row["Description"])
 
 
 def page_add_action():
     st.title("Add Action Item")
-    show_toast()
 
+    # Single-column form (#7)
     with st.form("add_action"):
         desc = st.text_input("Description *")
-        col1, col2 = st.columns(2)
-        with col1:
-            assignee = st.text_input("Assignee")
-            due_date = st.date_input("Due Date", value=None)
-        with col2:
-            event_id = st.text_input("Related Event ID (optional)")
-        submitted = st.form_submit_button("Add Action Item")
+        assignee = st.text_input("Assignee")
+        due_date = st.date_input("Due Date", value=None)
+        event_id = st.text_input("Related Event ID (optional)")
+        submitted = st.form_submit_button("Add Action Item",
+                                          use_container_width=True)
 
     if submitted:
         if not desc:
@@ -504,14 +634,14 @@ def page_add_action():
         else:
             eid = int(event_id) if event_id and event_id.isdigit() else None
             due = due_date.strftime("%Y-%m-%d") if due_date else None
-            aid = db.add_action_item(desc, event_id=eid, assignee=assignee or None, due_date=due)
-            set_toast("success", f"Action item #{aid} added.")
+            aid = db.add_action_item(desc, event_id=eid,
+                                     assignee=assignee or None, due_date=due)
+            st.toast(f"Action item #{aid} added.", icon="\u2705")
             st.rerun()
 
 
 def page_record_feedback():
     st.title("Record Feedback (SBI Framework)")
-    show_toast()
 
     names, name_map = member_options()
     if not names:
@@ -559,32 +689,31 @@ def page_record_feedback():
 
 def page_quarterly_goals():
     st.title("Quarterly Goals")
-    show_toast()
 
     goals = db.list_goals()
-    if goals:
-        st.dataframe(
-            df_from(goals, ["id", "member_name", "quarter", "description", "status"]),
-            use_container_width=True, hide_index=True,
-        )
-        statuses = ["not_started", "in_progress", "met", "exceeded", "partially_met", "not_met"]
-        with st.form("update_goal"):
-            col1, col2 = st.columns(2)
-            with col1:
-                gid = st.number_input("Goal ID to update", min_value=1, step=1)
-            with col2:
-                new_status = st.selectbox("New Status", statuses)
-            if st.form_submit_button("Update Status"):
-                db.update_goal(int(gid), status=new_status)
-                set_toast("success", f"Goal #{gid} updated to '{new_status}'.")
-                st.rerun()
-    else:
+    if not goals:
         st.info("No goals set yet.")
+        return
+
+    st.dataframe(
+        df_from(goals, ["id", "member_name", "quarter", "description", "status"]),
+        use_container_width=True, hide_index=True,
+    )
+    statuses = ["not_started", "in_progress", "met", "exceeded",
+                "partially_met", "not_met"]
+
+    # Single-column form (#7)
+    with st.form("update_goal"):
+        gid = st.number_input("Goal ID to update", min_value=1, step=1)
+        new_status = st.selectbox("New Status", statuses)
+        if st.form_submit_button("Update Status", use_container_width=True):
+            db.update_goal(int(gid), status=new_status)
+            st.toast(f"Goal #{gid} updated to '{new_status}'.", icon="\u2705")
+            st.rerun()
 
 
 def page_add_goal():
     st.title("Add Quarterly Goal")
-    show_toast()
 
     names, name_map = member_options()
     if not names:
@@ -595,12 +724,13 @@ def page_add_goal():
     q = (now.month - 1) // 3 + 1
     default_quarter = f"Q{q} {now.year}"
 
+    # Single-column form (#7)
     with st.form("add_goal"):
         member_name = st.selectbox("Team Member", names)
         quarter = st.text_input("Quarter", value=default_quarter)
         description = st.text_input("Goal Description *")
         key_results = st.text_area("Key Results (one per line, optional)")
-        submitted = st.form_submit_button("Add Goal")
+        submitted = st.form_submit_button("Add Goal", use_container_width=True)
 
     if submitted:
         mid = name_map.get(member_name)
@@ -610,7 +740,7 @@ def page_add_goal():
             st.error("Description is required.")
         else:
             gid = db.add_goal(mid, quarter, description, key_results or None)
-            set_toast("success", f"Goal #{gid} added for {member_name}.")
+            st.toast(f"Goal #{gid} added for {member_name}.", icon="\u2705")
             st.rerun()
 
 
@@ -622,11 +752,8 @@ def page_agenda_templates():
     type_options = ["check_in", "coaching", "one_on_one", "quarterly_review"]
     type_labels = [templates.EVENT_TYPES[t]["label"] for t in type_options]
 
-    col1, col2 = st.columns(2)
-    with col1:
-        label = st.selectbox("Meeting Type", type_labels)
-    with col2:
-        name = st.text_input("Participant Name", value="Team Member")
+    label = st.selectbox("Meeting Type", type_labels)
+    name = st.text_input("Participant Name", value="Team Member")
 
     idx = type_labels.index(label)
     event_type = type_options[idx]
@@ -667,7 +794,6 @@ def page_management_tips():
 
 def page_configuration():
     st.title("Email & Profile Configuration")
-    show_toast()
 
     st.info(
         "**AI Coaching** — Enter your Anthropic API key to enable the "
@@ -699,17 +825,22 @@ def page_configuration():
         "https://myaccount.google.com/apppasswords and use it below."
     )
 
+    # Single-column form (#7)
     with st.form("config_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            name = st.text_input("Your Name", value=db.get_config("manager_name", ""))
-            email = st.text_input("Email Address", value=db.get_config("manager_email", ""))
-            smtp_server = st.text_input("SMTP Server", value=db.get_config("smtp_server", "smtp.gmail.com"))
-        with col2:
-            smtp_port = st.text_input("SMTP Port", value=db.get_config("smtp_port", "587"))
-            smtp_user = st.text_input("SMTP Username", value=db.get_config("smtp_user", ""))
-            smtp_password = st.text_input("SMTP Password / App Password", type="password")
-        submitted = st.form_submit_button("Save Configuration")
+        name = st.text_input("Your Name",
+                             value=db.get_config("manager_name", ""))
+        email = st.text_input("Email Address",
+                              value=db.get_config("manager_email", ""))
+        smtp_server = st.text_input(
+            "SMTP Server", value=db.get_config("smtp_server", "smtp.gmail.com"))
+        smtp_port = st.text_input(
+            "SMTP Port", value=db.get_config("smtp_port", "587"))
+        smtp_user = st.text_input(
+            "SMTP Username", value=db.get_config("smtp_user", ""))
+        smtp_password = st.text_input(
+            "SMTP Password / App Password", type="password")
+        submitted = st.form_submit_button("Save Configuration",
+                                          use_container_width=True)
 
     if submitted:
         db.set_config("manager_name", name)
@@ -719,14 +850,14 @@ def page_configuration():
         db.set_config("smtp_user", smtp_user)
         if smtp_password:
             db.set_config("smtp_password", smtp_password)
-        set_toast("success", "Configuration saved.")
+        st.toast("Configuration saved.", icon="\u2705")
         st.rerun()
 
     st.subheader("Current Configuration")
     config = db.get_all_config()
     if config:
         for key, value in config.items():
-            display = "********" if "password" in key else value
+            display = "********" if "password" in key or "secret" in key else value
             st.text(f"{key}: {display}")
     else:
         st.caption("No configuration set yet.")
@@ -1243,6 +1374,55 @@ def page_my_profile():
 # Sidebar navigation & dispatch
 # ---------------------------------------------------------------------------
 
+NAV_GROUPS = [
+    ("Overview", {
+        "\U0001F4CA  Dashboard": "Dashboard",
+    }),
+    ("Activities", {
+        "\U0001F4C5  Schedule Event": "Schedule Event",
+        "\U0001F4C6  Upcoming Events": "Upcoming Events",
+        "\U0001F4D6  Event History": "Event History",
+    }),
+    ("People", {
+        "\U0001F465  Team Roster": "Team Roster",
+        "\U0001F464  Add Member": "Add Member",
+    }),
+    ("Tracking", {
+        "\u2705  Action Items": "Action Items",
+        "\u2795  Add Action": "Add Action",
+        "\U0001F4AC  Record Feedback": "Record Feedback",
+    }),
+    ("Goals", {
+        "\U0001F3AF  Quarterly Goals": "Quarterly Goals",
+        "\U0001F4DD  Add Goal": "Add Goal",
+    }),
+    ("Resources", {
+        "\U0001F4CB  Agenda Templates": "Agenda Templates",
+        "\U0001F4A1  Management Tips": "Management Tips",
+    }),
+    ("Settings", {
+        "\u2699\uFE0F  Configuration": "Configuration",
+    }),
+]
+
+DISPATCH = {
+    "Dashboard": page_dashboard,
+    "Schedule Event": page_schedule_event,
+    "Upcoming Events": page_upcoming_events,
+    "Event History": page_event_history,
+    "Team Roster": page_team_roster,
+    "Add Member": page_add_member,
+    "Action Items": page_action_items,
+    "Add Action": page_add_action,
+    "Record Feedback": page_record_feedback,
+    "Quarterly Goals": page_quarterly_goals,
+    "Add Goal": page_add_goal,
+    "Agenda Templates": page_agenda_templates,
+    "Management Tips": page_management_tips,
+    "Configuration": page_configuration,
+}
+
+
 def main():
     # Auth gate — show login screen if not authenticated
     if not require_auth():
@@ -1325,11 +1505,31 @@ def main():
         "Configuration": page_configuration,
     }
 
-    handler = dispatch.get(page)
-    if handler:
-        handler()
-    else:
-        page_dashboard()
+        # Grouped navigation (#1)
+        current = st.session_state.get("page", "Dashboard")
+        for group_label, items in NAV_GROUPS:
+            # Overview group has no expander — always visible
+            if group_label == "Overview":
+                for btn_label, page_key in items.items():
+                    btype = "primary" if current == page_key else "secondary"
+                    if st.button(btn_label, key=f"nav_{page_key}",
+                                 use_container_width=True, type=btype):
+                        navigate(page_key)
+                        st.rerun()
+            else:
+                group_active = current in items.values()
+                with st.expander(f"**{group_label}**", expanded=group_active):
+                    for btn_label, page_key in items.items():
+                        btype = "primary" if current == page_key else "secondary"
+                        if st.button(btn_label, key=f"nav_{page_key}",
+                                     use_container_width=True, type=btype):
+                            navigate(page_key)
+                            st.rerun()
+
+    # ── Page dispatch ──
+    handler = DISPATCH.get(st.session_state.get("page", "Dashboard"),
+                           page_dashboard)
+    handler()
 
 
 main()
