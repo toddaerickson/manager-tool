@@ -164,6 +164,20 @@ def init_db():
     """Initialize database tables (SQLite only — PostgreSQL uses schema_postgres.sql)."""
     if _detect_pg():
         return  # Tables created via Supabase SQL editor
+    # Migrate: if old schema has NOT NULL manager_id, drop and recreate
+    if os.path.exists(DB_PATH):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            info = conn.execute("PRAGMA table_info(journal_entries)").fetchall()
+            for col in info:
+                if col[1] == "manager_id" and col[3] == 1:  # notnull=1
+                    conn.close()
+                    os.remove(DB_PATH)
+                    break
+            else:
+                conn.close()
+        except Exception:
+            pass
     conn = get_connection()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS managers (
