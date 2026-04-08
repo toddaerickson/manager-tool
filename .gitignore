@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 *.db
 ics_exports/
+.env
+*.sqlite3
+.streamlit/secrets.toml
+*.pdf
