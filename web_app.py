@@ -164,6 +164,22 @@ def render_coaching_pane(notes_text, context_type="journal", member_name=None,
         )
 
 
+def show_toast():
+    """Display and clear any pending toast message from session_state."""
+    if "toast" in st.session_state:
+        kind, msg = st.session_state.pop("toast")
+        if kind == "success":
+            st.success(msg)
+        elif kind == "error":
+            st.error(msg)
+        elif kind == "warning":
+            st.warning(msg)
+
+
+def set_toast(kind, msg):
+    st.session_state["toast"] = (kind, msg)
+
+
 # ---------------------------------------------------------------------------
 # Confirmation dialogs  (#2)
 # ---------------------------------------------------------------------------
