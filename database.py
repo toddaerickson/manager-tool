@@ -54,16 +54,20 @@ def _q(sql):
 
 def get_connection():
     if _detect_pg():
-        import psycopg2
-        from psycopg2.extras import RealDictCursor
-        conn = psycopg2.connect(_get_pg_url(), cursor_factory=RealDictCursor)
-        conn.autocommit = True
-        return conn
-    else:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            conn = psycopg2.connect(_get_pg_url(), cursor_factory=RealDictCursor)
+            conn.autocommit = True
+            return conn
+        except Exception:
+            # Fall back to SQLite if PostgreSQL connection fails
+            global _USE_PG
+            _USE_PG = False
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 def _exec(conn, sql, params=None):
