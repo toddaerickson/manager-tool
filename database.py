@@ -52,18 +52,32 @@ def _q(sql):
     return sql
 
 
+_PG_FAILED = False
+_PG_ERROR = ""
+
+
+def pg_connection_failed():
+    """Return (failed: bool, error_msg: str) for UI status display."""
+    return _PG_FAILED, _PG_ERROR
+
+
 def get_connection():
+    global _PG_FAILED, _PG_ERROR
     if _detect_pg():
         try:
             import psycopg2
             from psycopg2.extras import RealDictCursor
             conn = psycopg2.connect(_get_pg_url(), cursor_factory=RealDictCursor)
             conn.autocommit = True
+            _PG_FAILED = False
+            _PG_ERROR = ""
             return conn
-        except Exception:
+        except Exception as e:
             # Fall back to SQLite if PostgreSQL connection fails
             global _USE_PG
             _USE_PG = False
+            _PG_FAILED = True
+            _PG_ERROR = str(e)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
