@@ -26,6 +26,60 @@ import coaching
 st.set_page_config(page_title="Manager Tool", page_icon="\U0001F4CB", layout="wide")
 db.init_db()
 
+# -- Custom CSS for polished sidebar --
+st.markdown("""
+<style>
+    /* Sidebar background */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+    }
+    [data-testid="stSidebar"] * {
+        color: #e0e0e0 !important;
+    }
+    /* Sidebar title */
+    [data-testid="stSidebar"] h3 {
+        color: #ffffff !important;
+        font-size: 1.4rem !important;
+        padding-bottom: 0 !important;
+    }
+    /* Active nav button (primary) */
+    [data-testid="stSidebar"] button[kind="primary"] {
+        background-color: #4F8BF9 !important;
+        color: #ffffff !important;
+        border: none !important;
+        font-weight: 600 !important;
+    }
+    /* Inactive nav button (secondary) */
+    [data-testid="stSidebar"] button[kind="secondary"] {
+        background-color: transparent !important;
+        color: #c0c0c0 !important;
+        border: 1px solid #2a2a4a !important;
+        text-align: left !important;
+    }
+    [data-testid="stSidebar"] button[kind="secondary"]:hover {
+        background-color: #2a2a4a !important;
+        color: #ffffff !important;
+        border-color: #4F8BF9 !important;
+    }
+    /* Expander headers */
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        font-size: 0.85rem !important;
+        color: #8888aa !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+        color: #ffffff !important;
+    }
+    /* Dividers */
+    [data-testid="stSidebar"] hr {
+        border-color: #2a2a4a !important;
+    }
+    /* Streak badge */
+    [data-testid="stSidebar"] .stMarkdown p strong {
+        color: #f9a825 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Auth helpers
@@ -1439,93 +1493,118 @@ DISPATCH = {
 }
 
 
+_NAV_GROUPS = [
+    (None, {
+        "\U0001F4CA  Dashboard": "Dashboard",
+    }),
+    ("\U0001F4D3 My Journal", {
+        "\u270D\uFE0F  Journal": "Journal",
+    }),
+    ("\U0001F4C5 Activities", {
+        "\u2795  Schedule Event": "Schedule Event",
+        "\U0001F4C6  Upcoming": "Upcoming Events",
+        "\U0001F4DA  History": "Event History",
+    }),
+    ("\U0001F465 People", {
+        "\U0001F4CB  Team Roster": "Team Roster",
+        "\U0001F464  Add Member": "Add Member",
+        "\U0001F550  Timeline": "Member Timeline",
+        "\U0001F680  Career Dev": "Career Development",
+    }),
+    ("\U0001F4CC Tracking", {
+        "\u2705  Action Items": "Action Items",
+        "\u2795  Add Action": "Add Action",
+        "\U0001F4AC  Feedback": "Record Feedback",
+    }),
+    ("\U0001F3AF Goals", {
+        "\U0001F4CA  Quarterly Goals": "Quarterly Goals",
+        "\u2795  Add Goal": "Add Goal",
+    }),
+    ("\U0001F4A1 Insights", {
+        "\U0001F4C8  Analytics": "Analytics",
+    }),
+    ("\U0001F4DA Resources", {
+        "\U0001F4DD  Agendas": "Agenda Templates",
+        "\U0001F4A1  Tips": "Management Tips",
+    }),
+    ("\u2699\uFE0F Settings", {
+        "\U0001F464  My Profile": "My Profile",
+        "\U0001F527  Configuration": "Configuration",
+    }),
+]
+
+_DISPATCH = {
+    "Dashboard": page_dashboard,
+    "Journal": page_journal,
+    "Schedule Event": page_schedule_event,
+    "Upcoming Events": page_upcoming_events,
+    "Event History": page_event_history,
+    "Team Roster": page_team_roster,
+    "Add Member": page_add_member,
+    "Member Timeline": page_member_timeline,
+    "Career Development": page_career_development,
+    "Action Items": page_action_items,
+    "Add Action": page_add_action,
+    "Record Feedback": page_record_feedback,
+    "Quarterly Goals": page_quarterly_goals,
+    "Add Goal": page_add_goal,
+    "Analytics": page_analytics,
+    "Agenda Templates": page_agenda_templates,
+    "Management Tips": page_management_tips,
+    "My Profile": page_my_profile,
+    "Configuration": page_configuration,
+}
+
+
 def main():
-    # Auth gate — show login screen if not authenticated
+    # Auth gate
     if not require_auth():
         return
 
     manager_name = st.session_state.get("manager_name", "Manager")
+    current_page = st.session_state.get("nav_page", "Dashboard")
 
+    # -- Sidebar with grouped, icon-based navigation --
     with st.sidebar:
-        st.title("Manager Tool")
-        st.caption(f"Logged in as **{manager_name}**")
-        page = st.radio(
-            "Navigate",
-            options=[
-                "Dashboard",
-                "---1",
-                "Journal",
-                "---2",
-                "Schedule Event",
-                "Upcoming Events",
-                "Event History",
-                "---3",
-                "Team Roster",
-                "Add Member",
-                "Member Timeline",
-                "Career Development",
-                "---4",
-                "Action Items",
-                "Add Action",
-                "Record Feedback",
-                "---5",
-                "Quarterly Goals",
-                "Add Goal",
-                "---6",
-                "Analytics",
-                "---7",
-                "Agenda Templates",
-                "Management Tips",
-                "---8",
-                "My Profile",
-                "Configuration",
-            ],
-            format_func=lambda x: {
-                "---1": "── MY JOURNAL ──",
-                "---2": "── ACTIVITIES ──",
-                "---3": "── PEOPLE ──",
-                "---4": "── TRACKING ──",
-                "---5": "── GOALS ──",
-                "---6": "── INSIGHTS ──",
-                "---7": "── RESOURCES ──",
-                "---8": "── SETTINGS ──",
-            }.get(x, x),
-            label_visibility="collapsed",
-        )
+        st.markdown("### \U0001F4CB Manager Tool")
+        st.caption(f"*{manager_name}*")
 
-        st.divider()
-        if st.button("Log Out", use_container_width=True):
-            for key in ["manager_id", "manager_name"]:
+        # Streak badge at top of nav (loss aversion hook)
+        streak = db.get_journal_streak()
+        if streak > 0:
+            st.markdown(f"\U0001F525 **{streak}-day streak**")
+
+        st.markdown("---")
+
+        for group_label, items in _NAV_GROUPS:
+            if group_label is None:
+                # Top-level items (Dashboard) — no group header
+                for btn_label, page_key in items.items():
+                    btn_type = "primary" if current_page == page_key else "secondary"
+                    if st.button(btn_label, key=f"nav_{page_key}",
+                                 use_container_width=True, type=btn_type):
+                        st.session_state["nav_page"] = page_key
+                        st.rerun()
+            else:
+                # Grouped items with expander — auto-expand active group
+                group_active = current_page in items.values()
+                with st.expander(f"**{group_label}**", expanded=group_active):
+                    for btn_label, page_key in items.items():
+                        btn_type = "primary" if current_page == page_key else "secondary"
+                        if st.button(btn_label, key=f"nav_{page_key}",
+                                     use_container_width=True, type=btn_type):
+                            st.session_state["nav_page"] = page_key
+                            st.rerun()
+
+        st.markdown("---")
+        if st.button("\U0001F6AA  Log Out", use_container_width=True):
+            for key in ["manager_id", "manager_name", "nav_page"]:
                 st.session_state.pop(key, None)
             st.rerun()
 
-    dispatch = {
-        "Dashboard": page_dashboard,
-        "Journal": page_journal,
-        "Schedule Event": page_schedule_event,
-        "Upcoming Events": page_upcoming_events,
-        "Event History": page_event_history,
-        "Team Roster": page_team_roster,
-        "Add Member": page_add_member,
-        "Member Timeline": page_member_timeline,
-        "Career Development": page_career_development,
-        "Action Items": page_action_items,
-        "Add Action": page_add_action,
-        "Record Feedback": page_record_feedback,
-        "Quarterly Goals": page_quarterly_goals,
-        "Add Goal": page_add_goal,
-        "Analytics": page_analytics,
-        "Agenda Templates": page_agenda_templates,
-        "Management Tips": page_management_tips,
-        "My Profile": page_my_profile,
-        "Configuration": page_configuration,
-    }
-
-    handler = dispatch.get(page)
-    if handler:
-        handler()
-    else:
-        page_dashboard()
+    # -- Dispatch --
+    handler = _DISPATCH.get(current_page, page_dashboard)
+    handler()
 
 
 main()
