@@ -1,7 +1,7 @@
 """
-Database layer for Manager Task Generator.
-Uses SQLite for persistent local storage of events, team members,
-action items, feedback, goals, and configuration.
+Database layer for Manager Tool.
+Dual-mode: PostgreSQL (Supabase) in production, SQLite for local dev.
+Set DATABASE_URL env var or Streamlit secret to use PostgreSQL.
 """
 
 import sqlite3
@@ -10,16 +10,160 @@ from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manager_data.db")
 
+# ---------------------------------------------------------------------------
+# Dual-mode connection: PostgreSQL (production) / SQLite (local dev)
+# ---------------------------------------------------------------------------
+
+_USE_PG = None
+
+
+def _detect_pg():
+    """Detect if we should use PostgreSQL."""
+    global _USE_PG
+    if _USE_PG is not None:
+        return _USE_PG
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        try:
+            import streamlit as st
+            url = st.secrets.get("DATABASE_URL", "")
+        except Exception:
+            url = ""
+    _USE_PG = bool(url)
+    return _USE_PG
+
+
+def _get_pg_url():
+    """Get PostgreSQL connection URL."""
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        try:
+            import streamlit as st
+            url = st.secrets.get("DATABASE_URL", "")
+        except Exception:
+            pass
+    return url
+
+
+def _q(sql):
+    """Convert ? placeholders to %s for PostgreSQL."""
+    if _detect_pg():
+        return sql.replace("?", "%s")
+    return sql
+
 
 def get_connection():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    if _detect_pg():
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        conn = psycopg2.connect(_get_pg_url(), cursor_factory=RealDictCursor)
+        conn.autocommit = True
+        return conn
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+
+def _exec(conn, sql, params=None):
+    """Execute SQL with automatic placeholder conversion."""
+    cur = conn.cursor()
+    if params:
+        cur.execute(_q(sql), params)
+    else:
+        cur.execute(_q(sql))
+    return cur
+
+
+def _exec_returning_id(conn, sql, params=None):
+    """Execute INSERT and return the new row ID. Handles PG vs SQLite."""
+    if _detect_pg():
+        cur = conn.cursor()
+        cur.execute(_q(sql) + " RETURNING id", params or ())
+        row = cur.fetchone()
+        return row["id"] if row else None
+    else:
+        cur = conn.cursor()
+        cur.execute(sql, params or ())
+        conn.commit()
+        return cur.lastrowid
+
+
+def _fetchone(conn, sql, params=None):
+    """Fetch one row as dict."""
+    cur = _exec(conn, sql, params)
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+
+def _fetchall(conn, sql, params=None):
+    """Fetch all rows as list of dicts."""
+    cur = _exec(conn, sql, params)
+    return [dict(r) for r in cur.fetchall()]
+
+
+def _commit(conn):
+    """Commit for SQLite (PostgreSQL uses autocommit)."""
+    if not _detect_pg():
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# SQL dialect helpers — generate correct SQL for SQLite or PostgreSQL
+# ---------------------------------------------------------------------------
+
+def _sql_now():
+    """SQL expression for current timestamp."""
+    return "NOW()" if _detect_pg() else "datetime('now')"
+
+
+def _sql_current_date():
+    """SQL expression for current date."""
+    return "CURRENT_DATE" if _detect_pg() else "date('now')"
+
+
+def _sql_days_since(date_col):
+    """SQL expression: integer days between now and a date column."""
+    if _detect_pg():
+        return f"EXTRACT(DAY FROM NOW() - {date_col}::timestamp)::int"
+    return f"CAST(julianday('now') - julianday({date_col}) AS INTEGER)"
+
+
+def _sql_date_offset(days_param):
+    """SQL expression: date N days ago. Pass the parameter placeholder."""
+    if _detect_pg():
+        return f"CURRENT_DATE - ({days_param} || ' days')::interval"
+    return f"date('now', {days_param} || ' days')"
+
+
+def _sql_month(date_col):
+    """SQL expression: extract YYYY-MM from a date column."""
+    if _detect_pg():
+        return f"TO_CHAR({date_col}::date, 'YYYY-MM')"
+    return f"strftime('%Y-%m', {date_col})"
+
+
+def _sql_week(date_col):
+    """SQL expression: extract YYYY-WW from a date column."""
+    if _detect_pg():
+        return f"TO_CHAR({date_col}::date, 'IYYY-IW')"
+    return f"strftime('%Y-%W', {date_col})"
+
+
+def _sql_left(col, n):
+    """SQL expression: left N characters of a string."""
+    if _detect_pg():
+        return f"LEFT({col}, {n})"
+    return f"substr({col}, 1, {n})"
 
 
 def init_db():
-    """Initialize all database tables."""
+    """Initialize database tables (SQLite only — PostgreSQL uses schema_postgres.sql)."""
+    if _detect_pg():
+        return  # Tables created via Supabase SQL editor
     conn = get_connection()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS managers (
@@ -819,7 +963,7 @@ def save_self_assessment(week_date, scores_dict):
     """Save or replace self-assessment scores for a week.
     scores_dict: {dimension_name: score}"""
     conn = get_connection()
-    conn.execute("DELETE FROM self_assessments WHERE week_date = ?", (week_date,))
+    _exec(conn, "DELETE FROM self_assessments WHERE week_date = ?", (week_date,))
     for dim, score in scores_dict.items():
         conn.execute(
             "INSERT INTO self_assessments (week_date, dimension, score) "
@@ -834,7 +978,7 @@ def get_self_assessment_trends(weeks=12):
     conn = get_connection()
     rows = conn.execute(
         "SELECT week_date, dimension, score FROM self_assessments "
-        "WHERE week_date >= date('now', ? || ' days') "
+        f"WHERE week_date >= {_sql_date_offset('?')} "
         "ORDER BY week_date, dimension",
         (str(-weeks * 7),),
     ).fetchall()
@@ -858,44 +1002,44 @@ def get_latest_self_assessment():
 
 def get_time_since_last_event_per_member():
     conn = get_connection()
-    rows = conn.execute("""
+    days_expr = _sql_days_since("MAX(e.scheduled_date)")
+    rows = _fetchall(conn, f"""
         SELECT tm.id AS member_id, tm.name AS member_name,
                MAX(e.scheduled_date) AS last_meeting_date,
-               CAST(julianday('now') - julianday(MAX(e.scheduled_date)) AS INTEGER)
-                   AS days_since
+               {days_expr} AS days_since
         FROM team_members tm
         LEFT JOIN events e ON e.team_member_id = tm.id AND e.status = 'completed'
-        GROUP BY tm.id
+        GROUP BY tm.id, tm.name
         ORDER BY days_since DESC
-    """).fetchall()
+    """)
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_stale_feedback_members(days=21):
     conn = get_connection()
-    rows = conn.execute("""
+    days_expr = _sql_days_since("MAX(f.created_at)")
+    rows = _fetchall(conn, f"""
         SELECT tm.id AS member_id, tm.name AS member_name,
                MAX(f.created_at) AS last_feedback_date,
-               CAST(julianday('now') - julianday(MAX(f.created_at)) AS INTEGER)
-                   AS days_since
+               {days_expr} AS days_since
         FROM team_members tm
         LEFT JOIN feedback f ON f.team_member_id = tm.id
-        GROUP BY tm.id
-        HAVING last_feedback_date IS NULL
-           OR CAST(julianday('now') - julianday(MAX(f.created_at)) AS INTEGER) > ?
+        GROUP BY tm.id, tm.name
+        HAVING MAX(f.created_at) IS NULL
+           OR {days_expr} > ?
         ORDER BY days_since DESC
-    """, (days,)).fetchall()
+    """, (days,))
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_overdue_action_count():
     conn = get_connection()
-    row = conn.execute(
-        "SELECT COUNT(*) AS cnt FROM action_items "
-        "WHERE status != 'completed' AND due_date < date('now') AND due_date IS NOT NULL"
-    ).fetchone()
+    row = _fetchone(conn,
+        f"SELECT COUNT(*) AS cnt FROM action_items "
+        f"WHERE status != 'completed' AND due_date < {_sql_current_date()} "
+        f"AND due_date IS NOT NULL")
     conn.close()
     return row["cnt"] if row else 0
 
@@ -970,19 +1114,21 @@ def get_nudges():
 
 def get_meetings_per_member_per_month(months=6):
     conn = get_connection()
-    rows = conn.execute("""
+    month_expr = _sql_month("e.scheduled_date")
+    date_offset = _sql_date_offset("?")
+    rows = _fetchall(conn, f"""
         SELECT tm.name AS member_name,
-               strftime('%%Y-%%m', e.scheduled_date) AS month,
+               {month_expr} AS month,
                COUNT(*) AS meeting_count
         FROM events e
         JOIN team_members tm ON e.team_member_id = tm.id
         WHERE e.status = 'completed'
-          AND e.scheduled_date >= date('now', ? || ' months')
-        GROUP BY tm.id, month
+          AND e.scheduled_date >= {date_offset}
+        GROUP BY tm.id, tm.name, {month_expr}
         ORDER BY month, tm.name
-    """, (str(-months),)).fetchall()
+    """, (str(-months * 30),))
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_feedback_ratios():
@@ -1018,46 +1164,49 @@ def get_goal_completion_rates():
 
 def get_action_stats():
     conn = get_connection()
-    row = conn.execute("""
+    cd = _sql_current_date()
+    row = _fetchone(conn, f"""
         SELECT COUNT(*) AS total,
                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
                SUM(CASE WHEN status != 'completed' THEN 1 ELSE 0 END) AS pending,
-               SUM(CASE WHEN status != 'completed' AND due_date < date('now')
+               SUM(CASE WHEN status != 'completed' AND due_date < {cd}
                         AND due_date IS NOT NULL THEN 1 ELSE 0 END) AS overdue
         FROM action_items
-    """).fetchone()
+    """)
     conn.close()
-    return dict(row) if row else {"total": 0, "completed": 0, "pending": 0, "overdue": 0}
+    return row if row else {"total": 0, "completed": 0, "pending": 0, "overdue": 0}
 
 
 def get_manager_activity_trends(weeks=12):
     conn = get_connection()
-    rows = conn.execute("""
+    wk = _sql_week
+    dt = _sql_date_offset("?")
+    rows = _fetchall(conn, f"""
         SELECT week, SUM(events) AS events, SUM(feedback) AS feedback,
                SUM(actions) AS actions
         FROM (
-            SELECT strftime('%%Y-%%W', scheduled_date) AS week,
+            SELECT {wk('scheduled_date')} AS week,
                    COUNT(*) AS events, 0 AS feedback, 0 AS actions
             FROM events WHERE status = 'completed'
-              AND scheduled_date >= date('now', ? || ' days')
-            GROUP BY week
+              AND scheduled_date >= {dt}
+            GROUP BY {wk('scheduled_date')}
             UNION ALL
-            SELECT strftime('%%Y-%%W', created_at) AS week,
+            SELECT {wk('created_at')} AS week,
                    0, COUNT(*), 0
             FROM feedback
-            WHERE created_at >= date('now', ? || ' days')
-            GROUP BY week
+            WHERE created_at >= {dt}
+            GROUP BY {wk('created_at')}
             UNION ALL
-            SELECT strftime('%%Y-%%W', created_at) AS week,
+            SELECT {wk('created_at')} AS week,
                    0, 0, COUNT(*)
             FROM action_items
-            WHERE created_at >= date('now', ? || ' days')
-            GROUP BY week
-        )
+            WHERE created_at >= {dt}
+            GROUP BY {wk('created_at')}
+        ) sub
         GROUP BY week ORDER BY week
-    """, (str(-weeks * 7), str(-weeks * 7), str(-weeks * 7))).fetchall()
+    """, (str(-weeks * 7), str(-weeks * 7), str(-weeks * 7)))
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -1066,20 +1215,21 @@ def get_manager_activity_trends(weeks=12):
 
 def get_member_timeline(member_id, limit=50):
     conn = get_connection()
-    rows = conn.execute("""
+    left10 = _sql_left("created_at", 10)
+    rows = _fetchall(conn, f"""
         SELECT date, type, summary, detail, source_id FROM (
             SELECT scheduled_date AS date, 'event' AS type,
                    title AS summary, notes AS detail, id AS source_id
             FROM events WHERE team_member_id = ?
             UNION ALL
-            SELECT substr(created_at, 1, 10) AS date,
+            SELECT {left10} AS date,
                    feedback_type || '_feedback' AS type,
                    COALESCE(situation, '') AS summary,
                    COALESCE(behavior, '') || ' → ' || COALESCE(impact, '') AS detail,
                    id AS source_id
             FROM feedback WHERE team_member_id = ?
             UNION ALL
-            SELECT substr(created_at, 1, 10) AS date, 'goal' AS type,
+            SELECT {left10} AS date, 'goal' AS type,
                    description AS summary, status AS detail, id AS source_id
             FROM goals WHERE team_member_id = ?
             UNION ALL
@@ -1087,11 +1237,11 @@ def get_member_timeline(member_id, limit=50):
                    COALESCE(topic, 'Career conversation') AS summary,
                    notes AS detail, id AS source_id
             FROM career_conversations WHERE team_member_id = ?
-        )
+        ) timeline
         ORDER BY date DESC LIMIT ?
-    """, (member_id, member_id, member_id, member_id, limit)).fetchall()
+    """, (member_id, member_id, member_id, member_id, limit))
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_pre_meeting_prep(member_id):
