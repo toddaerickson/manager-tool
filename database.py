@@ -78,6 +78,9 @@ def get_connection():
             _USE_PG = False
             _PG_FAILED = True
             _PG_ERROR = str(e)
+            # Initialize SQLite tables since init_db() may have been
+            # skipped when PostgreSQL was expected to be available
+            init_db()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -382,14 +385,14 @@ def create_manager(username, display_name, password, email=None,
     pw_hash = hashlib.sha256(password.encode()).hexdigest()
     conn = get_connection()
     try:
-        cursor = conn.execute(
+        mid = _exec_returning_id(
+            conn,
             "INSERT INTO managers (username, display_name, email, password_hash, "
             "work_schedule, timezone) VALUES (?, ?, ?, ?, ?, ?)",
             (username.lower().strip(), display_name, email, pw_hash,
              work_schedule, timezone),
         )
-        conn.commit()
-        mid = cursor.lastrowid
+        _commit(conn)
     except Exception:
         conn.close()
         return None
@@ -402,22 +405,21 @@ def authenticate_manager(username, password):
     import hashlib
     pw_hash = hashlib.sha256(password.encode()).hexdigest()
     conn = get_connection()
-    row = conn.execute(
+    row = _fetchone(
+        conn,
         "SELECT * FROM managers WHERE username = ? AND password_hash = ?",
         (username.lower().strip(), pw_hash),
-    ).fetchone()
+    )
     conn.close()
-    return dict(row) if row else None
+    return row
 
 
 def get_manager(manager_id):
     """Get manager profile by ID."""
     conn = get_connection()
-    row = conn.execute(
-        "SELECT * FROM managers WHERE id = ?", (manager_id,)
-    ).fetchone()
+    row = _fetchone(conn, "SELECT * FROM managers WHERE id = ?", (manager_id,))
     conn.close()
-    return dict(row) if row else None
+    return row
 
 
 def update_manager(manager_id, **kwargs):
@@ -429,11 +431,9 @@ def update_manager(manager_id, **kwargs):
     fields["updated_at"] = datetime.now().isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    conn.execute(
-        f"UPDATE managers SET {set_clause} WHERE id = ?",
-        (*fields.values(), manager_id),
-    )
-    conn.commit()
+    _exec(conn, f"UPDATE managers SET {set_clause} WHERE id = ?",
+          (*fields.values(), manager_id))
+    _commit(conn)
     conn.close()
 
 
@@ -442,11 +442,9 @@ def update_manager_password(manager_id, new_password):
     import hashlib
     pw_hash = hashlib.sha256(new_password.encode()).hexdigest()
     conn = get_connection()
-    conn.execute(
-        "UPDATE managers SET password_hash = ?, updated_at = ? WHERE id = ?",
-        (pw_hash, datetime.now().isoformat(), manager_id),
-    )
-    conn.commit()
+    _exec(conn, "UPDATE managers SET password_hash = ?, updated_at = ? WHERE id = ?",
+          (pw_hash, datetime.now().isoformat(), manager_id))
+    _commit(conn)
     conn.close()
 
 
