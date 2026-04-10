@@ -4,11 +4,15 @@ Dual-mode: PostgreSQL (Supabase) in production, SQLite for local dev.
 Set DATABASE_URL env var or Streamlit secret to use PostgreSQL.
 """
 
+from __future__ import annotations
+
 import sqlite3
 import os
 import base64
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timedelta
+from typing import Any
 
 logger = logging.getLogger("manager_tool.database")
 
@@ -112,14 +116,46 @@ _PG_FAILED = False
 _PG_ERROR = ""
 
 
-def pg_connection_failed():
+def pg_connection_failed() -> tuple[bool, str]:
     """Return (failed: bool, error_msg: str) for UI status display."""
     return _PG_FAILED, _PG_ERROR
+
+
+_pg_pool = None
+
+
+def _get_pg_pool():
+    """Get or create a PostgreSQL connection pool (lazy singleton)."""
+    global _pg_pool
+    if _pg_pool is None:
+        try:
+            import psycopg2.pool
+            from psycopg2.extras import RealDictCursor
+            _pg_pool = psycopg2.pool.SimpleConnectionPool(
+                minconn=1, maxconn=5, dsn=_get_pg_url(),
+                cursor_factory=RealDictCursor,
+            )
+            logger.info("PostgreSQL connection pool created (1-5 connections)")
+        except Exception as e:
+            logger.error("Failed to create PG connection pool: %s", e)
+            _pg_pool = None
+    return _pg_pool
 
 
 def get_connection():
     global _PG_FAILED, _PG_ERROR
     if _detect_pg():
+        pool = _get_pg_pool()
+        if pool:
+            try:
+                conn = pool.getconn()
+                conn.autocommit = True
+                _PG_FAILED = False
+                _PG_ERROR = ""
+                return _PooledConnection(conn, pool)
+            except Exception as e:
+                logger.warning("PostgreSQL pool.getconn() failed: %s", e)
+        # Pool creation or getconn failed — try direct connection
         try:
             import psycopg2
             from psycopg2.extras import RealDictCursor
@@ -142,6 +178,50 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+class _PooledConnection:
+    """Wrapper that returns PG connections to pool on close() instead of destroying them."""
+    __slots__ = ("_conn", "_pool")
+
+    def __init__(self, conn, pool):
+        self._conn = conn
+        self._pool = pool
+
+    def close(self):
+        if self._pool and self._conn:
+            try:
+                self._pool.putconn(self._conn)
+            except Exception:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+            self._conn = None
+        elif self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+@contextmanager
+def _connect():
+    """Context manager for database connections.
+    Automatically returns PG connections to pool or closes SQLite connections.
+    Protects against connection leaks on exceptions."""
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _exec(conn, sql, params=None):
@@ -498,8 +578,8 @@ def _verify_password(password, stored_hash):
         return False
 
 
-def create_manager(username, display_name, password, email=None,
-                   work_schedule=None, timezone=None):
+def create_manager(username: str, display_name: str, password: str, email: str | None = None,
+                   work_schedule: str | None = None, timezone: str | None = None) -> int | None:
     """Create a new manager account. Returns manager_id."""
     pw_hash = _hash_password(password)
     conn = get_connection()
@@ -519,7 +599,7 @@ def create_manager(username, display_name, password, email=None,
     return mid
 
 
-def authenticate_manager(username, password):
+def authenticate_manager(username: str, password: str) -> dict[str, Any] | None:
     """Verify credentials. Returns manager dict or None.
     Automatically migrates legacy SHA-256 hashes to bcrypt on successful login."""
     conn = get_connection()
@@ -544,7 +624,7 @@ def authenticate_manager(username, password):
     return row
 
 
-def get_manager(manager_id):
+def get_manager(manager_id: int) -> dict[str, Any] | None:
     """Get manager profile by ID."""
     conn = get_connection()
     row = _fetchone(conn, "SELECT * FROM managers WHERE id = ?", (manager_id,))
@@ -552,7 +632,7 @@ def get_manager(manager_id):
     return row
 
 
-def update_manager(manager_id, **kwargs):
+def update_manager(manager_id: int, **kwargs: Any) -> None:
     """Update manager profile fields."""
     allowed = {"display_name", "email", "work_schedule", "timezone"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
@@ -567,7 +647,7 @@ def update_manager(manager_id, **kwargs):
     conn.close()
 
 
-def update_manager_password(manager_id, new_password):
+def update_manager_password(manager_id: int, new_password: str) -> None:
     """Change manager password."""
     pw_hash = _hash_password(new_password)
     conn = get_connection()
@@ -577,7 +657,7 @@ def update_manager_password(manager_id, new_password):
     conn.close()
 
 
-def manager_exists(username):
+def manager_exists(username: str) -> bool:
     """Check if a username is taken."""
     conn = get_connection()
     row = _fetchone(conn, "SELECT id FROM managers WHERE username = ?",
@@ -590,7 +670,7 @@ def manager_exists(username):
 # Configuration
 # ---------------------------------------------------------------------------
 
-def set_config(key, value):
+def set_config(key: str, value: str) -> None:
     stored = _encrypt_value(value) if key in _SENSITIVE_KEYS else value
     conn = get_connection()
     _exec(conn,
@@ -601,7 +681,7 @@ def set_config(key, value):
     conn.close()
 
 
-def get_config(key, default=None):
+def get_config(key: str, default: str | None = None) -> str | None:
     conn = get_connection()
     row = _fetchone(conn, "SELECT value FROM config WHERE key = ?", (key,))
     conn.close()
@@ -640,7 +720,7 @@ def list_users():
     return rows
 
 
-def get_all_config():
+def get_all_config() -> dict[str, str]:
     conn = get_connection()
     rows = _fetchall(conn, "SELECT key, value FROM config ORDER BY key")
     conn.close()
@@ -651,8 +731,9 @@ def get_all_config():
 # Team Members
 # ---------------------------------------------------------------------------
 
-def add_team_member(name, email=None, role=None, start_date=None, notes=None,
-                    manager_id=None):
+def add_team_member(name: str, email: str | None = None, role: str | None = None,
+                    start_date: str | None = None, notes: str | None = None,
+                    manager_id: int | None = None) -> int | None:
     conn = get_connection()
     member_id = _exec_returning_id(
         conn,
@@ -665,7 +746,7 @@ def add_team_member(name, email=None, role=None, start_date=None, notes=None,
     return member_id
 
 
-def update_team_member(member_id, manager_id=None, **kwargs):
+def update_team_member(member_id: int, manager_id: int | None = None, **kwargs: Any) -> None:
     conn = get_connection()
     allowed = {"name", "email", "role", "start_date", "notes"}
     fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
@@ -683,7 +764,7 @@ def update_team_member(member_id, manager_id=None, **kwargs):
     conn.close()
 
 
-def get_team_member(member_id, manager_id=None):
+def get_team_member(member_id: int, manager_id: int | None = None) -> dict[str, Any] | None:
     conn = get_connection()
     sql = "SELECT * FROM team_members WHERE id = ?"
     params = [member_id]
@@ -695,7 +776,7 @@ def get_team_member(member_id, manager_id=None):
     return row
 
 
-def get_team_member_by_name(name, manager_id=None):
+def get_team_member_by_name(name: str, manager_id: int | None = None) -> dict[str, Any] | None:
     conn = get_connection()
     sql = "SELECT * FROM team_members WHERE LOWER(name) = LOWER(?)"
     params = [name]
@@ -707,7 +788,7 @@ def get_team_member_by_name(name, manager_id=None):
     return row
 
 
-def list_team_members(manager_id=None):
+def list_team_members(manager_id: int | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
     sql = "SELECT * FROM team_members"
     params = []
@@ -720,7 +801,7 @@ def list_team_members(manager_id=None):
     return rows
 
 
-def delete_team_member(member_id, manager_id=None):
+def delete_team_member(member_id: int, manager_id: int | None = None) -> None:
     conn = get_connection()
     sql = "DELETE FROM team_members WHERE id = ?"
     params = [member_id]
@@ -736,9 +817,10 @@ def delete_team_member(member_id, manager_id=None):
 # Events
 # ---------------------------------------------------------------------------
 
-def create_event(title, event_type, scheduled_date, scheduled_time,
-                 team_member_id=None, duration_minutes=30,
-                 location=None, agenda=None, manager_id=None):
+def create_event(title: str, event_type: str, scheduled_date: str, scheduled_time: str,
+                 team_member_id: int | None = None, duration_minutes: int = 30,
+                 location: str | None = None, agenda: str | None = None,
+                 manager_id: int | None = None) -> int | None:
     conn = get_connection()
     event_id = _exec_returning_id(
         conn,
@@ -772,15 +854,15 @@ def update_event(event_id, **kwargs):
     conn.close()
 
 
-def complete_event(event_id, notes=None):
+def complete_event(event_id: int, notes: str | None = None) -> None:
     update_event(event_id, status="completed", notes=notes)
 
 
-def cancel_event(event_id):
+def cancel_event(event_id: int) -> None:
     update_event(event_id, status="cancelled")
 
 
-def get_event(event_id):
+def get_event(event_id: int) -> dict[str, Any] | None:
     conn = get_connection()
     row = _fetchone(
         conn,
@@ -794,8 +876,10 @@ def get_event(event_id):
     return row
 
 
-def list_events(event_type=None, status=None, team_member_id=None,
-                from_date=None, to_date=None, limit=50, manager_id=None):
+def list_events(event_type: str | None = None, status: str | None = None,
+                team_member_id: int | None = None, from_date: str | None = None,
+                to_date: str | None = None, limit: int = 50,
+                manager_id: int | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
     query = (
         "SELECT e.*, tm.name AS participant_name, tm.email AS participant_email "
@@ -832,7 +916,7 @@ def list_events(event_type=None, status=None, team_member_id=None,
     return rows
 
 
-def get_upcoming_events(days=7, manager_id=None):
+def get_upcoming_events(days: int = 7, manager_id: int | None = None) -> list[dict[str, Any]]:
     today = datetime.now().strftime("%Y-%m-%d")
     future = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
     return list_events(status="scheduled", from_date=today, to_date=future,
@@ -848,8 +932,9 @@ def get_event_history(team_member_id, limit=20, manager_id=None):
 # Action Items
 # ---------------------------------------------------------------------------
 
-def add_action_item(description, event_id=None, assignee=None, due_date=None,
-                    manager_id=None):
+def add_action_item(description: str, event_id: int | None = None,
+                    assignee: str | None = None, due_date: str | None = None,
+                    manager_id: int | None = None) -> int | None:
     conn = get_connection()
     item_id = _exec_returning_id(
         conn,
@@ -862,7 +947,7 @@ def add_action_item(description, event_id=None, assignee=None, due_date=None,
     return item_id
 
 
-def complete_action_item(item_id):
+def complete_action_item(item_id: int) -> None:
     conn = get_connection()
     _exec(conn,
           "UPDATE action_items SET status = 'completed', completed_at = ? WHERE id = ?",
@@ -908,17 +993,42 @@ def list_action_items(event_id=None, status=None, assignee=None, manager_id=None
     return rows
 
 
-def get_pending_action_items(manager_id=None):
+def get_pending_action_items(manager_id: int | None = None) -> list[dict[str, Any]]:
     return (list_action_items(status="pending", manager_id=manager_id) +
             list_action_items(status="in_progress", manager_id=manager_id))
+
+
+def delete_action_item(item_id: int) -> None:
+    """Delete an action item."""
+    conn = get_connection()
+    _exec(conn, "DELETE FROM action_items WHERE id = ?", (item_id,))
+    _commit(conn)
+    conn.close()
+
+
+def update_action_item(item_id, **kwargs):
+    """Update action item fields."""
+    allowed = {"description", "assignee", "due_date", "status"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    if fields.get("status") == "completed":
+        fields["completed_at"] = datetime.now().isoformat()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    conn = get_connection()
+    _exec(conn, f"UPDATE action_items SET {sets} WHERE id = ?",
+          (*fields.values(), item_id))
+    _commit(conn)
+    conn.close()
 
 
 # ---------------------------------------------------------------------------
 # Feedback
 # ---------------------------------------------------------------------------
 
-def add_feedback(team_member_id, feedback_type, situation=None,
-                 behavior=None, impact=None, event_id=None):
+def add_feedback(team_member_id: int, feedback_type: str, situation: str | None = None,
+                 behavior: str | None = None, impact: str | None = None,
+                 event_id: int | None = None) -> int | None:
     conn = get_connection()
     feedback_id = _exec_returning_id(
         conn,
@@ -931,7 +1041,7 @@ def add_feedback(team_member_id, feedback_type, situation=None,
     return feedback_id
 
 
-def list_feedback(team_member_id=None, feedback_type=None):
+def list_feedback(team_member_id: int | None = None, feedback_type: str | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
     query = (
         "SELECT f.*, tm.name AS member_name "
@@ -952,11 +1062,34 @@ def list_feedback(team_member_id=None, feedback_type=None):
     return rows
 
 
+def update_feedback(feedback_id, **kwargs):
+    """Update feedback fields."""
+    allowed = {"feedback_type", "situation", "behavior", "impact"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    conn = get_connection()
+    _exec(conn, f"UPDATE feedback SET {sets} WHERE id = ?",
+          (*fields.values(), feedback_id))
+    _commit(conn)
+    conn.close()
+
+
+def delete_feedback(feedback_id: int) -> None:
+    """Delete a feedback record."""
+    conn = get_connection()
+    _exec(conn, "DELETE FROM feedback WHERE id = ?", (feedback_id,))
+    _commit(conn)
+    conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Goals
 # ---------------------------------------------------------------------------
 
-def add_goal(team_member_id, quarter, description, key_results=None):
+def add_goal(team_member_id: int, quarter: str, description: str,
+             key_results: str | None = None) -> int | None:
     conn = get_connection()
     goal_id = _exec_returning_id(
         conn,
@@ -1007,11 +1140,19 @@ def list_goals(team_member_id=None, quarter=None, status=None):
     return rows
 
 
+def delete_goal(goal_id: int) -> None:
+    """Delete a goal record."""
+    conn = get_connection()
+    _exec(conn, "DELETE FROM goals WHERE id = ?", (goal_id,))
+    _commit(conn)
+    conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Reports / Aggregations
 # ---------------------------------------------------------------------------
 
-def get_weekly_summary(manager_id=None):
+def get_weekly_summary(manager_id: int | None = None) -> dict[str, list]:
     """Get a summary of activity for the current week."""
     today = datetime.now()
     monday = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
@@ -1076,9 +1217,10 @@ def get_member_summary(team_member_id):
 # Journal
 # ---------------------------------------------------------------------------
 
-def add_journal_entry(entry_date, entry_type="daily", content=None,
-                      mood=None, energy=None, private_notes=None, tags=None,
-                      manager_id=None):
+def add_journal_entry(entry_date: str, entry_type: str = "daily", content: str | None = None,
+                      mood: int | None = None, energy: int | None = None,
+                      private_notes: str | None = None, tags: str | None = None,
+                      manager_id: int | None = None) -> int | None:
     conn = get_connection()
     entry_id = _exec_returning_id(
         conn,
@@ -1108,7 +1250,8 @@ def update_journal_entry(entry_id, **kwargs):
     conn.close()
 
 
-def get_journal_entry_by_date(entry_date, entry_type="daily", manager_id=None):
+def get_journal_entry_by_date(entry_date: str, entry_type: str = "daily",
+                              manager_id: int | None = None) -> dict[str, Any] | None:
     conn = get_connection()
     sql = "SELECT * FROM journal_entries WHERE entry_date = ? AND entry_type = ?"
     params = [entry_date, entry_type]
@@ -1120,7 +1263,8 @@ def get_journal_entry_by_date(entry_date, entry_type="daily", manager_id=None):
     return row
 
 
-def list_journal_entries(entry_type=None, limit=30, manager_id=None):
+def list_journal_entries(entry_type: str | None = None, limit: int = 30,
+                         manager_id: int | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
     query = "SELECT * FROM journal_entries WHERE 1=1"
     params = []
@@ -1138,7 +1282,7 @@ def list_journal_entries(entry_type=None, limit=30, manager_id=None):
     return rows
 
 
-def get_journal_streak(manager_id=None):
+def get_journal_streak(manager_id: int | None = None) -> int:
     """Count consecutive days with a journal entry ending today."""
     conn = get_connection()
     sql = "SELECT DISTINCT entry_date FROM journal_entries"
@@ -1281,7 +1425,7 @@ def get_overdue_action_count(manager_id=None):
     return row["cnt"] if row else 0
 
 
-def get_nudges(manager_id=None):
+def get_nudges(manager_id: int | None = None) -> list[dict[str, Any]]:
     """Aggregate all nudges, sorted by severity."""
     nudges = []
     for m in get_time_since_last_event_per_member(manager_id=manager_id):
@@ -1374,7 +1518,7 @@ def get_meetings_per_member_per_month(months=6, manager_id=None):
     return rows
 
 
-def get_feedback_ratios(manager_id=None):
+def get_feedback_ratios(manager_id: int | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
     sql = """
         SELECT tm.name AS member_name,
@@ -1413,7 +1557,7 @@ def get_goal_completion_rates(manager_id=None):
     return rows
 
 
-def get_action_stats(manager_id=None):
+def get_action_stats(manager_id: int | None = None) -> dict[str, int]:
     conn = get_connection()
     cd = _sql_current_date()
     sql = f"""

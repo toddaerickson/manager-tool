@@ -654,13 +654,20 @@ def _render_member_detail(summary):
         st.markdown("**Feedback History**")
         for fb in summary["feedback"][:5]:
             color = "green" if fb["feedback_type"] == "positive" else "orange"
-            st.markdown(
-                f":{color}[**{fb['feedback_type'].upper()}**] "
-                f"— {fb['created_at'][:10]}  \n"
-                f"&nbsp;&nbsp;**S:** {fb.get('situation', 'N/A')}  \n"
-                f"&nbsp;&nbsp;**B:** {fb.get('behavior', 'N/A')}  \n"
-                f"&nbsp;&nbsp;**I:** {fb.get('impact', 'N/A')}"
-            )
+            fb_col, del_col = st.columns([5, 1])
+            with fb_col:
+                st.markdown(
+                    f":{color}[**{fb['feedback_type'].upper()}**] "
+                    f"— {fb['created_at'][:10]}  \n"
+                    f"&nbsp;&nbsp;**S:** {fb.get('situation', 'N/A')}  \n"
+                    f"&nbsp;&nbsp;**B:** {fb.get('behavior', 'N/A')}  \n"
+                    f"&nbsp;&nbsp;**I:** {fb.get('impact', 'N/A')}"
+                )
+            with del_col:
+                if st.button("Delete", key=f"del_fb_{fb['id']}"):
+                    db.delete_feedback(fb["id"])
+                    set_toast("success", f"Feedback #{fb['id']} deleted.")
+                    st.rerun()
 
 
 def page_add_member():
@@ -727,6 +734,15 @@ def page_action_items():
     if not checked.empty:
         row = checked.iloc[0]
         confirm_complete_action(int(row["Id"]), row["Description"])
+
+    # Delete action item
+    with st.expander("Delete an action item"):
+        del_id = st.number_input("Action item ID to delete", min_value=1, step=1,
+                                 key="del_action_id")
+        if st.button("Delete Action Item", key="del_action_btn"):
+            db.delete_action_item(int(del_id))
+            set_toast("success", f"Action item #{del_id} deleted.")
+            st.rerun()
 
 
 def page_add_action():
@@ -817,13 +833,23 @@ def page_quarterly_goals():
                 "partially_met", "not_met"]
 
     # Single-column form (#7)
-    with st.form("update_goal"):
-        gid = st.number_input("Goal ID to update", min_value=1, step=1)
-        new_status = st.selectbox("New Status", statuses)
-        if st.form_submit_button("Update Status", use_container_width=True):
-            db.update_goal(int(gid), status=new_status)
-            st.toast(f"Goal #{gid} updated to '{new_status}'.", icon="\u2705")
-            st.rerun()
+    uc1, uc2 = st.columns(2)
+    with uc1:
+        with st.form("update_goal"):
+            gid = st.number_input("Goal ID to update", min_value=1, step=1)
+            new_status = st.selectbox("New Status", statuses)
+            if st.form_submit_button("Update Status", use_container_width=True):
+                db.update_goal(int(gid), status=new_status)
+                st.toast(f"Goal #{gid} updated to '{new_status}'.", icon="\u2705")
+                st.rerun()
+    with uc2:
+        with st.form("delete_goal"):
+            del_gid = st.number_input("Goal ID to delete", min_value=1, step=1,
+                                       key="del_goal_id")
+            if st.form_submit_button("Delete Goal", use_container_width=True):
+                db.delete_goal(int(del_gid))
+                st.toast(f"Goal #{del_gid} deleted.", icon="\u2705")
+                st.rerun()
 
 
 def page_add_goal():
@@ -975,6 +1001,21 @@ def page_configuration():
             st.text(f"{key}: {display}")
     else:
         st.caption("No configuration set yet.")
+
+    # -- Weekly Digest --
+    st.divider()
+    st.subheader("Weekly Email Digest")
+    st.caption(
+        "Send yourself a summary of upcoming events, overdue actions, "
+        "nudges, and your journal streak."
+    )
+    if st.button("Send Weekly Digest Now", use_container_width=True):
+        import calendar_service
+        ok, msg = calendar_service.send_weekly_digest(manager_id=_mid())
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
 
 
 # ---------------------------------------------------------------------------
