@@ -100,8 +100,12 @@ st.markdown("""
 # ---------------------------------------------------------------------------
 
 def get_current_manager_id():
-    """Return the logged-in manager's ID, or 0 for legacy/unauthenticated use."""
-    return st.session_state.get("manager_id", 0)
+    """Return the logged-in manager's ID, or None for unauthenticated use."""
+    return st.session_state.get("manager_id") or None
+
+
+# Shorthand for threading manager_id into DB calls
+_mid = get_current_manager_id
 
 
 def require_auth():
@@ -198,7 +202,7 @@ def df_from(rows, columns=None):
 
 def member_options():
     """Return (display_names_list, name_to_id_dict)."""
-    members = db.list_team_members()
+    members = db.list_team_members(manager_id=_mid())
     mapping = {m["name"]: m["id"] for m in members}
     return list(mapping.keys()), mapping
 
@@ -295,12 +299,12 @@ def page_dashboard():
     st.info(f"\U0001F4A1 **Daily Wisdom #{wisdom['number']}:** {wisdom['text']}")
 
     # -- Streaks (loss aversion) --
-    streak = db.get_journal_streak()
+    streak = db.get_journal_streak(manager_id=_mid())
     if streak > 0:
         st.markdown(f"\U0001F525 **Journal streak: {streak} day{'s' if streak != 1 else ''}**")
 
     # -- Nudges (triggers for action) --
-    nudges = db.get_nudges()
+    nudges = db.get_nudges(manager_id=_mid())
     if nudges:
         for n in nudges:
             if n["severity"] == "critical":
@@ -311,15 +315,15 @@ def page_dashboard():
                 st.info(f"{n['message']}")
 
     # -- Anti-pattern alert (identity hook) --
-    meeting_data = db.get_time_since_last_event_per_member()
-    feedback_data = db.get_feedback_ratios()
+    meeting_data = db.get_time_since_last_event_per_member(manager_id=_mid())
+    feedback_data = db.get_feedback_ratios(manager_id=_mid())
     ap = templates.detect_anti_patterns(meeting_data, feedback_data)
     if ap:
         p = ap[0]
         st.warning(f"**{p['pattern']}:** {p['evidence']} — {p['suggestion']}")
 
     # -- Quick stats [C7: System 1 — emoji indicators for instant scanning] --
-    summary = db.get_weekly_summary()
+    summary = db.get_weekly_summary(manager_id=_mid())
     c1, c2, c3, c4 = st.columns(4)
     upcoming_n = len(summary["upcoming_events"])
     pending_n = len(summary["pending_actions"])
@@ -376,10 +380,10 @@ def page_dashboard():
         )
 
     # -- Onboarding checklist (endowed progress) — only for new users --
-    members = db.list_team_members()
-    all_events = db.list_events(limit=5)
+    members = db.list_team_members(manager_id=_mid())
+    all_events = db.list_events(limit=5, manager_id=_mid())
     all_feedback = db.list_feedback()
-    journal_entries = db.list_journal_entries(limit=1)
+    journal_entries = db.list_journal_entries(limit=1, manager_id=_mid())
     if len(members) < 2 and len(all_events) < 3:
         st.divider()
         st.subheader("Getting Started")
@@ -439,6 +443,7 @@ def page_schedule_event():
             duration_minutes=duration,
             location=location or None,
             agenda=agenda,
+            manager_id=_mid(),
         )
         st.toast(f"Event #{eid} scheduled: {final_title}", icon="\U0001F4C5")
         st.rerun()
@@ -447,7 +452,7 @@ def page_schedule_event():
 def page_upcoming_events():
     st.title("Upcoming Events (Next 14 Days)")
 
-    events = db.get_upcoming_events(days=14)
+    events = db.get_upcoming_events(days=14, manager_id=_mid())
     if events:
         st.dataframe(
             df_from(events, ["id", "title", "event_type", "scheduled_date",
@@ -534,6 +539,7 @@ def page_event_history():
         kwargs["from_date"] = date_range[0].strftime("%Y-%m-%d")
         kwargs["to_date"] = date_range[1].strftime("%Y-%m-%d")
 
+    kwargs["manager_id"] = _mid()
     events = db.list_events(**kwargs)
 
     if search:
@@ -556,7 +562,7 @@ def page_event_history():
 def page_team_roster():
     st.title("Team Roster")
 
-    members = db.list_team_members()
+    members = db.list_team_members(manager_id=_mid())
     if not members:
         st.info("No team members yet. Use **Add Member** to add someone.")
         return
@@ -654,6 +660,7 @@ def page_add_member():
             mid = db.add_team_member(
                 name, email or None, role or None,
                 start_date.strftime("%Y-%m-%d"), notes or None,
+                manager_id=_mid(),
             )
             st.toast(f"Added {name} (ID: {mid})", icon="\u2705")
             st.rerun()
@@ -664,7 +671,7 @@ def page_add_member():
 def page_action_items():
     st.title("Pending Action Items")
 
-    actions = db.get_pending_action_items()
+    actions = db.get_pending_action_items(manager_id=_mid())
     if not actions:
         st.success("No pending action items. You're caught up!")
         return
@@ -719,7 +726,8 @@ def page_add_action():
             eid = int(event_id) if event_id and event_id.isdigit() else None
             due = due_date.strftime("%Y-%m-%d") if due_date else None
             aid = db.add_action_item(desc, event_id=eid,
-                                     assignee=assignee or None, due_date=due)
+                                     assignee=assignee or None, due_date=due,
+                                     manager_id=_mid())
             st.toast(f"Action item #{aid} added.", icon="\u2705")
             st.rerun()
 
@@ -774,7 +782,7 @@ def page_record_feedback():
 def page_quarterly_goals():
     st.title("Quarterly Goals")
 
-    goals = db.list_goals()
+    goals = db.list_goals(manager_id=_mid())
     if not goals:
         st.info("No goals set yet.")
         return
@@ -956,7 +964,7 @@ def page_journal():
     show_toast()
 
     # -- Streak & daily wisdom (top bar) --
-    streak = db.get_journal_streak()
+    streak = db.get_journal_streak(manager_id=_mid())
     wisdom = templates.get_daily_wisdom()
     c1, c2 = st.columns([1, 3])
     with c1:
@@ -966,7 +974,7 @@ def page_journal():
         st.info(f"**Daily Wisdom #{wisdom['number']}:** {wisdom['text']}")
 
     # -- Mood/energy sparkline --
-    entries = db.list_journal_entries(limit=14)
+    entries = db.list_journal_entries(limit=14, manager_id=_mid())
     if entries:
         chart_data = pd.DataFrame([
             {"Date": e["entry_date"], "Mood": e["mood"], "Energy": e["energy"]}
@@ -983,7 +991,7 @@ def page_journal():
 
     with tab_today:
         today_str = datetime.now().date().isoformat()
-        existing = db.get_journal_entry_by_date(today_str, "daily")
+        existing = db.get_journal_entry_by_date(today_str, "daily", manager_id=_mid())
 
         # Two-pane layout: notes on left, coaching on right
         left_col, right_col = st.columns([3, 2])
@@ -1025,7 +1033,8 @@ def page_journal():
                     db.update_journal_entry(existing["id"], content=content, mood=mood,
                         energy=energy, private_notes=private, tags=tags)
                 else:
-                    db.add_journal_entry(today_str, "daily", content, mood, energy, private, tags)
+                    db.add_journal_entry(today_str, "daily", content, mood, energy, private, tags,
+                                         manager_id=_mid())
                 if content and content.strip():
                     matched = templates.match_wisdom_to_text(content, count=1)
                     if matched:
@@ -1044,7 +1053,7 @@ def page_journal():
         # Find current week's Monday
         today = datetime.now().date()
         monday = (today - timedelta(days=today.weekday())).isoformat()
-        existing_w = db.get_journal_entry_by_date(monday, "weekly")
+        existing_w = db.get_journal_entry_by_date(monday, "weekly", manager_id=_mid())
         with st.form("journal_weekly"):
             reflection = st.text_area(
                 "What went well this week? What would you do differently?",
@@ -1053,7 +1062,7 @@ def page_journal():
             )
             st.markdown("**Self-Assessment** — Rate yourself this week:")
             scores = {}
-            prev = db.get_latest_self_assessment()
+            prev = db.get_latest_self_assessment(manager_id=_mid())
             for dim, question in templates.SELF_ASSESSMENT_DIMENSIONS:
                 prev_val = prev.get(dim, 3)
                 label = f"{dim} — {question}"
@@ -1068,12 +1077,12 @@ def page_journal():
             if existing_w:
                 db.update_journal_entry(existing_w["id"], content=reflection)
             else:
-                db.add_journal_entry(monday, "weekly", reflection)
-            db.save_self_assessment(monday, scores)
+                db.add_journal_entry(monday, "weekly", reflection, manager_id=_mid())
+            db.save_self_assessment(monday, scores, manager_id=_mid())
             st.success(f"Weekly reflection saved for week of {monday}.")
 
     with tab_history:
-        history = db.list_journal_entries(limit=30)
+        history = db.list_journal_entries(limit=30, manager_id=_mid())
         if not history:
             st.caption("No journal entries yet. Start writing — even one sentence counts.")
         for entry in history:
@@ -1175,8 +1184,8 @@ def page_analytics():
     show_toast()
 
     # -- Anti-pattern detection (top of page — identity hook) --
-    meeting_data = db.get_time_since_last_event_per_member()
-    feedback_data = db.get_feedback_ratios()
+    meeting_data = db.get_time_since_last_event_per_member(manager_id=_mid())
+    feedback_data = db.get_feedback_ratios(manager_id=_mid())
     patterns = templates.detect_anti_patterns(meeting_data, feedback_data)
 
     if patterns:
@@ -1188,7 +1197,7 @@ def page_analytics():
         st.success("\u2705 No anti-patterns detected. Your management behaviors are consistent.")
 
     # -- Management score --
-    latest_sa = db.get_latest_self_assessment()
+    latest_sa = db.get_latest_self_assessment(manager_id=_mid())
     if latest_sa:
         avg_score = sum(latest_sa.values()) / len(latest_sa)
         st.metric("Management Score", f"{avg_score:.1f} / 5")
@@ -1199,7 +1208,7 @@ def page_analytics():
     ])
 
     with tab_cadence:
-        data = db.get_meetings_per_member_per_month()
+        data = db.get_meetings_per_member_per_month(manager_id=_mid())
         if data:
             df = pd.DataFrame(data)
             pivot = df.pivot_table(index="month", columns="member_name",
@@ -1227,14 +1236,14 @@ def page_analytics():
             st.caption("Record feedback to see health metrics.")
 
     with tab_goals:
-        goal_data = db.get_goal_completion_rates()
+        goal_data = db.get_goal_completion_rates(manager_id=_mid())
         if goal_data:
             st.dataframe(df_from(goal_data))
         else:
             st.caption("Set goals to track completion rates.")
 
     with tab_actions:
-        stats = db.get_action_stats()
+        stats = db.get_action_stats(manager_id=_mid())
         ac1, ac2, ac3, ac4 = st.columns(4)
         with ac1:
             st.metric("Total", stats.get("total", 0))
@@ -1249,7 +1258,7 @@ def page_analytics():
             st.progress(rate / 100, text=f"Completion rate: {rate}%")
 
     with tab_activity:
-        trends = db.get_manager_activity_trends()
+        trends = db.get_manager_activity_trends(manager_id=_mid())
         if trends:
             df = pd.DataFrame(trends).set_index("week")
             st.line_chart(df)
@@ -1257,7 +1266,7 @@ def page_analytics():
             st.caption("Activity trends will appear after a few weeks of use.")
 
         # Self-assessment trends
-        sa_trends = db.get_self_assessment_trends()
+        sa_trends = db.get_self_assessment_trends(manager_id=_mid())
         if sa_trends:
             sa_df = pd.DataFrame(sa_trends)
             pivot = sa_df.pivot_table(index="week_date", columns="dimension",
@@ -1584,7 +1593,7 @@ def main():
         st.caption(f"*{manager_name}*")
 
         # Streak badge at top of nav (loss aversion hook)
-        streak = db.get_journal_streak()
+        streak = db.get_journal_streak(manager_id=_mid())
         if streak > 0:
             st.markdown(f"\U0001F525 **{streak}-day streak**")
 
