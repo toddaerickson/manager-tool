@@ -527,20 +527,21 @@ def get_all_config():
 # Team Members
 # ---------------------------------------------------------------------------
 
-def add_team_member(name, email=None, role=None, start_date=None, notes=None):
+def add_team_member(name, email=None, role=None, start_date=None, notes=None,
+                    manager_id=None):
     conn = get_connection()
     member_id = _exec_returning_id(
         conn,
-        "INSERT INTO team_members (name, email, role, start_date, notes) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (name, email, role, start_date, notes),
+        "INSERT INTO team_members (name, email, role, start_date, notes, manager_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (name, email, role, start_date, notes, manager_id),
     )
     _commit(conn)
     conn.close()
     return member_id
 
 
-def update_team_member(member_id, **kwargs):
+def update_team_member(member_id, manager_id=None, **kwargs):
     conn = get_connection()
     allowed = {"name", "email", "role", "start_date", "notes"}
     fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
@@ -549,37 +550,60 @@ def update_team_member(member_id, **kwargs):
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [datetime.now().isoformat(), member_id]
-    _exec(conn,
-          f"UPDATE team_members SET {sets}, updated_at = ? WHERE id = ?", values)
+    sql = f"UPDATE team_members SET {sets}, updated_at = ? WHERE id = ?"
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        values.append(manager_id)
+    _exec(conn, sql, values)
     _commit(conn)
     conn.close()
 
 
-def get_team_member(member_id):
+def get_team_member(member_id, manager_id=None):
     conn = get_connection()
-    row = _fetchone(conn, "SELECT * FROM team_members WHERE id = ?", (member_id,))
+    sql = "SELECT * FROM team_members WHERE id = ?"
+    params = [member_id]
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    row = _fetchone(conn, sql, params)
     conn.close()
     return row
 
 
-def get_team_member_by_name(name):
+def get_team_member_by_name(name, manager_id=None):
     conn = get_connection()
-    row = _fetchone(conn,
-                    "SELECT * FROM team_members WHERE LOWER(name) = LOWER(?)", (name,))
+    sql = "SELECT * FROM team_members WHERE LOWER(name) = LOWER(?)"
+    params = [name]
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    row = _fetchone(conn, sql, params)
     conn.close()
     return row
 
 
-def list_team_members():
+def list_team_members(manager_id=None):
     conn = get_connection()
-    rows = _fetchall(conn, "SELECT * FROM team_members ORDER BY name")
+    sql = "SELECT * FROM team_members"
+    params = []
+    if manager_id is not None:
+        sql += " WHERE manager_id = ?"
+        params.append(manager_id)
+    sql += " ORDER BY name"
+    rows = _fetchall(conn, sql, params or None)
     conn.close()
     return rows
 
 
-def delete_team_member(member_id):
+def delete_team_member(member_id, manager_id=None):
     conn = get_connection()
-    _exec(conn, "DELETE FROM team_members WHERE id = ?", (member_id,))
+    sql = "DELETE FROM team_members WHERE id = ?"
+    params = [member_id]
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    _exec(conn, sql, params)
     _commit(conn)
     conn.close()
 
@@ -590,15 +614,15 @@ def delete_team_member(member_id):
 
 def create_event(title, event_type, scheduled_date, scheduled_time,
                  team_member_id=None, duration_minutes=30,
-                 location=None, agenda=None):
+                 location=None, agenda=None, manager_id=None):
     conn = get_connection()
     event_id = _exec_returning_id(
         conn,
         "INSERT INTO events (title, event_type, team_member_id, scheduled_date, "
-        "scheduled_time, duration_minutes, location, agenda) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "scheduled_time, duration_minutes, location, agenda, manager_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (title, event_type, team_member_id, scheduled_date,
-         scheduled_time, duration_minutes, location, agenda),
+         scheduled_time, duration_minutes, location, agenda, manager_id),
     )
     _commit(conn)
     conn.close()
@@ -647,7 +671,7 @@ def get_event(event_id):
 
 
 def list_events(event_type=None, status=None, team_member_id=None,
-                from_date=None, to_date=None, limit=50):
+                from_date=None, to_date=None, limit=50, manager_id=None):
     conn = get_connection()
     query = (
         "SELECT e.*, tm.name AS participant_name, tm.email AS participant_email "
@@ -656,6 +680,9 @@ def list_events(event_type=None, status=None, team_member_id=None,
     )
     params = []
 
+    if manager_id is not None:
+        query += " AND e.manager_id = ?"
+        params.append(manager_id)
     if event_type:
         query += " AND e.event_type = ?"
         params.append(event_type)
@@ -681,27 +708,30 @@ def list_events(event_type=None, status=None, team_member_id=None,
     return rows
 
 
-def get_upcoming_events(days=7):
+def get_upcoming_events(days=7, manager_id=None):
     today = datetime.now().strftime("%Y-%m-%d")
     future = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
-    return list_events(status="scheduled", from_date=today, to_date=future)
+    return list_events(status="scheduled", from_date=today, to_date=future,
+                       manager_id=manager_id)
 
 
-def get_event_history(team_member_id, limit=20):
-    return list_events(team_member_id=team_member_id, status="completed", limit=limit)
+def get_event_history(team_member_id, limit=20, manager_id=None):
+    return list_events(team_member_id=team_member_id, status="completed",
+                       limit=limit, manager_id=manager_id)
 
 
 # ---------------------------------------------------------------------------
 # Action Items
 # ---------------------------------------------------------------------------
 
-def add_action_item(description, event_id=None, assignee=None, due_date=None):
+def add_action_item(description, event_id=None, assignee=None, due_date=None,
+                    manager_id=None):
     conn = get_connection()
     item_id = _exec_returning_id(
         conn,
-        "INSERT INTO action_items (event_id, description, assignee, due_date) "
-        "VALUES (?, ?, ?, ?)",
-        (event_id, description, assignee, due_date),
+        "INSERT INTO action_items (event_id, description, assignee, due_date, manager_id) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (event_id, description, assignee, due_date, manager_id),
     )
     _commit(conn)
     conn.close()
@@ -727,7 +757,7 @@ def update_action_item_status(item_id, status):
     conn.close()
 
 
-def list_action_items(event_id=None, status=None, assignee=None):
+def list_action_items(event_id=None, status=None, assignee=None, manager_id=None):
     conn = get_connection()
     query = (
         "SELECT ai.*, e.title AS event_title "
@@ -735,6 +765,9 @@ def list_action_items(event_id=None, status=None, assignee=None):
         "LEFT JOIN events e ON ai.event_id = e.id WHERE 1=1"
     )
     params = []
+    if manager_id is not None:
+        query += " AND ai.manager_id = ?"
+        params.append(manager_id)
     if event_id:
         query += " AND ai.event_id = ?"
         params.append(event_id)
@@ -751,8 +784,9 @@ def list_action_items(event_id=None, status=None, assignee=None):
     return rows
 
 
-def get_pending_action_items():
-    return list_action_items(status="pending") + list_action_items(status="in_progress")
+def get_pending_action_items(manager_id=None):
+    return (list_action_items(status="pending", manager_id=manager_id) +
+            list_action_items(status="in_progress", manager_id=manager_id))
 
 
 # ---------------------------------------------------------------------------
@@ -853,7 +887,7 @@ def list_goals(team_member_id=None, quarter=None, status=None):
 # Reports / Aggregations
 # ---------------------------------------------------------------------------
 
-def get_weekly_summary():
+def get_weekly_summary(manager_id=None):
     """Get a summary of activity for the current week."""
     today = datetime.now()
     monday = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
@@ -862,20 +896,24 @@ def get_weekly_summary():
     summary = {}
 
     summary["upcoming_events"] = list_events(
-        status="scheduled", from_date=monday, to_date=sunday
+        status="scheduled", from_date=monday, to_date=sunday,
+        manager_id=manager_id
     )
     summary["completed_events"] = list_events(
-        status="completed", from_date=monday, to_date=sunday
+        status="completed", from_date=monday, to_date=sunday,
+        manager_id=manager_id
     )
-    summary["pending_actions"] = get_pending_action_items()
+    summary["pending_actions"] = get_pending_action_items(manager_id=manager_id)
 
     conn = get_connection()
-    overdue = _fetchall(
-        conn,
-        "SELECT * FROM action_items WHERE status != 'completed' "
-        "AND due_date < ? ORDER BY due_date",
-        (today.strftime("%Y-%m-%d"),),
-    )
+    sql = ("SELECT * FROM action_items WHERE status != 'completed' "
+           "AND due_date < ? AND due_date IS NOT NULL")
+    params = [today.strftime("%Y-%m-%d")]
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    sql += " ORDER BY due_date"
+    overdue = _fetchall(conn, sql, params)
     summary["overdue_actions"] = overdue
 
     conn.close()
@@ -915,14 +953,15 @@ def get_member_summary(team_member_id):
 # ---------------------------------------------------------------------------
 
 def add_journal_entry(entry_date, entry_type="daily", content=None,
-                      mood=None, energy=None, private_notes=None, tags=None):
+                      mood=None, energy=None, private_notes=None, tags=None,
+                      manager_id=None):
     conn = get_connection()
     entry_id = _exec_returning_id(
         conn,
         "INSERT INTO journal_entries "
-        "(entry_date, entry_type, content, mood, energy, private_notes, tags) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (entry_date, entry_type, content, mood, energy, private_notes, tags),
+        "(entry_date, entry_type, content, mood, energy, private_notes, tags, manager_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (entry_date, entry_type, content, mood, energy, private_notes, tags, manager_id),
     )
     _commit(conn)
     conn.close()
@@ -944,19 +983,25 @@ def update_journal_entry(entry_id, **kwargs):
     conn.close()
 
 
-def get_journal_entry_by_date(entry_date, entry_type="daily"):
+def get_journal_entry_by_date(entry_date, entry_type="daily", manager_id=None):
     conn = get_connection()
-    row = _fetchone(conn,
-                    "SELECT * FROM journal_entries WHERE entry_date = ? AND entry_type = ?",
-                    (entry_date, entry_type))
+    sql = "SELECT * FROM journal_entries WHERE entry_date = ? AND entry_type = ?"
+    params = [entry_date, entry_type]
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    row = _fetchone(conn, sql, params)
     conn.close()
     return row
 
 
-def list_journal_entries(entry_type=None, limit=30):
+def list_journal_entries(entry_type=None, limit=30, manager_id=None):
     conn = get_connection()
     query = "SELECT * FROM journal_entries WHERE 1=1"
     params = []
+    if manager_id is not None:
+        query += " AND manager_id = ?"
+        params.append(manager_id)
     if entry_type:
         query += " AND entry_type = ?"
         params.append(entry_type)
@@ -968,12 +1013,16 @@ def list_journal_entries(entry_type=None, limit=30):
     return rows
 
 
-def get_journal_streak():
+def get_journal_streak(manager_id=None):
     """Count consecutive days with a journal entry ending today."""
     conn = get_connection()
-    rows = _fetchall(conn,
-                     "SELECT DISTINCT entry_date FROM journal_entries "
-                     "ORDER BY entry_date DESC LIMIT 365")
+    sql = "SELECT DISTINCT entry_date FROM journal_entries"
+    params = []
+    if manager_id is not None:
+        sql += " WHERE manager_id = ?"
+        params.append(manager_id)
+    sql += " ORDER BY entry_date DESC LIMIT 365"
+    rows = _fetchall(conn, sql, params or None)
     conn.close()
     if not rows:
         return 0
@@ -993,36 +1042,52 @@ def get_journal_streak():
 # Self-Assessment
 # ---------------------------------------------------------------------------
 
-def save_self_assessment(week_date, scores_dict):
+def save_self_assessment(week_date, scores_dict, manager_id=None):
     """Save or replace self-assessment scores for a week.
     scores_dict: {dimension_name: score}"""
     conn = get_connection()
-    _exec(conn, "DELETE FROM self_assessments WHERE week_date = ?", (week_date,))
+    sql = "DELETE FROM self_assessments WHERE week_date = ?"
+    params = [week_date]
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    _exec(conn, sql, params)
     for dim, score in scores_dict.items():
         _exec(conn,
-              "INSERT INTO self_assessments (week_date, dimension, score) "
-              "VALUES (?, ?, ?)",
-              (week_date, dim, score))
+              "INSERT INTO self_assessments (week_date, dimension, score, manager_id) "
+              "VALUES (?, ?, ?, ?)",
+              (week_date, dim, score, manager_id))
     _commit(conn)
     conn.close()
 
 
-def get_self_assessment_trends(weeks=12):
+def get_self_assessment_trends(weeks=12, manager_id=None):
     conn = get_connection()
-    rows = _fetchall(conn,
-                     "SELECT week_date, dimension, score FROM self_assessments "
-                     f"WHERE week_date >= {_sql_date_offset('?')} "
-                     "ORDER BY week_date, dimension",
-                     (str(-weeks * 7),))
+    sql = ("SELECT week_date, dimension, score FROM self_assessments "
+           f"WHERE week_date >= {_sql_date_offset('?')}")
+    params = [str(-weeks * 7)]
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    sql += " ORDER BY week_date, dimension"
+    rows = _fetchall(conn, sql, params)
     conn.close()
     return rows
 
 
-def get_latest_self_assessment():
+def get_latest_self_assessment(manager_id=None):
     conn = get_connection()
-    rows = _fetchall(conn,
-                     "SELECT dimension, score FROM self_assessments "
-                     "WHERE week_date = (SELECT MAX(week_date) FROM self_assessments)")
+    subquery = "SELECT MAX(week_date) FROM self_assessments"
+    if manager_id is not None:
+        subquery += " WHERE manager_id = ?"
+    sql = ("SELECT dimension, score FROM self_assessments "
+           f"WHERE week_date = ({subquery})")
+    params = []
+    if manager_id is not None:
+        params.append(manager_id)
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    rows = _fetchall(conn, sql, params or None)
     conn.close()
     return {r["dimension"]: r["score"] for r in rows}
 
@@ -1031,54 +1096,70 @@ def get_latest_self_assessment():
 # Nudges
 # ---------------------------------------------------------------------------
 
-def get_time_since_last_event_per_member():
+def get_time_since_last_event_per_member(manager_id=None):
     conn = get_connection()
     days_expr = _sql_days_since("MAX(e.scheduled_date)")
-    rows = _fetchall(conn, f"""
+    sql = f"""
         SELECT tm.id AS member_id, tm.name AS member_name,
                MAX(e.scheduled_date) AS last_meeting_date,
                {days_expr} AS days_since
         FROM team_members tm
         LEFT JOIN events e ON e.team_member_id = tm.id AND e.status = 'completed'
-        GROUP BY tm.id, tm.name
-        ORDER BY days_since DESC
-    """)
+    """
+    params = []
+    if manager_id is not None:
+        sql += " WHERE tm.manager_id = ?"
+        params.append(manager_id)
+    sql += " GROUP BY tm.id, tm.name ORDER BY days_since DESC"
+    rows = _fetchall(conn, sql, params or None)
     conn.close()
     return rows
 
 
-def get_stale_feedback_members(days=21):
+def get_stale_feedback_members(days=21, manager_id=None):
     conn = get_connection()
     days_expr = _sql_days_since("MAX(f.created_at)")
-    rows = _fetchall(conn, f"""
+    sql = f"""
         SELECT tm.id AS member_id, tm.name AS member_name,
                MAX(f.created_at) AS last_feedback_date,
                {days_expr} AS days_since
         FROM team_members tm
         LEFT JOIN feedback f ON f.team_member_id = tm.id
+    """
+    params = []
+    if manager_id is not None:
+        sql += " WHERE tm.manager_id = ?"
+        params.append(manager_id)
+    sql += f"""
         GROUP BY tm.id, tm.name
         HAVING MAX(f.created_at) IS NULL
            OR {days_expr} > ?
         ORDER BY days_since DESC
-    """, (days,))
+    """
+    params.append(days)
+    rows = _fetchall(conn, sql, params)
     conn.close()
     return rows
 
 
-def get_overdue_action_count():
+def get_overdue_action_count(manager_id=None):
     conn = get_connection()
-    row = _fetchone(conn,
-        f"SELECT COUNT(*) AS cnt FROM action_items "
-        f"WHERE status != 'completed' AND due_date < {_sql_current_date()} "
-        f"AND due_date IS NOT NULL")
+    sql = (f"SELECT COUNT(*) AS cnt FROM action_items "
+           f"WHERE status != 'completed' AND due_date < {_sql_current_date()} "
+           f"AND due_date IS NOT NULL")
+    params = []
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    row = _fetchone(conn, sql, params or None)
     conn.close()
     return row["cnt"] if row else 0
 
 
-def get_nudges():
+def get_nudges(manager_id=None):
     """Aggregate all nudges, sorted by severity."""
     nudges = []
-    for m in get_time_since_last_event_per_member():
+    for m in get_time_since_last_event_per_member(manager_id=manager_id):
         days = m["days_since"]
         if days is None:
             nudges.append({
@@ -1099,7 +1180,7 @@ def get_nudges():
                 "member_id": m["member_id"],
             })
 
-    overdue = get_overdue_action_count()
+    overdue = get_overdue_action_count(manager_id=manager_id)
     if overdue > 0:
         nudges.append({
             "type": "action", "severity": "warning",
@@ -1107,7 +1188,7 @@ def get_nudges():
             "member_id": None,
         })
 
-    for m in get_stale_feedback_members(days=21):
+    for m in get_stale_feedback_members(days=21, manager_id=manager_id):
         days = m["days_since"]
         label = f"{days} days" if days else "ever"
         nudges.append({
@@ -1119,10 +1200,12 @@ def get_nudges():
     # Weekly reflection self-binding nudge
     last_weekly = get_journal_entry_by_date(
         (datetime.now().date() - timedelta(
-            days=datetime.now().date().weekday())).isoformat(), "weekly")
+            days=datetime.now().date().weekday())).isoformat(), "weekly",
+        manager_id=manager_id)
     if not last_weekly:
         # Check if ANY weekly entry in last 7 days
-        recent_weekly = list_journal_entries(entry_type="weekly", limit=1)
+        recent_weekly = list_journal_entries(entry_type="weekly", limit=1,
+                                            manager_id=manager_id)
         if not recent_weekly or (
             recent_weekly and recent_weekly[0]["entry_date"] <
             (datetime.now().date() - timedelta(days=7)).isoformat()
@@ -1143,11 +1226,11 @@ def get_nudges():
 # Analytics
 # ---------------------------------------------------------------------------
 
-def get_meetings_per_member_per_month(months=6):
+def get_meetings_per_member_per_month(months=6, manager_id=None):
     conn = get_connection()
     month_expr = _sql_month("e.scheduled_date")
     date_offset = _sql_date_offset("?")
-    rows = _fetchall(conn, f"""
+    sql = f"""
         SELECT tm.name AS member_name,
                {month_expr} AS month,
                COUNT(*) AS meeting_count
@@ -1155,16 +1238,20 @@ def get_meetings_per_member_per_month(months=6):
         JOIN team_members tm ON e.team_member_id = tm.id
         WHERE e.status = 'completed'
           AND e.scheduled_date >= {date_offset}
-        GROUP BY tm.id, tm.name, {month_expr}
-        ORDER BY month, tm.name
-    """, (str(-months * 30),))
+    """
+    params = [str(-months * 30)]
+    if manager_id is not None:
+        sql += " AND e.manager_id = ?"
+        params.append(manager_id)
+    sql += f" GROUP BY tm.id, tm.name, {month_expr} ORDER BY month, tm.name"
+    rows = _fetchall(conn, sql, params)
     conn.close()
     return rows
 
 
-def get_feedback_ratios():
+def get_feedback_ratios(manager_id=None):
     conn = get_connection()
-    rows = _fetchall(conn, """
+    sql = """
         SELECT tm.name AS member_name,
                SUM(CASE WHEN f.feedback_type = 'positive' THEN 1 ELSE 0 END)
                    AS positive_count,
@@ -1173,69 +1260,98 @@ def get_feedback_ratios():
                COUNT(*) AS total_count
         FROM feedback f
         JOIN team_members tm ON f.team_member_id = tm.id
-        GROUP BY tm.id
-        ORDER BY tm.name
-    """)
+    """
+    params = []
+    if manager_id is not None:
+        sql += " WHERE tm.manager_id = ?"
+        params.append(manager_id)
+    sql += " GROUP BY tm.id ORDER BY tm.name"
+    rows = _fetchall(conn, sql, params or None)
     conn.close()
     return rows
 
 
-def get_goal_completion_rates():
+def get_goal_completion_rates(manager_id=None):
     conn = get_connection()
-    rows = _fetchall(conn, """
+    sql = """
         SELECT tm.name AS member_name, g.status, COUNT(*) AS cnt
         FROM goals g
         JOIN team_members tm ON g.team_member_id = tm.id
-        GROUP BY tm.id, g.status
-        ORDER BY tm.name
-    """)
+    """
+    params = []
+    if manager_id is not None:
+        sql += " WHERE tm.manager_id = ?"
+        params.append(manager_id)
+    sql += " GROUP BY tm.id, g.status ORDER BY tm.name"
+    rows = _fetchall(conn, sql, params or None)
     conn.close()
     return rows
 
 
-def get_action_stats():
+def get_action_stats(manager_id=None):
     conn = get_connection()
     cd = _sql_current_date()
-    row = _fetchone(conn, f"""
+    sql = f"""
         SELECT COUNT(*) AS total,
                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
                SUM(CASE WHEN status != 'completed' THEN 1 ELSE 0 END) AS pending,
                SUM(CASE WHEN status != 'completed' AND due_date < {cd}
                         AND due_date IS NOT NULL THEN 1 ELSE 0 END) AS overdue
         FROM action_items
-    """)
+    """
+    params = []
+    if manager_id is not None:
+        sql += " WHERE manager_id = ?"
+        params.append(manager_id)
+    row = _fetchone(conn, sql, params or None)
     conn.close()
     return row if row else {"total": 0, "completed": 0, "pending": 0, "overdue": 0}
 
 
-def get_manager_activity_trends(weeks=12):
+def get_manager_activity_trends(weeks=12, manager_id=None):
     conn = get_connection()
     wk = _sql_week
     dt = _sql_date_offset("?")
-    rows = _fetchall(conn, f"""
+    evt_filter = " AND manager_id = ?" if manager_id is not None else ""
+    ai_filter = " AND manager_id = ?" if manager_id is not None else ""
+    # feedback doesn't have manager_id directly; filter via team_members join
+    fb_filter = (" AND team_member_id IN "
+                 "(SELECT id FROM team_members WHERE manager_id = ?)"
+                 if manager_id is not None else "")
+    sql = f"""
         SELECT week, SUM(events) AS events, SUM(feedback) AS feedback,
                SUM(actions) AS actions
         FROM (
             SELECT {wk('scheduled_date')} AS week,
                    COUNT(*) AS events, 0 AS feedback, 0 AS actions
             FROM events WHERE status = 'completed'
-              AND scheduled_date >= {dt}
+              AND scheduled_date >= {dt}{evt_filter}
             GROUP BY {wk('scheduled_date')}
             UNION ALL
             SELECT {wk('created_at')} AS week,
                    0, COUNT(*), 0
             FROM feedback
-            WHERE created_at >= {dt}
+            WHERE created_at >= {dt}{fb_filter}
             GROUP BY {wk('created_at')}
             UNION ALL
             SELECT {wk('created_at')} AS week,
                    0, 0, COUNT(*)
             FROM action_items
-            WHERE created_at >= {dt}
+            WHERE created_at >= {dt}{ai_filter}
             GROUP BY {wk('created_at')}
         ) sub
         GROUP BY week ORDER BY week
-    """, (str(-weeks * 7), str(-weeks * 7), str(-weeks * 7)))
+    """
+    params = [str(-weeks * 7)]
+    if manager_id is not None:
+        params.append(manager_id)
+    params.append(str(-weeks * 7))
+    if manager_id is not None:
+        params.append(manager_id)
+    params.append(str(-weeks * 7))
+    if manager_id is not None:
+        params.append(manager_id)
+    rows = _fetchall(conn, sql, params)
     conn.close()
     return rows
 
