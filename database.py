@@ -369,6 +369,15 @@ def init_db():
             completed_at TEXT,
             FOREIGN KEY (plan_id) REFERENCES development_plans(id)
         );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            google_id TEXT UNIQUE NOT NULL,
+            email TEXT NOT NULL,
+            name TEXT,
+            picture TEXT,
+            last_login TEXT DEFAULT (datetime('now'))
+        );
     """)
     conn.commit()
     conn.close()
@@ -451,10 +460,8 @@ def update_manager_password(manager_id, new_password):
 def manager_exists(username):
     """Check if a username is taken."""
     conn = get_connection()
-    row = conn.execute(
-        "SELECT id FROM managers WHERE username = ?",
-        (username.lower().strip(),),
-    ).fetchone()
+    row = _fetchone(conn, "SELECT id FROM managers WHERE username = ?",
+                    (username.lower().strip(),))
     conn.close()
     return row is not None
 
@@ -465,18 +472,17 @@ def manager_exists(username):
 
 def set_config(key, value):
     conn = get_connection()
-    conn.execute(
-        "INSERT INTO config (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (key, value),
-    )
-    conn.commit()
+    _exec(conn,
+          "INSERT INTO config (key, value) VALUES (?, ?) "
+          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+          (key, value))
+    _commit(conn)
     conn.close()
 
 
 def get_config(key, default=None):
     conn = get_connection()
-    row = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
+    row = _fetchone(conn, "SELECT value FROM config WHERE key = ?", (key,))
     conn.close()
     return row["value"] if row else default
 
@@ -484,37 +490,35 @@ def get_config(key, default=None):
 def upsert_user(google_id, email, name=None, picture=None):
     """Insert or update a user record on login."""
     conn = get_connection()
-    conn.execute(
-        "INSERT INTO users (google_id, email, name, picture, last_login) "
-        "VALUES (?, ?, ?, ?, datetime('now')) "
-        "ON CONFLICT(google_id) DO UPDATE SET "
-        "email = excluded.email, name = excluded.name, "
-        "picture = excluded.picture, last_login = datetime('now')",
-        (google_id, email, name, picture),
-    )
-    conn.commit()
+    now = _sql_now()
+    _exec(conn,
+          f"INSERT INTO users (google_id, email, name, picture, last_login) "
+          f"VALUES (?, ?, ?, ?, {now}) "
+          f"ON CONFLICT(google_id) DO UPDATE SET "
+          f"email = excluded.email, name = excluded.name, "
+          f"picture = excluded.picture, last_login = {now}",
+          (google_id, email, name, picture))
+    _commit(conn)
     conn.close()
 
 
 def get_user_by_google_id(google_id):
     conn = get_connection()
-    row = conn.execute(
-        "SELECT * FROM users WHERE google_id = ?", (google_id,)
-    ).fetchone()
+    row = _fetchone(conn, "SELECT * FROM users WHERE google_id = ?", (google_id,))
     conn.close()
-    return dict(row) if row else None
+    return row
 
 
 def list_users():
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM users ORDER BY last_login DESC").fetchall()
+    rows = _fetchall(conn, "SELECT * FROM users ORDER BY last_login DESC")
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_all_config():
     conn = get_connection()
-    rows = conn.execute("SELECT key, value FROM config ORDER BY key").fetchall()
+    rows = _fetchall(conn, "SELECT key, value FROM config ORDER BY key")
     conn.close()
     return {r["key"]: r["value"] for r in rows}
 
@@ -525,13 +529,13 @@ def get_all_config():
 
 def add_team_member(name, email=None, role=None, start_date=None, notes=None):
     conn = get_connection()
-    cursor = conn.execute(
+    member_id = _exec_returning_id(
+        conn,
         "INSERT INTO team_members (name, email, role, start_date, notes) "
         "VALUES (?, ?, ?, ?, ?)",
         (name, email, role, start_date, notes),
     )
-    member_id = cursor.lastrowid
-    conn.commit()
+    _commit(conn)
     conn.close()
     return member_id
 
@@ -545,40 +549,38 @@ def update_team_member(member_id, **kwargs):
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [datetime.now().isoformat(), member_id]
-    conn.execute(
-        f"UPDATE team_members SET {sets}, updated_at = ? WHERE id = ?", values
-    )
-    conn.commit()
+    _exec(conn,
+          f"UPDATE team_members SET {sets}, updated_at = ? WHERE id = ?", values)
+    _commit(conn)
     conn.close()
 
 
 def get_team_member(member_id):
     conn = get_connection()
-    row = conn.execute("SELECT * FROM team_members WHERE id = ?", (member_id,)).fetchone()
+    row = _fetchone(conn, "SELECT * FROM team_members WHERE id = ?", (member_id,))
     conn.close()
-    return dict(row) if row else None
+    return row
 
 
 def get_team_member_by_name(name):
     conn = get_connection()
-    row = conn.execute(
-        "SELECT * FROM team_members WHERE LOWER(name) = LOWER(?)", (name,)
-    ).fetchone()
+    row = _fetchone(conn,
+                    "SELECT * FROM team_members WHERE LOWER(name) = LOWER(?)", (name,))
     conn.close()
-    return dict(row) if row else None
+    return row
 
 
 def list_team_members():
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM team_members ORDER BY name").fetchall()
+    rows = _fetchall(conn, "SELECT * FROM team_members ORDER BY name")
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def delete_team_member(member_id):
     conn = get_connection()
-    conn.execute("DELETE FROM team_members WHERE id = ?", (member_id,))
-    conn.commit()
+    _exec(conn, "DELETE FROM team_members WHERE id = ?", (member_id,))
+    _commit(conn)
     conn.close()
 
 
@@ -590,15 +592,15 @@ def create_event(title, event_type, scheduled_date, scheduled_time,
                  team_member_id=None, duration_minutes=30,
                  location=None, agenda=None):
     conn = get_connection()
-    cursor = conn.execute(
+    event_id = _exec_returning_id(
+        conn,
         "INSERT INTO events (title, event_type, team_member_id, scheduled_date, "
         "scheduled_time, duration_minutes, location, agenda) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (title, event_type, team_member_id, scheduled_date,
          scheduled_time, duration_minutes, location, agenda),
     )
-    event_id = cursor.lastrowid
-    conn.commit()
+    _commit(conn)
     conn.close()
     return event_id
 
@@ -616,10 +618,9 @@ def update_event(event_id, **kwargs):
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [datetime.now().isoformat(), event_id]
-    conn.execute(
-        f"UPDATE events SET {sets}, updated_at = ? WHERE id = ?", values
-    )
-    conn.commit()
+    _exec(conn,
+          f"UPDATE events SET {sets}, updated_at = ? WHERE id = ?", values)
+    _commit(conn)
     conn.close()
 
 
@@ -633,15 +634,16 @@ def cancel_event(event_id):
 
 def get_event(event_id):
     conn = get_connection()
-    row = conn.execute(
+    row = _fetchone(
+        conn,
         "SELECT e.*, tm.name AS participant_name, tm.email AS participant_email "
         "FROM events e "
         "LEFT JOIN team_members tm ON e.team_member_id = tm.id "
         "WHERE e.id = ?",
         (event_id,),
-    ).fetchone()
+    )
     conn.close()
-    return dict(row) if row else None
+    return row
 
 
 def list_events(event_type=None, status=None, team_member_id=None,
@@ -673,9 +675,10 @@ def list_events(event_type=None, status=None, team_member_id=None,
     query += " ORDER BY e.scheduled_date, e.scheduled_time LIMIT ?"
     params.append(limit)
 
-    rows = conn.execute(query, params).fetchall()
+    cur = _exec(conn, query, params)
+    rows = [dict(r) for r in cur.fetchall()]
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_upcoming_events(days=7):
@@ -694,35 +697,33 @@ def get_event_history(team_member_id, limit=20):
 
 def add_action_item(description, event_id=None, assignee=None, due_date=None):
     conn = get_connection()
-    cursor = conn.execute(
+    item_id = _exec_returning_id(
+        conn,
         "INSERT INTO action_items (event_id, description, assignee, due_date) "
         "VALUES (?, ?, ?, ?)",
         (event_id, description, assignee, due_date),
     )
-    item_id = cursor.lastrowid
-    conn.commit()
+    _commit(conn)
     conn.close()
     return item_id
 
 
 def complete_action_item(item_id):
     conn = get_connection()
-    conn.execute(
-        "UPDATE action_items SET status = 'completed', completed_at = ? WHERE id = ?",
-        (datetime.now().isoformat(), item_id),
-    )
-    conn.commit()
+    _exec(conn,
+          "UPDATE action_items SET status = 'completed', completed_at = ? WHERE id = ?",
+          (datetime.now().isoformat(), item_id))
+    _commit(conn)
     conn.close()
 
 
 def update_action_item_status(item_id, status):
     conn = get_connection()
     completed_at = datetime.now().isoformat() if status == "completed" else None
-    conn.execute(
-        "UPDATE action_items SET status = ?, completed_at = ? WHERE id = ?",
-        (status, completed_at, item_id),
-    )
-    conn.commit()
+    _exec(conn,
+          "UPDATE action_items SET status = ?, completed_at = ? WHERE id = ?",
+          (status, completed_at, item_id))
+    _commit(conn)
     conn.close()
 
 
@@ -744,9 +745,10 @@ def list_action_items(event_id=None, status=None, assignee=None):
         query += " AND LOWER(ai.assignee) = LOWER(?)"
         params.append(assignee)
     query += " ORDER BY ai.due_date, ai.created_at"
-    rows = conn.execute(query, params).fetchall()
+    cur = _exec(conn, query, params)
+    rows = [dict(r) for r in cur.fetchall()]
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_pending_action_items():
@@ -760,13 +762,13 @@ def get_pending_action_items():
 def add_feedback(team_member_id, feedback_type, situation=None,
                  behavior=None, impact=None, event_id=None):
     conn = get_connection()
-    cursor = conn.execute(
+    feedback_id = _exec_returning_id(
+        conn,
         "INSERT INTO feedback (team_member_id, event_id, feedback_type, "
         "situation, behavior, impact) VALUES (?, ?, ?, ?, ?, ?)",
         (team_member_id, event_id, feedback_type, situation, behavior, impact),
     )
-    feedback_id = cursor.lastrowid
-    conn.commit()
+    _commit(conn)
     conn.close()
     return feedback_id
 
@@ -786,9 +788,10 @@ def list_feedback(team_member_id=None, feedback_type=None):
         query += " AND f.feedback_type = ?"
         params.append(feedback_type)
     query += " ORDER BY f.created_at DESC"
-    rows = conn.execute(query, params).fetchall()
+    cur = _exec(conn, query, params)
+    rows = [dict(r) for r in cur.fetchall()]
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -797,13 +800,13 @@ def list_feedback(team_member_id=None, feedback_type=None):
 
 def add_goal(team_member_id, quarter, description, key_results=None):
     conn = get_connection()
-    cursor = conn.execute(
+    goal_id = _exec_returning_id(
+        conn,
         "INSERT INTO goals (team_member_id, quarter, description, key_results) "
         "VALUES (?, ?, ?, ?)",
         (team_member_id, quarter, description, key_results),
     )
-    goal_id = cursor.lastrowid
-    conn.commit()
+    _commit(conn)
     conn.close()
     return goal_id
 
@@ -817,8 +820,8 @@ def update_goal(goal_id, **kwargs):
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [datetime.now().isoformat(), goal_id]
-    conn.execute(f"UPDATE goals SET {sets}, updated_at = ? WHERE id = ?", values)
-    conn.commit()
+    _exec(conn, f"UPDATE goals SET {sets}, updated_at = ? WHERE id = ?", values)
+    _commit(conn)
     conn.close()
 
 
@@ -840,9 +843,10 @@ def list_goals(team_member_id=None, quarter=None, status=None):
         query += " AND g.status = ?"
         params.append(status)
     query += " ORDER BY g.quarter DESC, g.created_at"
-    rows = conn.execute(query, params).fetchall()
+    cur = _exec(conn, query, params)
+    rows = [dict(r) for r in cur.fetchall()]
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -855,7 +859,6 @@ def get_weekly_summary():
     monday = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
     sunday = (today + timedelta(days=6 - today.weekday())).strftime("%Y-%m-%d")
 
-    conn = get_connection()
     summary = {}
 
     summary["upcoming_events"] = list_events(
@@ -866,12 +869,14 @@ def get_weekly_summary():
     )
     summary["pending_actions"] = get_pending_action_items()
 
-    overdue = conn.execute(
+    conn = get_connection()
+    overdue = _fetchall(
+        conn,
         "SELECT * FROM action_items WHERE status != 'completed' "
         "AND due_date < ? ORDER BY due_date",
         (today.strftime("%Y-%m-%d"),),
-    ).fetchall()
-    summary["overdue_actions"] = [dict(r) for r in overdue]
+    )
+    summary["overdue_actions"] = overdue
 
     conn.close()
     return summary
@@ -892,13 +897,14 @@ def get_member_summary(team_member_id):
     summary["feedback"] = list_feedback(team_member_id=team_member_id)
     summary["goals"] = list_goals(team_member_id=team_member_id)
 
-    actions = conn.execute(
+    actions = _fetchall(
+        conn,
         "SELECT ai.* FROM action_items ai "
         "JOIN events e ON ai.event_id = e.id "
         "WHERE e.team_member_id = ? ORDER BY ai.created_at DESC LIMIT 20",
         (team_member_id,),
-    ).fetchall()
-    summary["action_items"] = [dict(r) for r in actions]
+    )
+    summary["action_items"] = actions
 
     conn.close()
     return summary
@@ -911,14 +917,14 @@ def get_member_summary(team_member_id):
 def add_journal_entry(entry_date, entry_type="daily", content=None,
                       mood=None, energy=None, private_notes=None, tags=None):
     conn = get_connection()
-    cursor = conn.execute(
+    entry_id = _exec_returning_id(
+        conn,
         "INSERT INTO journal_entries "
         "(entry_date, entry_type, content, mood, energy, private_notes, tags) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (entry_date, entry_type, content, mood, energy, private_notes, tags),
     )
-    conn.commit()
-    entry_id = cursor.lastrowid
+    _commit(conn)
     conn.close()
     return entry_id
 
@@ -931,22 +937,20 @@ def update_journal_entry(entry_id, **kwargs):
     fields["updated_at"] = datetime.now().isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    conn.execute(
-        f"UPDATE journal_entries SET {set_clause} WHERE id = ?",
-        (*fields.values(), entry_id),
-    )
-    conn.commit()
+    _exec(conn,
+          f"UPDATE journal_entries SET {set_clause} WHERE id = ?",
+          (*fields.values(), entry_id))
+    _commit(conn)
     conn.close()
 
 
 def get_journal_entry_by_date(entry_date, entry_type="daily"):
     conn = get_connection()
-    row = conn.execute(
-        "SELECT * FROM journal_entries WHERE entry_date = ? AND entry_type = ?",
-        (entry_date, entry_type),
-    ).fetchone()
+    row = _fetchone(conn,
+                    "SELECT * FROM journal_entries WHERE entry_date = ? AND entry_type = ?",
+                    (entry_date, entry_type))
     conn.close()
-    return dict(row) if row else None
+    return row
 
 
 def list_journal_entries(entry_type=None, limit=30):
@@ -958,18 +962,18 @@ def list_journal_entries(entry_type=None, limit=30):
         params.append(entry_type)
     query += " ORDER BY entry_date DESC LIMIT ?"
     params.append(limit)
-    rows = conn.execute(query, params).fetchall()
+    cur = _exec(conn, query, params)
+    rows = [dict(r) for r in cur.fetchall()]
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_journal_streak():
     """Count consecutive days with a journal entry ending today."""
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT DISTINCT entry_date FROM journal_entries "
-        "ORDER BY entry_date DESC LIMIT 365"
-    ).fetchall()
+    rows = _fetchall(conn,
+                     "SELECT DISTINCT entry_date FROM journal_entries "
+                     "ORDER BY entry_date DESC LIMIT 365")
     conn.close()
     if not rows:
         return 0
@@ -995,33 +999,30 @@ def save_self_assessment(week_date, scores_dict):
     conn = get_connection()
     _exec(conn, "DELETE FROM self_assessments WHERE week_date = ?", (week_date,))
     for dim, score in scores_dict.items():
-        conn.execute(
-            "INSERT INTO self_assessments (week_date, dimension, score) "
-            "VALUES (?, ?, ?)",
-            (week_date, dim, score),
-        )
-    conn.commit()
+        _exec(conn,
+              "INSERT INTO self_assessments (week_date, dimension, score) "
+              "VALUES (?, ?, ?)",
+              (week_date, dim, score))
+    _commit(conn)
     conn.close()
 
 
 def get_self_assessment_trends(weeks=12):
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT week_date, dimension, score FROM self_assessments "
-        f"WHERE week_date >= {_sql_date_offset('?')} "
-        "ORDER BY week_date, dimension",
-        (str(-weeks * 7),),
-    ).fetchall()
+    rows = _fetchall(conn,
+                     "SELECT week_date, dimension, score FROM self_assessments "
+                     f"WHERE week_date >= {_sql_date_offset('?')} "
+                     "ORDER BY week_date, dimension",
+                     (str(-weeks * 7),))
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_latest_self_assessment():
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT dimension, score FROM self_assessments "
-        "WHERE week_date = (SELECT MAX(week_date) FROM self_assessments)"
-    ).fetchall()
+    rows = _fetchall(conn,
+                     "SELECT dimension, score FROM self_assessments "
+                     "WHERE week_date = (SELECT MAX(week_date) FROM self_assessments)")
     conn.close()
     return {r["dimension"]: r["score"] for r in rows}
 
@@ -1163,7 +1164,7 @@ def get_meetings_per_member_per_month(months=6):
 
 def get_feedback_ratios():
     conn = get_connection()
-    rows = conn.execute("""
+    rows = _fetchall(conn, """
         SELECT tm.name AS member_name,
                SUM(CASE WHEN f.feedback_type = 'positive' THEN 1 ELSE 0 END)
                    AS positive_count,
@@ -1174,22 +1175,22 @@ def get_feedback_ratios():
         JOIN team_members tm ON f.team_member_id = tm.id
         GROUP BY tm.id
         ORDER BY tm.name
-    """).fetchall()
+    """)
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_goal_completion_rates():
     conn = get_connection()
-    rows = conn.execute("""
+    rows = _fetchall(conn, """
         SELECT tm.name AS member_name, g.status, COUNT(*) AS cnt
         FROM goals g
         JOIN team_members tm ON g.team_member_id = tm.id
         GROUP BY tm.id, g.status
         ORDER BY tm.name
-    """).fetchall()
+    """)
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def get_action_stats():
@@ -1276,22 +1277,19 @@ def get_member_timeline(member_id, limit=50):
 
 def get_pre_meeting_prep(member_id):
     conn = get_connection()
-    member = conn.execute(
-        "SELECT * FROM team_members WHERE id = ?", (member_id,)
-    ).fetchone()
+    member = _fetchone(conn, "SELECT * FROM team_members WHERE id = ?", (member_id,))
     if not member:
         conn.close()
         return None
 
-    prep = {"member": dict(member)}
+    prep = {"member": member}
 
     # Last meeting
-    last_evt = conn.execute(
+    last_evt = _fetchone(conn,
         "SELECT scheduled_date FROM events "
         "WHERE team_member_id = ? AND status = 'completed' "
         "ORDER BY scheduled_date DESC LIMIT 1",
-        (member_id,),
-    ).fetchone()
+        (member_id,))
     if last_evt:
         prep["last_meeting_date"] = last_evt["scheduled_date"]
         prep["days_since_meeting"] = (
@@ -1302,11 +1300,10 @@ def get_pre_meeting_prep(member_id):
         prep["days_since_meeting"] = None
 
     # Last feedback
-    last_fb = conn.execute(
+    last_fb = _fetchone(conn,
         "SELECT created_at FROM feedback WHERE team_member_id = ? "
         "ORDER BY created_at DESC LIMIT 1",
-        (member_id,),
-    ).fetchone()
+        (member_id,))
     if last_fb:
         prep["last_feedback_date"] = last_fb["created_at"][:10]
         prep["days_since_feedback"] = (
@@ -1317,11 +1314,10 @@ def get_pre_meeting_prep(member_id):
         prep["days_since_feedback"] = None
 
     # Feedback ratio
-    ratios = conn.execute(
+    ratios = _fetchall(conn,
         "SELECT feedback_type, COUNT(*) AS cnt FROM feedback "
         "WHERE team_member_id = ? GROUP BY feedback_type",
-        (member_id,),
-    ).fetchall()
+        (member_id,))
     prep["positive_count"] = 0
     prep["constructive_count"] = 0
     for r in ratios:
@@ -1332,32 +1328,28 @@ def get_pre_meeting_prep(member_id):
 
     # Pending actions (match by member name through events)
     name = member["name"]
-    prep["pending_actions"] = conn.execute(
+    pending_row = _fetchone(conn,
         "SELECT COUNT(*) AS cnt FROM action_items "
         "WHERE status != 'completed' AND ("
         "  LOWER(assignee) = LOWER(?) "
         "  OR event_id IN (SELECT id FROM events WHERE team_member_id = ?)"
         ")",
-        (name, member_id),
-    ).fetchone()["cnt"]
+        (name, member_id))
+    prep["pending_actions"] = pending_row["cnt"] if pending_row else 0
 
     # Active goals
-    goals = conn.execute(
+    prep["active_goals"] = _fetchall(conn,
         "SELECT quarter, description, status FROM goals "
         "WHERE team_member_id = ? AND status IN ('not_started', 'in_progress') "
         "ORDER BY quarter DESC",
-        (member_id,),
-    ).fetchall()
-    prep["active_goals"] = [dict(g) for g in goals]
+        (member_id,))
 
     # Recent feedback
-    recent_fb = conn.execute(
+    prep["recent_feedback"] = _fetchall(conn,
         "SELECT feedback_type, situation, behavior, impact, created_at "
         "FROM feedback WHERE team_member_id = ? "
         "ORDER BY created_at DESC LIMIT 3",
-        (member_id,),
-    ).fetchall()
-    prep["recent_feedback"] = [dict(f) for f in recent_fb]
+        (member_id,))
 
     conn.close()
     return prep
@@ -1370,40 +1362,39 @@ def get_pre_meeting_prep(member_id):
 def add_career_conversation(team_member_id, conversation_date,
                             topic=None, notes=None, next_steps=None):
     conn = get_connection()
-    cursor = conn.execute(
+    cid = _exec_returning_id(
+        conn,
         "INSERT INTO career_conversations "
         "(team_member_id, conversation_date, topic, notes, next_steps) "
         "VALUES (?, ?, ?, ?, ?)",
         (team_member_id, conversation_date, topic, notes, next_steps),
     )
-    conn.commit()
-    cid = cursor.lastrowid
+    _commit(conn)
     conn.close()
     return cid
 
 
 def list_career_conversations(team_member_id, limit=20):
     conn = get_connection()
-    rows = conn.execute(
+    rows = _fetchall(conn,
         "SELECT * FROM career_conversations WHERE team_member_id = ? "
         "ORDER BY conversation_date DESC LIMIT ?",
-        (team_member_id, limit),
-    ).fetchall()
+        (team_member_id, limit))
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def add_skill(team_member_id, skill_name, proficiency="developing",
               is_strength=0, is_growth_area=0, notes=None):
     conn = get_connection()
-    cursor = conn.execute(
+    sid = _exec_returning_id(
+        conn,
         "INSERT INTO skills "
         "(team_member_id, skill_name, proficiency, is_strength, is_growth_area, notes) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (team_member_id, skill_name, proficiency, is_strength, is_growth_area, notes),
     )
-    conn.commit()
-    sid = cursor.lastrowid
+    _commit(conn)
     conn.close()
     return sid
 
@@ -1416,40 +1407,38 @@ def update_skill(skill_id, **kwargs):
     fields["updated_at"] = datetime.now().isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    conn.execute(
-        f"UPDATE skills SET {set_clause} WHERE id = ?",
-        (*fields.values(), skill_id),
-    )
-    conn.commit()
+    _exec(conn,
+          f"UPDATE skills SET {set_clause} WHERE id = ?",
+          (*fields.values(), skill_id))
+    _commit(conn)
     conn.close()
 
 
 def list_skills(team_member_id):
     conn = get_connection()
-    rows = conn.execute(
+    rows = _fetchall(conn,
         "SELECT * FROM skills WHERE team_member_id = ? ORDER BY skill_name",
-        (team_member_id,),
-    ).fetchall()
+        (team_member_id,))
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def delete_skill(skill_id):
     conn = get_connection()
-    conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
-    conn.commit()
+    _exec(conn, "DELETE FROM skills WHERE id = ?", (skill_id,))
+    _commit(conn)
     conn.close()
 
 
 def add_development_plan(team_member_id, title, description=None, target_date=None):
     conn = get_connection()
-    cursor = conn.execute(
+    pid = _exec_returning_id(
+        conn,
         "INSERT INTO development_plans "
         "(team_member_id, title, description, target_date) VALUES (?, ?, ?, ?)",
         (team_member_id, title, description, target_date),
     )
-    conn.commit()
-    pid = cursor.lastrowid
+    _commit(conn)
     conn.close()
     return pid
 
@@ -1462,11 +1451,10 @@ def update_development_plan(plan_id, **kwargs):
     fields["updated_at"] = datetime.now().isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    conn.execute(
-        f"UPDATE development_plans SET {set_clause} WHERE id = ?",
-        (*fields.values(), plan_id),
-    )
-    conn.commit()
+    _exec(conn,
+          f"UPDATE development_plans SET {set_clause} WHERE id = ?",
+          (*fields.values(), plan_id))
+    _commit(conn)
     conn.close()
 
 
@@ -1478,38 +1466,37 @@ def list_development_plans(team_member_id, status=None):
         query += " AND status = ?"
         params.append(status)
     query += " ORDER BY created_at DESC"
-    rows = conn.execute(query, params).fetchall()
+    cur = _exec(conn, query, params)
+    rows = [dict(r) for r in cur.fetchall()]
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
 
 
 def add_milestone(plan_id, description, target_date=None):
     conn = get_connection()
-    cursor = conn.execute(
+    mid = _exec_returning_id(
+        conn,
         "INSERT INTO milestones (plan_id, description, target_date) VALUES (?, ?, ?)",
         (plan_id, description, target_date),
     )
-    conn.commit()
-    mid = cursor.lastrowid
+    _commit(conn)
     conn.close()
     return mid
 
 
 def complete_milestone(milestone_id):
     conn = get_connection()
-    conn.execute(
-        "UPDATE milestones SET completed = 1, completed_at = ? WHERE id = ?",
-        (datetime.now().isoformat(), milestone_id),
-    )
-    conn.commit()
+    _exec(conn,
+          "UPDATE milestones SET completed = 1, completed_at = ? WHERE id = ?",
+          (datetime.now().isoformat(), milestone_id))
+    _commit(conn)
     conn.close()
 
 
 def list_milestones(plan_id):
     conn = get_connection()
-    rows = conn.execute(
+    rows = _fetchall(conn,
         "SELECT * FROM milestones WHERE plan_id = ? ORDER BY id",
-        (plan_id,),
-    ).fetchall()
+        (plan_id,))
     conn.close()
-    return [dict(r) for r in rows]
+    return rows
