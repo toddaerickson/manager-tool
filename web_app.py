@@ -100,8 +100,12 @@ st.markdown("""
 # ---------------------------------------------------------------------------
 
 def get_current_manager_id():
-    """Return the logged-in manager's ID, or 0 for legacy/unauthenticated use."""
-    return st.session_state.get("manager_id", 0)
+    """Return the logged-in manager's ID, or None for unauthenticated use."""
+    return st.session_state.get("manager_id") or None
+
+
+# Shorthand for threading manager_id into DB calls
+_mid = get_current_manager_id
 
 
 def require_auth():
@@ -120,17 +124,31 @@ def _show_auth_screen():
     tab_login, tab_register = st.tabs(["Log In", "Create Account"])
 
     with tab_login:
+        # Rate limiting: block after 5 failed attempts within 15 minutes
+        attempts = st.session_state.get("login_attempts", [])
+        cutoff = datetime.now() - timedelta(minutes=15)
+        attempts = [t for t in attempts if t > cutoff]
+        st.session_state["login_attempts"] = attempts
+        locked = len(attempts) >= 5
+
+        if locked:
+            st.error("Too many failed attempts. Please wait a few minutes.")
+
         with st.form("login_form"):
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
             if st.form_submit_button("Log In", use_container_width=True):
-                if username and password:
+                if locked:
+                    st.error("Account temporarily locked. Try again later.")
+                elif username and password:
                     manager = db.authenticate_manager(username, password)
                     if manager:
+                        st.session_state["login_attempts"] = []
                         st.session_state["manager_id"] = manager["id"]
                         st.session_state["manager_name"] = manager["display_name"]
                         st.rerun()
                     else:
+                        st.session_state.setdefault("login_attempts", []).append(datetime.now())
                         st.error("Invalid username or password.")
                 else:
                     st.warning("Enter both username and password.")
@@ -155,6 +173,8 @@ def _show_auth_screen():
             if st.form_submit_button("Create Account", use_container_width=True):
                 if not new_user or not new_name or not new_pw:
                     st.warning("Username, name, and password are required.")
+                elif len(new_pw) < 8:
+                    st.error("Password must be at least 8 characters.")
                 elif new_pw != new_pw2:
                     st.error("Passwords don't match.")
                 elif db.manager_exists(new_user):
@@ -198,15 +218,17 @@ def df_from(rows, columns=None):
 
 def member_options():
     """Return (display_names_list, name_to_id_dict)."""
-    members = db.list_team_members()
+    members = db.list_team_members(manager_id=_mid())
     mapping = {m["name"]: m["id"] for m in members}
     return list(mapping.keys()), mapping
 
 
 def render_coaching_pane(notes_text, context_type="journal", member_name=None,
-                         event_type=None, prep_data=None, key_suffix=""):
+                         event_type=None, prep_data=None, key_suffix="",
+                         journal_entry_id=None):
     """Render the AI coaching right-pane for any page.
-    Call this inside a right column. Uses session_state to cache responses."""
+    Call this inside a right column. Uses session_state to cache responses.
+    If journal_entry_id is provided, saves the coaching response to the entry."""
     st.markdown("### \U0001F9E0 Coaching Corner")
     state_key = f"coaching_response_{context_type}_{key_suffix}"
 
@@ -217,6 +239,10 @@ def render_coaching_pane(notes_text, context_type="journal", member_name=None,
                 response = coaching.get_coaching_response(
                     notes_text, context_type, member_name, event_type, prep_data)
                 st.session_state[state_key] = response
+                # Persist coaching response to journal entry if available
+                if journal_entry_id and response:
+                    db.update_journal_entry(journal_entry_id,
+                                            coaching_response=response)
         else:
             st.session_state[state_key] = (
                 "*Write some notes first, then ask for coaching.*")
@@ -295,12 +321,12 @@ def page_dashboard():
     st.info(f"\U0001F4A1 **Daily Wisdom #{wisdom['number']}:** {wisdom['text']}")
 
     # -- Streaks (loss aversion) --
-    streak = db.get_journal_streak()
+    streak = db.get_journal_streak(manager_id=_mid())
     if streak > 0:
         st.markdown(f"\U0001F525 **Journal streak: {streak} day{'s' if streak != 1 else ''}**")
 
     # -- Nudges (triggers for action) --
-    nudges = db.get_nudges()
+    nudges = db.get_nudges(manager_id=_mid())
     if nudges:
         for n in nudges:
             if n["severity"] == "critical":
@@ -311,15 +337,15 @@ def page_dashboard():
                 st.info(f"{n['message']}")
 
     # -- Anti-pattern alert (identity hook) --
-    meeting_data = db.get_time_since_last_event_per_member()
-    feedback_data = db.get_feedback_ratios()
+    meeting_data = db.get_time_since_last_event_per_member(manager_id=_mid())
+    feedback_data = db.get_feedback_ratios(manager_id=_mid())
     ap = templates.detect_anti_patterns(meeting_data, feedback_data)
     if ap:
         p = ap[0]
         st.warning(f"**{p['pattern']}:** {p['evidence']} — {p['suggestion']}")
 
     # -- Quick stats [C7: System 1 — emoji indicators for instant scanning] --
-    summary = db.get_weekly_summary()
+    summary = db.get_weekly_summary(manager_id=_mid())
     c1, c2, c3, c4 = st.columns(4)
     upcoming_n = len(summary["upcoming_events"])
     pending_n = len(summary["pending_actions"])
@@ -376,10 +402,10 @@ def page_dashboard():
         )
 
     # -- Onboarding checklist (endowed progress) — only for new users --
-    members = db.list_team_members()
-    all_events = db.list_events(limit=5)
+    members = db.list_team_members(manager_id=_mid())
+    all_events = db.list_events(limit=5, manager_id=_mid())
     all_feedback = db.list_feedback()
-    journal_entries = db.list_journal_entries(limit=1)
+    journal_entries = db.list_journal_entries(limit=1, manager_id=_mid())
     if len(members) < 2 and len(all_events) < 3:
         st.divider()
         st.subheader("Getting Started")
@@ -439,6 +465,7 @@ def page_schedule_event():
             duration_minutes=duration,
             location=location or None,
             agenda=agenda,
+            manager_id=_mid(),
         )
         st.toast(f"Event #{eid} scheduled: {final_title}", icon="\U0001F4C5")
         st.rerun()
@@ -447,7 +474,7 @@ def page_schedule_event():
 def page_upcoming_events():
     st.title("Upcoming Events (Next 14 Days)")
 
-    events = db.get_upcoming_events(days=14)
+    events = db.get_upcoming_events(days=14, manager_id=_mid())
     if events:
         st.dataframe(
             df_from(events, ["id", "title", "event_type", "scheduled_date",
@@ -534,6 +561,7 @@ def page_event_history():
         kwargs["from_date"] = date_range[0].strftime("%Y-%m-%d")
         kwargs["to_date"] = date_range[1].strftime("%Y-%m-%d")
 
+    kwargs["manager_id"] = _mid()
     events = db.list_events(**kwargs)
 
     if search:
@@ -556,7 +584,7 @@ def page_event_history():
 def page_team_roster():
     st.title("Team Roster")
 
-    members = db.list_team_members()
+    members = db.list_team_members(manager_id=_mid())
     if not members:
         st.info("No team members yet. Use **Add Member** to add someone.")
         return
@@ -626,13 +654,20 @@ def _render_member_detail(summary):
         st.markdown("**Feedback History**")
         for fb in summary["feedback"][:5]:
             color = "green" if fb["feedback_type"] == "positive" else "orange"
-            st.markdown(
-                f":{color}[**{fb['feedback_type'].upper()}**] "
-                f"— {fb['created_at'][:10]}  \n"
-                f"&nbsp;&nbsp;**S:** {fb.get('situation', 'N/A')}  \n"
-                f"&nbsp;&nbsp;**B:** {fb.get('behavior', 'N/A')}  \n"
-                f"&nbsp;&nbsp;**I:** {fb.get('impact', 'N/A')}"
-            )
+            fb_col, del_col = st.columns([5, 1])
+            with fb_col:
+                st.markdown(
+                    f":{color}[**{fb['feedback_type'].upper()}**] "
+                    f"— {fb['created_at'][:10]}  \n"
+                    f"&nbsp;&nbsp;**S:** {fb.get('situation', 'N/A')}  \n"
+                    f"&nbsp;&nbsp;**B:** {fb.get('behavior', 'N/A')}  \n"
+                    f"&nbsp;&nbsp;**I:** {fb.get('impact', 'N/A')}"
+                )
+            with del_col:
+                if st.button("Delete", key=f"del_fb_{fb['id']}"):
+                    db.delete_feedback(fb["id"])
+                    set_toast("success", f"Feedback #{fb['id']} deleted.")
+                    st.rerun()
 
 
 def page_add_member():
@@ -654,6 +689,7 @@ def page_add_member():
             mid = db.add_team_member(
                 name, email or None, role or None,
                 start_date.strftime("%Y-%m-%d"), notes or None,
+                manager_id=_mid(),
             )
             st.toast(f"Added {name} (ID: {mid})", icon="\u2705")
             st.rerun()
@@ -664,7 +700,7 @@ def page_add_member():
 def page_action_items():
     st.title("Pending Action Items")
 
-    actions = db.get_pending_action_items()
+    actions = db.get_pending_action_items(manager_id=_mid())
     if not actions:
         st.success("No pending action items. You're caught up!")
         return
@@ -699,6 +735,15 @@ def page_action_items():
         row = checked.iloc[0]
         confirm_complete_action(int(row["Id"]), row["Description"])
 
+    # Delete action item
+    with st.expander("Delete an action item"):
+        del_id = st.number_input("Action item ID to delete", min_value=1, step=1,
+                                 key="del_action_id")
+        if st.button("Delete Action Item", key="del_action_btn"):
+            db.delete_action_item(int(del_id))
+            set_toast("success", f"Action item #{del_id} deleted.")
+            st.rerun()
+
 
 def page_add_action():
     st.title("Add Action Item")
@@ -719,7 +764,8 @@ def page_add_action():
             eid = int(event_id) if event_id and event_id.isdigit() else None
             due = due_date.strftime("%Y-%m-%d") if due_date else None
             aid = db.add_action_item(desc, event_id=eid,
-                                     assignee=assignee or None, due_date=due)
+                                     assignee=assignee or None, due_date=due,
+                                     manager_id=_mid())
             st.toast(f"Action item #{aid} added.", icon="\u2705")
             st.rerun()
 
@@ -774,7 +820,7 @@ def page_record_feedback():
 def page_quarterly_goals():
     st.title("Quarterly Goals")
 
-    goals = db.list_goals()
+    goals = db.list_goals(manager_id=_mid())
     if not goals:
         st.info("No goals set yet.")
         return
@@ -787,13 +833,23 @@ def page_quarterly_goals():
                 "partially_met", "not_met"]
 
     # Single-column form (#7)
-    with st.form("update_goal"):
-        gid = st.number_input("Goal ID to update", min_value=1, step=1)
-        new_status = st.selectbox("New Status", statuses)
-        if st.form_submit_button("Update Status", use_container_width=True):
-            db.update_goal(int(gid), status=new_status)
-            st.toast(f"Goal #{gid} updated to '{new_status}'.", icon="\u2705")
-            st.rerun()
+    uc1, uc2 = st.columns(2)
+    with uc1:
+        with st.form("update_goal"):
+            gid = st.number_input("Goal ID to update", min_value=1, step=1)
+            new_status = st.selectbox("New Status", statuses)
+            if st.form_submit_button("Update Status", use_container_width=True):
+                db.update_goal(int(gid), status=new_status)
+                st.toast(f"Goal #{gid} updated to '{new_status}'.", icon="\u2705")
+                st.rerun()
+    with uc2:
+        with st.form("delete_goal"):
+            del_gid = st.number_input("Goal ID to delete", min_value=1, step=1,
+                                       key="del_goal_id")
+            if st.form_submit_button("Delete Goal", use_container_width=True):
+                db.delete_goal(int(del_gid))
+                st.toast(f"Goal #{del_gid} deleted.", icon="\u2705")
+                st.rerun()
 
 
 def page_add_goal():
@@ -946,6 +1002,21 @@ def page_configuration():
     else:
         st.caption("No configuration set yet.")
 
+    # -- Weekly Digest --
+    st.divider()
+    st.subheader("Weekly Email Digest")
+    st.caption(
+        "Send yourself a summary of upcoming events, overdue actions, "
+        "nudges, and your journal streak."
+    )
+    if st.button("Send Weekly Digest Now", use_container_width=True):
+        import calendar_service
+        ok, msg = calendar_service.send_weekly_digest(manager_id=_mid())
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
+
 
 # ---------------------------------------------------------------------------
 # New Pages: Journal, Timeline, Analytics, Career Development
@@ -956,7 +1027,7 @@ def page_journal():
     show_toast()
 
     # -- Streak & daily wisdom (top bar) --
-    streak = db.get_journal_streak()
+    streak = db.get_journal_streak(manager_id=_mid())
     wisdom = templates.get_daily_wisdom()
     c1, c2 = st.columns([1, 3])
     with c1:
@@ -966,7 +1037,7 @@ def page_journal():
         st.info(f"**Daily Wisdom #{wisdom['number']}:** {wisdom['text']}")
 
     # -- Mood/energy sparkline --
-    entries = db.list_journal_entries(limit=14)
+    entries = db.list_journal_entries(limit=14, manager_id=_mid())
     if entries:
         chart_data = pd.DataFrame([
             {"Date": e["entry_date"], "Mood": e["mood"], "Energy": e["energy"]}
@@ -983,7 +1054,7 @@ def page_journal():
 
     with tab_today:
         today_str = datetime.now().date().isoformat()
-        existing = db.get_journal_entry_by_date(today_str, "daily")
+        existing = db.get_journal_entry_by_date(today_str, "daily", manager_id=_mid())
 
         # Two-pane layout: notes on left, coaching on right
         left_col, right_col = st.columns([3, 2])
@@ -1025,7 +1096,8 @@ def page_journal():
                     db.update_journal_entry(existing["id"], content=content, mood=mood,
                         energy=energy, private_notes=private, tags=tags)
                 else:
-                    db.add_journal_entry(today_str, "daily", content, mood, energy, private, tags)
+                    db.add_journal_entry(today_str, "daily", content, mood, energy, private, tags,
+                                         manager_id=_mid())
                 if content and content.strip():
                     matched = templates.match_wisdom_to_text(content, count=1)
                     if matched:
@@ -1037,14 +1109,16 @@ def page_journal():
         with right_col:
             # Get current text from existing entry or empty
             current_text = (existing["content"] if existing else "") or ""
+            entry_id = existing["id"] if existing else None
             render_coaching_pane(current_text, context_type="journal",
-                                key_suffix="journal_daily")
+                                key_suffix="journal_daily",
+                                journal_entry_id=entry_id)
 
     with tab_weekly:
         # Find current week's Monday
         today = datetime.now().date()
         monday = (today - timedelta(days=today.weekday())).isoformat()
-        existing_w = db.get_journal_entry_by_date(monday, "weekly")
+        existing_w = db.get_journal_entry_by_date(monday, "weekly", manager_id=_mid())
         with st.form("journal_weekly"):
             reflection = st.text_area(
                 "What went well this week? What would you do differently?",
@@ -1053,7 +1127,7 @@ def page_journal():
             )
             st.markdown("**Self-Assessment** — Rate yourself this week:")
             scores = {}
-            prev = db.get_latest_self_assessment()
+            prev = db.get_latest_self_assessment(manager_id=_mid())
             for dim, question in templates.SELF_ASSESSMENT_DIMENSIONS:
                 prev_val = prev.get(dim, 3)
                 label = f"{dim} — {question}"
@@ -1068,14 +1142,22 @@ def page_journal():
             if existing_w:
                 db.update_journal_entry(existing_w["id"], content=reflection)
             else:
-                db.add_journal_entry(monday, "weekly", reflection)
-            db.save_self_assessment(monday, scores)
+                db.add_journal_entry(monday, "weekly", reflection, manager_id=_mid())
+            db.save_self_assessment(monday, scores, manager_id=_mid())
             st.success(f"Weekly reflection saved for week of {monday}.")
 
     with tab_history:
-        history = db.list_journal_entries(limit=30)
+        history = db.list_journal_entries(limit=30, manager_id=_mid())
         if not history:
             st.caption("No journal entries yet. Start writing — even one sentence counts.")
+        else:
+            # Export button
+            export_df = pd.DataFrame(history)
+            export_cols = [c for c in ["entry_date", "entry_type", "content", "mood",
+                           "energy", "tags", "coaching_response"] if c in export_df.columns]
+            st.download_button(
+                "Export Journal (CSV)", export_df[export_cols].to_csv(index=False),
+                "journal_export.csv", "text/csv", key="export_journal")
         for entry in history:
             mood_e = {1: "\U0001F62B", 2: "\U0001F615", 3: "\U0001F610",
                       4: "\U0001F642", 5: "\U0001F525"}.get(entry.get("mood"), "")
@@ -1085,6 +1167,10 @@ def page_journal():
             with st.expander(label):
                 if entry.get("content"):
                     st.markdown(entry["content"])
+                if entry.get("coaching_response"):
+                    st.markdown("---")
+                    st.markdown("**Coaching Response:**")
+                    st.markdown(entry["coaching_response"])
                 if entry.get("private_notes"):
                     st.caption(f"Coaching notes: {entry['private_notes']}")
                 if entry.get("tags"):
@@ -1175,8 +1261,8 @@ def page_analytics():
     show_toast()
 
     # -- Anti-pattern detection (top of page — identity hook) --
-    meeting_data = db.get_time_since_last_event_per_member()
-    feedback_data = db.get_feedback_ratios()
+    meeting_data = db.get_time_since_last_event_per_member(manager_id=_mid())
+    feedback_data = db.get_feedback_ratios(manager_id=_mid())
     patterns = templates.detect_anti_patterns(meeting_data, feedback_data)
 
     if patterns:
@@ -1188,7 +1274,7 @@ def page_analytics():
         st.success("\u2705 No anti-patterns detected. Your management behaviors are consistent.")
 
     # -- Management score --
-    latest_sa = db.get_latest_self_assessment()
+    latest_sa = db.get_latest_self_assessment(manager_id=_mid())
     if latest_sa:
         avg_score = sum(latest_sa.values()) / len(latest_sa)
         st.metric("Management Score", f"{avg_score:.1f} / 5")
@@ -1199,7 +1285,7 @@ def page_analytics():
     ])
 
     with tab_cadence:
-        data = db.get_meetings_per_member_per_month()
+        data = db.get_meetings_per_member_per_month(manager_id=_mid())
         if data:
             df = pd.DataFrame(data)
             pivot = df.pivot_table(index="month", columns="member_name",
@@ -1227,14 +1313,14 @@ def page_analytics():
             st.caption("Record feedback to see health metrics.")
 
     with tab_goals:
-        goal_data = db.get_goal_completion_rates()
+        goal_data = db.get_goal_completion_rates(manager_id=_mid())
         if goal_data:
             st.dataframe(df_from(goal_data))
         else:
             st.caption("Set goals to track completion rates.")
 
     with tab_actions:
-        stats = db.get_action_stats()
+        stats = db.get_action_stats(manager_id=_mid())
         ac1, ac2, ac3, ac4 = st.columns(4)
         with ac1:
             st.metric("Total", stats.get("total", 0))
@@ -1249,7 +1335,7 @@ def page_analytics():
             st.progress(rate / 100, text=f"Completion rate: {rate}%")
 
     with tab_activity:
-        trends = db.get_manager_activity_trends()
+        trends = db.get_manager_activity_trends(manager_id=_mid())
         if trends:
             df = pd.DataFrame(trends).set_index("week")
             st.line_chart(df)
@@ -1257,13 +1343,36 @@ def page_analytics():
             st.caption("Activity trends will appear after a few weeks of use.")
 
         # Self-assessment trends
-        sa_trends = db.get_self_assessment_trends()
+        sa_trends = db.get_self_assessment_trends(manager_id=_mid())
         if sa_trends:
             sa_df = pd.DataFrame(sa_trends)
             pivot = sa_df.pivot_table(index="week_date", columns="dimension",
                                       values="score", fill_value=0)
             st.subheader("Self-Assessment Trends")
             st.line_chart(pivot)
+
+    # -- Data Export --
+    st.divider()
+    st.subheader("Export Data")
+    exp1, exp2, exp3 = st.columns(3)
+    with exp1:
+        events = db.list_events(status="completed", manager_id=_mid(), limit=500)
+        if events:
+            st.download_button("Export Meetings (CSV)",
+                pd.DataFrame(events).to_csv(index=False),
+                "meetings_export.csv", "text/csv", key="export_meetings")
+    with exp2:
+        feedback = db.list_feedback()
+        if feedback:
+            st.download_button("Export Feedback (CSV)",
+                pd.DataFrame(feedback).to_csv(index=False),
+                "feedback_export.csv", "text/csv", key="export_feedback")
+    with exp3:
+        all_goals = db.list_goals(manager_id=_mid())
+        if all_goals:
+            st.download_button("Export Goals (CSV)",
+                pd.DataFrame(all_goals).to_csv(index=False),
+                "goals_export.csv", "text/csv", key="export_goals")
 
 
 def page_career_development():
@@ -1447,65 +1556,20 @@ def page_my_profile():
             new_pw = st.text_input("New password", type="password")
             new_pw2 = st.text_input("Confirm new password", type="password")
             if st.form_submit_button("Update Password"):
-                if new_pw and new_pw == new_pw2:
-                    db.update_manager_password(mid, new_pw)
-                    st.success("Password updated.")
+                if not new_pw:
+                    st.warning("Enter a new password.")
+                elif len(new_pw) < 8:
+                    st.error("Password must be at least 8 characters.")
                 elif new_pw != new_pw2:
                     st.error("Passwords don't match.")
+                else:
+                    db.update_manager_password(mid, new_pw)
+                    st.success("Password updated.")
 
 
 # ---------------------------------------------------------------------------
 # Sidebar navigation & dispatch
 # ---------------------------------------------------------------------------
-
-NAV_GROUPS = [
-    ("Overview", {
-        "\U0001F4CA  Dashboard": "Dashboard",
-    }),
-    ("Activities", {
-        "\U0001F4C5  Schedule Event": "Schedule Event",
-        "\U0001F4C6  Upcoming Events": "Upcoming Events",
-        "\U0001F4D6  Event History": "Event History",
-    }),
-    ("People", {
-        "\U0001F465  Team Roster": "Team Roster",
-        "\U0001F464  Add Member": "Add Member",
-    }),
-    ("Tracking", {
-        "\u2705  Action Items": "Action Items",
-        "\u2795  Add Action": "Add Action",
-        "\U0001F4AC  Record Feedback": "Record Feedback",
-    }),
-    ("Goals", {
-        "\U0001F3AF  Quarterly Goals": "Quarterly Goals",
-        "\U0001F4DD  Add Goal": "Add Goal",
-    }),
-    ("Resources", {
-        "\U0001F4CB  Agenda Templates": "Agenda Templates",
-        "\U0001F4A1  Management Tips": "Management Tips",
-    }),
-    ("Settings", {
-        "\u2699\uFE0F  Configuration": "Configuration",
-    }),
-]
-
-DISPATCH = {
-    "Dashboard": page_dashboard,
-    "Schedule Event": page_schedule_event,
-    "Upcoming Events": page_upcoming_events,
-    "Event History": page_event_history,
-    "Team Roster": page_team_roster,
-    "Add Member": page_add_member,
-    "Action Items": page_action_items,
-    "Add Action": page_add_action,
-    "Record Feedback": page_record_feedback,
-    "Quarterly Goals": page_quarterly_goals,
-    "Add Goal": page_add_goal,
-    "Agenda Templates": page_agenda_templates,
-    "Management Tips": page_management_tips,
-    "Configuration": page_configuration,
-}
-
 
 _NAV_GROUPS = [
     (None, {
@@ -1584,7 +1648,7 @@ def main():
         st.caption(f"*{manager_name}*")
 
         # Streak badge at top of nav (loss aversion hook)
-        streak = db.get_journal_streak()
+        streak = db.get_journal_streak(manager_id=_mid())
         if streak > 0:
             st.markdown(f"\U0001F525 **{streak}-day streak**")
 

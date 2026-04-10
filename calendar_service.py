@@ -165,3 +165,119 @@ def _ics_escape(text):
     if not text:
         return ""
     return text.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+# ---------------------------------------------------------------------------
+# Weekly email digest
+# ---------------------------------------------------------------------------
+
+def generate_weekly_digest(manager_id=None):
+    """Generate an HTML email body summarizing the manager's week.
+    Returns (subject: str, html_body: str)."""
+    import database as db
+
+    manager = db.get_manager(manager_id) if manager_id else None
+    name = manager["display_name"] if manager else "Manager"
+    summary = db.get_weekly_summary(manager_id=manager_id)
+    nudges = db.get_nudges(manager_id=manager_id)
+    streak = db.get_journal_streak(manager_id=manager_id)
+
+    upcoming = summary.get("upcoming_events", [])
+    completed = summary.get("completed_events", [])
+    pending = summary.get("pending_actions", [])
+    overdue = summary.get("overdue_actions", [])
+
+    subject = f"Manager Tool Weekly Digest — {datetime.now().strftime('%b %d, %Y')}"
+
+    sections = []
+    sections.append(f"<h2>Weekly Digest for {name}</h2>")
+    sections.append(f"<p><strong>Journal streak:</strong> {streak} day{'s' if streak != 1 else ''}</p>")
+
+    # Nudges
+    if nudges:
+        sections.append("<h3>Nudges</h3><ul>")
+        for n in nudges:
+            icon = {"critical": "&#x1F6A8;", "warning": "&#x26A0;", "info": "&#x2139;"}.get(
+                n["severity"], "")
+            sections.append(f"<li>{icon} {n['message']}</li>")
+        sections.append("</ul>")
+
+    # Upcoming events
+    if upcoming:
+        sections.append(f"<h3>Upcoming Events ({len(upcoming)})</h3><ul>")
+        for e in upcoming[:10]:
+            sections.append(
+                f"<li><strong>{e.get('title', 'Event')}</strong> — "
+                f"{e['scheduled_date']} at {e['scheduled_time']}"
+                f"{' with ' + e['participant_name'] if e.get('participant_name') else ''}</li>")
+        sections.append("</ul>")
+
+    # Completed this week
+    if completed:
+        sections.append(f"<h3>Completed This Week ({len(completed)})</h3><ul>")
+        for e in completed[:10]:
+            sections.append(f"<li>{e.get('title', 'Event')} — {e['scheduled_date']}</li>")
+        sections.append("</ul>")
+
+    # Overdue actions
+    if overdue:
+        sections.append(f"<h3 style='color:#cc0000'>Overdue Action Items ({len(overdue)})</h3><ul>")
+        for a in overdue:
+            sections.append(
+                f"<li><strong>{a['description']}</strong>"
+                f" — due {a.get('due_date', 'N/A')}"
+                f"{', assigned to ' + a['assignee'] if a.get('assignee') else ''}</li>")
+        sections.append("</ul>")
+
+    # Pending actions
+    if pending:
+        sections.append(f"<h3>Pending Actions ({len(pending)})</h3><ul>")
+        for a in pending[:10]:
+            sections.append(f"<li>{a['description']}"
+                           f"{' (due ' + a['due_date'] + ')' if a.get('due_date') else ''}</li>")
+        sections.append("</ul>")
+
+    sections.append("<hr><p style='color:#888;font-size:0.85em'>"
+                    "Sent by Manager Tool. Open the app to take action.</p>")
+
+    html_body = "\n".join(sections)
+    return subject, html_body
+
+
+def send_weekly_digest(manager_id=None):
+    """Send the weekly digest email to the configured manager email.
+    Returns (success: bool, message: str)."""
+    smtp_server = get_config("smtp_server")
+    smtp_port = get_config("smtp_port", "587")
+    smtp_user = get_config("smtp_user")
+    smtp_password = get_config("smtp_password")
+    manager_email = get_config("manager_email")
+    manager_name = get_config("manager_name", "Manager")
+
+    if not all([smtp_server, smtp_user, smtp_password, manager_email]):
+        return (False, "SMTP not configured. Set up email in Settings > Configuration.")
+
+    subject, html_body = generate_weekly_digest(manager_id)
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"{manager_name} <{manager_email}>"
+    msg["To"] = manager_email
+    msg["Subject"] = subject
+
+    # Plain text fallback
+    import re
+    plain_text = re.sub(r"<[^>]+>", "", html_body).strip()
+    msg.attach(MIMEText(plain_text, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    try:
+        server = smtplib.SMTP(smtp_server, int(smtp_port))
+        server.ehlo(); server.starttls(); server.ehlo()
+        server.login(smtp_user, smtp_password)
+        server.sendmail(manager_email, [manager_email], msg.as_string())
+        server.quit()
+        return (True, f"Weekly digest sent to {manager_email}")
+    except smtplib.SMTPAuthenticationError:
+        return (False, "SMTP authentication failed. Check your App Password.")
+    except Exception as e:
+        return (False, f"Failed to send digest: {e}")

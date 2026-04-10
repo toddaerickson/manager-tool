@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     energy INTEGER CHECK(energy BETWEEN 1 AND 5),
     private_notes TEXT,
     tags TEXT,
+    coaching_response TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
