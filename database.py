@@ -516,6 +516,54 @@ def init_db():
             picture TEXT,
             last_login TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS delegations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
+            team_member_id INTEGER,
+            task TEXT NOT NULL,
+            outcome_expected TEXT,
+            autonomy_level TEXT DEFAULT 'guided' CHECK(autonomy_level IN
+                ('directed', 'guided', 'autonomous')),
+            check_in_date TEXT,
+            status TEXT DEFAULT 'active' CHECK(status IN
+                ('active', 'completed', 'revoked', 'stalled')),
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            completed_at TEXT,
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
+            FOREIGN KEY (team_member_id) REFERENCES team_members(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS running_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
+            team_member_id INTEGER NOT NULL,
+            note_date TEXT NOT NULL DEFAULT (date('now')),
+            content TEXT NOT NULL,
+            category TEXT DEFAULT 'general' CHECK(category IN
+                ('general', 'meeting_prep', 'observation', 'follow_up', 'praise')),
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
+            FOREIGN KEY (team_member_id) REFERENCES team_members(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
+            title TEXT NOT NULL,
+            context TEXT,
+            alternatives TEXT,
+            rationale TEXT,
+            expected_outcome TEXT,
+            review_date TEXT,
+            status TEXT DEFAULT 'active' CHECK(status IN
+                ('active', 'validated', 'revised', 'reversed')),
+            actual_outcome TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id)
+        );
     """)
     conn.commit()
 
@@ -1883,5 +1931,246 @@ def list_milestones(plan_id):
     rows = _fetchall(conn,
         "SELECT * FROM milestones WHERE plan_id = ? ORDER BY id",
         (plan_id,))
+    conn.close()
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Delegation Tracker
+# ---------------------------------------------------------------------------
+
+def add_delegation(task: str, team_member_id: int | None = None,
+                   outcome_expected: str | None = None,
+                   autonomy_level: str = "guided",
+                   check_in_date: str | None = None,
+                   notes: str | None = None,
+                   manager_id: int | None = None) -> int | None:
+    """Create a new delegation record."""
+    conn = get_connection()
+    did = _exec_returning_id(
+        conn,
+        "INSERT INTO delegations (manager_id, team_member_id, task, "
+        "outcome_expected, autonomy_level, check_in_date, notes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, task, outcome_expected,
+         autonomy_level, check_in_date, notes),
+    )
+    _commit(conn)
+    conn.close()
+    return did
+
+
+def list_delegations(manager_id: int | None = None,
+                     team_member_id: int | None = None,
+                     status: str | None = None) -> list[dict[str, Any]]:
+    """List delegations with optional filters."""
+    conn = get_connection()
+    query = (
+        "SELECT d.*, tm.name AS member_name "
+        "FROM delegations d "
+        "LEFT JOIN team_members tm ON d.team_member_id = tm.id WHERE 1=1"
+    )
+    params = []
+    if manager_id is not None:
+        query += " AND d.manager_id = ?"
+        params.append(manager_id)
+    if team_member_id is not None:
+        query += " AND d.team_member_id = ?"
+        params.append(team_member_id)
+    if status:
+        query += " AND d.status = ?"
+        params.append(status)
+    query += " ORDER BY d.check_in_date, d.created_at DESC"
+    cur = _exec(conn, query, params)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def update_delegation(delegation_id: int, **kwargs: Any) -> None:
+    """Update delegation fields."""
+    allowed = {"task", "outcome_expected", "autonomy_level", "check_in_date",
+               "notes", "status"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    if fields.get("status") == "completed":
+        fields["completed_at"] = datetime.now().isoformat()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    conn = get_connection()
+    _exec(conn, f"UPDATE delegations SET {sets} WHERE id = ?",
+          (*fields.values(), delegation_id))
+    _commit(conn)
+    conn.close()
+
+
+def delete_delegation(delegation_id: int) -> None:
+    conn = get_connection()
+    _exec(conn, "DELETE FROM delegations WHERE id = ?", (delegation_id,))
+    _commit(conn)
+    conn.close()
+
+
+def get_active_delegations_count(manager_id: int | None = None) -> int:
+    """Count active delegations for nudge/dashboard display."""
+    conn = get_connection()
+    sql = "SELECT COUNT(*) AS cnt FROM delegations WHERE status = 'active'"
+    params = []
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    row = _fetchone(conn, sql, params or None)
+    conn.close()
+    return row["cnt"] if row else 0
+
+
+def get_overdue_delegations(manager_id: int | None = None) -> list[dict[str, Any]]:
+    """Get delegations past their check-in date."""
+    conn = get_connection()
+    cd = _sql_current_date()
+    sql = (f"SELECT d.*, tm.name AS member_name "
+           f"FROM delegations d "
+           f"LEFT JOIN team_members tm ON d.team_member_id = tm.id "
+           f"WHERE d.status = 'active' AND d.check_in_date < {cd} "
+           f"AND d.check_in_date IS NOT NULL")
+    params = []
+    if manager_id is not None:
+        sql += " AND d.manager_id = ?"
+        params.append(manager_id)
+    sql += " ORDER BY d.check_in_date"
+    rows = _fetchall(conn, sql, params or None)
+    conn.close()
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Running 1:1 Notes (persistent per-member notes across meetings)
+# ---------------------------------------------------------------------------
+
+def add_running_note(team_member_id: int, content: str,
+                     category: str = "general",
+                     note_date: str | None = None,
+                     manager_id: int | None = None) -> int | None:
+    """Add a running note for a team member."""
+    if not note_date:
+        note_date = datetime.now().date().isoformat()
+    conn = get_connection()
+    nid = _exec_returning_id(
+        conn,
+        "INSERT INTO running_notes (manager_id, team_member_id, note_date, "
+        "content, category) VALUES (?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, note_date, content, category),
+    )
+    _commit(conn)
+    conn.close()
+    return nid
+
+
+def list_running_notes(team_member_id: int,
+                       manager_id: int | None = None,
+                       limit: int = 50) -> list[dict[str, Any]]:
+    """Get running notes for a team member, newest first."""
+    conn = get_connection()
+    sql = "SELECT * FROM running_notes WHERE team_member_id = ?"
+    params: list = [team_member_id]
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    sql += " ORDER BY note_date DESC, created_at DESC LIMIT ?"
+    params.append(limit)
+    cur = _exec(conn, sql, params)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def delete_running_note(note_id: int) -> None:
+    conn = get_connection()
+    _exec(conn, "DELETE FROM running_notes WHERE id = ?", (note_id,))
+    _commit(conn)
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Decision Log / Decision Journal
+# ---------------------------------------------------------------------------
+
+def add_decision(title: str, context: str | None = None,
+                 alternatives: str | None = None,
+                 rationale: str | None = None,
+                 expected_outcome: str | None = None,
+                 review_date: str | None = None,
+                 manager_id: int | None = None) -> int | None:
+    """Record a decision in the decision log."""
+    conn = get_connection()
+    did = _exec_returning_id(
+        conn,
+        "INSERT INTO decisions (manager_id, title, context, alternatives, "
+        "rationale, expected_outcome, review_date) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (manager_id, title, context, alternatives, rationale,
+         expected_outcome, review_date),
+    )
+    _commit(conn)
+    conn.close()
+    return did
+
+
+def list_decisions(manager_id: int | None = None,
+                   status: str | None = None,
+                   limit: int = 50) -> list[dict[str, Any]]:
+    """List decisions, newest first."""
+    conn = get_connection()
+    sql = "SELECT * FROM decisions WHERE 1=1"
+    params: list = []
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    cur = _exec(conn, sql, params)
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+
+def update_decision(decision_id: int, **kwargs: Any) -> None:
+    """Update a decision (e.g., add actual_outcome, change status)."""
+    allowed = {"title", "context", "alternatives", "rationale",
+               "expected_outcome", "review_date", "status", "actual_outcome"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    fields["updated_at"] = datetime.now().isoformat()
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    conn = get_connection()
+    _exec(conn, f"UPDATE decisions SET {sets} WHERE id = ?",
+          (*fields.values(), decision_id))
+    _commit(conn)
+    conn.close()
+
+
+def delete_decision(decision_id: int) -> None:
+    conn = get_connection()
+    _exec(conn, "DELETE FROM decisions WHERE id = ?", (decision_id,))
+    _commit(conn)
+    conn.close()
+
+
+def get_decisions_due_for_review(manager_id: int | None = None) -> list[dict[str, Any]]:
+    """Get decisions where review_date has passed and status is still active."""
+    conn = get_connection()
+    cd = _sql_current_date()
+    sql = (f"SELECT * FROM decisions WHERE status = 'active' "
+           f"AND review_date <= {cd} AND review_date IS NOT NULL")
+    params: list = []
+    if manager_id is not None:
+        sql += " AND manager_id = ?"
+        params.append(manager_id)
+    sql += " ORDER BY review_date"
+    rows = _fetchall(conn, sql, params or None)
     conn.close()
     return rows

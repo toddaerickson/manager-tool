@@ -344,6 +344,16 @@ def page_dashboard():
         p = ap[0]
         st.warning(f"**{p['pattern']}:** {p['evidence']} — {p['suggestion']}")
 
+    # -- Delegation & decision review nudges --
+    overdue_dels = db.get_overdue_delegations(manager_id=_mid())
+    if overdue_dels:
+        st.warning(f"\U0001F4E4 **{len(overdue_dels)} delegation(s) past check-in date** — "
+                   f"review them in Delegations.")
+    decisions_due = db.get_decisions_due_for_review(manager_id=_mid())
+    if decisions_due:
+        st.info(f"\U0001F9E0 **{len(decisions_due)} decision(s) due for review** — "
+                f"did they play out as expected? Check the Decision Log.")
+
     # -- Quick stats [C7: System 1 — emoji indicators for instant scanning] --
     summary = db.get_weekly_summary(manager_id=_mid())
     c1, c2, c3, c4 = st.columns(4)
@@ -1221,6 +1231,18 @@ def page_member_timeline():
                 st.warning(f"**{p['observation']}**")
                 st.caption(f"> {p['wisdom']}")
 
+    # -- Running 1:1 Notes (persistent across meetings) --
+    recent_notes = db.list_running_notes(member_id, manager_id=_mid(), limit=5)
+    if recent_notes:
+        st.divider()
+        st.subheader(f"Recent Notes about {selected}")
+        for n in recent_notes:
+            cat_icons = {"general": "\U0001F4DD", "meeting_prep": "\U0001F4C5",
+                        "observation": "\U0001F440", "follow_up": "\U0001F504",
+                        "praise": "\u2B50"}
+            icon = cat_icons.get(n.get("category", ""), "\U0001F4DD")
+            st.markdown(f"{icon} **{n['note_date']}** — {n['content']}")
+
     # -- Coaching pane for this member --
     st.divider()
     prep_left, prep_right = st.columns([3, 2])
@@ -1568,6 +1590,279 @@ def page_my_profile():
 
 
 # ---------------------------------------------------------------------------
+# Delegation Tracker
+# ---------------------------------------------------------------------------
+
+def page_delegations():
+    st.title("Delegation Tracker")
+    show_toast()
+    st.caption(
+        '*"Delegate results, not methods. Prescribing methods removes '
+        'accountability."* — Dellanna'
+    )
+
+    names, name_map = member_options()
+
+    # -- Active delegations --
+    active = db.list_delegations(manager_id=_mid(), status="active")
+    overdue = db.get_overdue_delegations(manager_id=_mid())
+
+    if overdue:
+        st.warning(f"{len(overdue)} delegation(s) past check-in date!")
+
+    if active:
+        st.subheader(f"Active Delegations ({len(active)})")
+        for d in active:
+            is_overdue = d in overdue
+            icon = "\U0001F534" if is_overdue else "\U0001F7E2"
+            label = (f"{icon} {d['task'][:60]} — "
+                     f"{d.get('member_name', 'Unassigned')} "
+                     f"[{d['autonomy_level']}]")
+            with st.expander(label):
+                st.markdown(f"**Expected Outcome:** {d.get('outcome_expected', 'N/A')}")
+                st.markdown(f"**Autonomy Level:** {d['autonomy_level'].title()} "
+                           f"&nbsp; **Check-in:** {d.get('check_in_date', 'Not set')}")
+                if d.get("notes"):
+                    st.markdown(f"**Notes:** {d['notes']}")
+                dc1, dc2, dc3 = st.columns(3)
+                with dc1:
+                    if st.button("Complete", key=f"del_done_{d['id']}"):
+                        db.update_delegation(d["id"], status="completed")
+                        set_toast("success", f"Delegation '{d['task'][:30]}' completed.")
+                        st.rerun()
+                with dc2:
+                    if st.button("Stalled", key=f"del_stall_{d['id']}"):
+                        db.update_delegation(d["id"], status="stalled")
+                        set_toast("warning", f"Delegation marked as stalled.")
+                        st.rerun()
+                with dc3:
+                    if st.button("Delete", key=f"del_rm_{d['id']}"):
+                        db.delete_delegation(d["id"])
+                        set_toast("success", "Delegation deleted.")
+                        st.rerun()
+    else:
+        st.info("No active delegations. Use the form below to delegate a task.")
+
+    # -- Add delegation form --
+    st.subheader("Delegate a Task")
+    with st.form("add_delegation"):
+        task = st.text_input("What are you delegating? *")
+        member = st.selectbox("Delegated to", ["(none)"] + names)
+        outcome = st.text_area("Expected outcome (results, not methods)", height=80)
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            autonomy = st.selectbox("Autonomy level", [
+                ("directed", "Directed — step-by-step guidance"),
+                ("guided", "Guided — check in at milestones"),
+                ("autonomous", "Autonomous — deliver the result"),
+            ], format_func=lambda x: x[1])
+        with dc2:
+            check_in = st.date_input("Check-in date", value=None)
+        notes = st.text_input("Notes (optional)")
+        if st.form_submit_button("Delegate", use_container_width=True):
+            if not task:
+                st.error("Describe what you're delegating.")
+            else:
+                member_id = name_map.get(member) if member != "(none)" else None
+                db.add_delegation(
+                    task=task, team_member_id=member_id,
+                    outcome_expected=outcome or None,
+                    autonomy_level=autonomy[0],
+                    check_in_date=check_in.isoformat() if check_in else None,
+                    notes=notes or None, manager_id=_mid(),
+                )
+                set_toast("success", f"Delegated: {task[:40]}")
+                st.rerun()
+
+    # -- History --
+    with st.expander("Completed / Past Delegations"):
+        past = db.list_delegations(manager_id=_mid())
+        past = [d for d in past if d["status"] != "active"]
+        if past:
+            st.dataframe(
+                df_from(past, ["id", "task", "member_name", "autonomy_level",
+                               "status", "created_at", "completed_at"]),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.caption("No completed delegations yet.")
+
+
+# ---------------------------------------------------------------------------
+# Running 1:1 Notes
+# ---------------------------------------------------------------------------
+
+def page_running_notes():
+    st.title("Running 1:1 Notes")
+    show_toast()
+    st.caption(
+        "Persistent notes per team member — visible at every meeting prep. "
+        "Not tied to a single event."
+    )
+
+    names, mapping = member_options()
+    if not names:
+        st.info("Add team members first.")
+        return
+
+    selected = st.selectbox("Team member", names, key="rn_member")
+    member_id = mapping[selected]
+
+    # -- Add note --
+    with st.form("add_running_note"):
+        nc1, nc2 = st.columns([3, 1])
+        with nc1:
+            content = st.text_area(f"Note about {selected}", height=100,
+                placeholder="Observation, meeting prep, follow-up, praise...")
+        with nc2:
+            category = st.selectbox("Category", [
+                "general", "meeting_prep", "observation", "follow_up", "praise"])
+            note_date = st.date_input("Date", value=datetime.now().date())
+        if st.form_submit_button("Add Note", use_container_width=True):
+            if content and content.strip():
+                db.add_running_note(
+                    team_member_id=member_id, content=content,
+                    category=category, note_date=note_date.isoformat(),
+                    manager_id=_mid(),
+                )
+                set_toast("success", "Note added.")
+                st.rerun()
+            else:
+                st.warning("Write something first.")
+
+    # -- Display notes --
+    notes = db.list_running_notes(member_id, manager_id=_mid())
+    if notes:
+        st.subheader(f"Notes for {selected} ({len(notes)})")
+        category_icons = {
+            "general": "\U0001F4DD", "meeting_prep": "\U0001F4C5",
+            "observation": "\U0001F440", "follow_up": "\U0001F504",
+            "praise": "\u2B50",
+        }
+        for n in notes:
+            icon = category_icons.get(n.get("category", ""), "\U0001F4DD")
+            col_note, col_del = st.columns([6, 1])
+            with col_note:
+                st.markdown(
+                    f"{icon} **{n['note_date']}** [{n.get('category', 'general')}]  \n"
+                    f"{n['content']}"
+                )
+            with col_del:
+                if st.button("X", key=f"del_rn_{n['id']}"):
+                    db.delete_running_note(n["id"])
+                    st.rerun()
+            st.markdown("---")
+    else:
+        st.caption(f"No notes yet for {selected}. Start building a history.")
+
+
+# ---------------------------------------------------------------------------
+# Decision Log
+# ---------------------------------------------------------------------------
+
+def page_decision_log():
+    st.title("Decision Log")
+    show_toast()
+    st.caption(
+        '*"For every unambiguous decision we make, we probably nudge things '
+        'a dozen times."* — Andy Grove'
+    )
+
+    # -- Decisions due for review (nudge) --
+    due = db.get_decisions_due_for_review(manager_id=_mid())
+    if due:
+        st.warning(f"{len(due)} decision(s) due for review:")
+        for d in due:
+            st.markdown(f"- **{d['title']}** (review date: {d['review_date']})")
+
+    # -- Add decision form --
+    st.subheader("Record a Decision")
+    with st.form("add_decision"):
+        title = st.text_input("Decision *", placeholder="What did you decide?")
+        context = st.text_area("Context", height=80,
+            placeholder="What situation or problem prompted this decision?")
+        alternatives = st.text_area("Alternatives considered", height=60,
+            placeholder="What other options did you weigh?")
+        rationale = st.text_area("Rationale", height=80,
+            placeholder="Why this option? What trade-offs did you accept?")
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            expected = st.text_input("Expected outcome",
+                placeholder="What should happen if this is the right call?")
+        with dc2:
+            review_date = st.date_input("Review by (when to check if it worked)",
+                                         value=None)
+        if st.form_submit_button("Log Decision", use_container_width=True):
+            if not title:
+                st.error("Describe the decision.")
+            else:
+                db.add_decision(
+                    title=title, context=context or None,
+                    alternatives=alternatives or None,
+                    rationale=rationale or None,
+                    expected_outcome=expected or None,
+                    review_date=review_date.isoformat() if review_date else None,
+                    manager_id=_mid(),
+                )
+                set_toast("success", f"Decision logged: {title[:40]}")
+                st.rerun()
+
+    # -- Decision history --
+    st.subheader("Decision History")
+    decisions = db.list_decisions(manager_id=_mid())
+    if not decisions:
+        st.caption("No decisions logged yet. Start recording your thinking.")
+        return
+
+    statuses = ["active", "validated", "revised", "reversed"]
+    status_colors = {"active": "blue", "validated": "green",
+                     "revised": "orange", "reversed": "red"}
+
+    for d in decisions:
+        color = status_colors.get(d["status"], "blue")
+        label = (f":{color}[**{d['status'].upper()}**] "
+                 f"{d['title']} — {d['created_at'][:10]}")
+        with st.expander(label):
+            if d.get("context"):
+                st.markdown(f"**Context:** {d['context']}")
+            if d.get("alternatives"):
+                st.markdown(f"**Alternatives:** {d['alternatives']}")
+            if d.get("rationale"):
+                st.markdown(f"**Rationale:** {d['rationale']}")
+            if d.get("expected_outcome"):
+                st.markdown(f"**Expected outcome:** {d['expected_outcome']}")
+            if d.get("review_date"):
+                st.markdown(f"**Review by:** {d['review_date']}")
+            if d.get("actual_outcome"):
+                st.markdown(f"**Actual outcome:** {d['actual_outcome']}")
+
+            # Update status / record actual outcome
+            with st.form(f"update_decision_{d['id']}"):
+                uc1, uc2 = st.columns(2)
+                with uc1:
+                    new_status = st.selectbox("Update status", statuses,
+                        index=statuses.index(d["status"]),
+                        key=f"ds_{d['id']}")
+                with uc2:
+                    actual = st.text_input("Actual outcome (what really happened)",
+                        value=d.get("actual_outcome") or "",
+                        key=f"da_{d['id']}")
+                uf1, uf2 = st.columns(2)
+                with uf1:
+                    if st.form_submit_button("Update", use_container_width=True):
+                        updates = {"status": new_status}
+                        if actual:
+                            updates["actual_outcome"] = actual
+                        db.update_decision(d["id"], **updates)
+                        set_toast("success", f"Decision updated.")
+                        st.rerun()
+            if st.button("Delete", key=f"del_dec_{d['id']}"):
+                db.delete_decision(d["id"])
+                set_toast("success", "Decision deleted.")
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
 # Sidebar navigation & dispatch
 # ---------------------------------------------------------------------------
 
@@ -1587,12 +1882,14 @@ _NAV_GROUPS = [
         "\U0001F4CB  Team Roster": "Team Roster",
         "\U0001F464  Add Member": "Add Member",
         "\U0001F550  Timeline": "Member Timeline",
+        "\U0001F4DD  1:1 Notes": "Running Notes",
         "\U0001F680  Career Dev": "Career Development",
     }),
     ("\U0001F4CC Tracking", {
         "\u2705  Action Items": "Action Items",
         "\u2795  Add Action": "Add Action",
         "\U0001F4AC  Feedback": "Record Feedback",
+        "\U0001F4E4  Delegations": "Delegations",
     }),
     ("\U0001F3AF Goals", {
         "\U0001F4CA  Quarterly Goals": "Quarterly Goals",
@@ -1600,6 +1897,7 @@ _NAV_GROUPS = [
     }),
     ("\U0001F4A1 Insights", {
         "\U0001F4C8  Analytics": "Analytics",
+        "\U0001F9E0  Decision Log": "Decision Log",
     }),
     ("\U0001F4DA Resources", {
         "\U0001F4DD  Agendas": "Agenda Templates",
@@ -1620,13 +1918,16 @@ _DISPATCH = {
     "Team Roster": page_team_roster,
     "Add Member": page_add_member,
     "Member Timeline": page_member_timeline,
+    "Running Notes": page_running_notes,
     "Career Development": page_career_development,
     "Action Items": page_action_items,
     "Add Action": page_add_action,
     "Record Feedback": page_record_feedback,
+    "Delegations": page_delegations,
     "Quarterly Goals": page_quarterly_goals,
     "Add Goal": page_add_goal,
     "Analytics": page_analytics,
+    "Decision Log": page_decision_log,
     "Agenda Templates": page_agenda_templates,
     "Management Tips": page_management_tips,
     "My Profile": page_my_profile,
