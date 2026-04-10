@@ -8,8 +8,11 @@ and coach.
 """
 
 import os
+import logging
 import database as db
 import templates
+
+logger = logging.getLogger("manager_tool.coaching")
 
 try:
     from anthropic import Anthropic
@@ -189,6 +192,7 @@ def get_coaching_response(notes, context_type="journal", member_name=None,
         )
         return message.content[0].text
     except Exception as e:
+        logger.error("Claude API call failed: %s", e)
         return f"*Coaching unavailable: {e}*\n\n" + _local_fallback(
             notes, context_type, member_name)
 

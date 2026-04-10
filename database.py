@@ -7,7 +7,10 @@ Set DATABASE_URL env var or Streamlit secret to use PostgreSQL.
 import sqlite3
 import os
 import base64
+import logging
 from datetime import datetime, timedelta
+
+logger = logging.getLogger("manager_tool.database")
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manager_data.db")
 
@@ -127,6 +130,7 @@ def get_connection():
             return conn
         except Exception as e:
             # Fall back to SQLite if PostgreSQL connection fails
+            logger.warning("PostgreSQL connection failed, falling back to SQLite: %s", e)
             global _USE_PG
             _USE_PG = False
             _PG_FAILED = True
@@ -489,7 +493,8 @@ def _verify_password(password, stored_hash):
     # bcrypt verification
     try:
         return bcrypt.checkpw(password.encode(), stored_hash.encode())
-    except Exception:
+    except Exception as e:
+        logger.error("Password verification error: %s", e)
         return False
 
 
