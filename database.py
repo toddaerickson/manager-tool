@@ -360,6 +360,7 @@ def init_db():
             energy INTEGER CHECK(energy BETWEEN 1 AND 5),
             private_notes TEXT,
             tags TEXT,
+            coaching_response TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (manager_id) REFERENCES managers(id)
@@ -433,6 +434,16 @@ def init_db():
         );
     """)
     conn.commit()
+
+    # Migration: add coaching_response column to journal_entries if missing
+    try:
+        cols = [c[1] for c in conn.execute(
+            "PRAGMA table_info(journal_entries)").fetchall()]
+        if "coaching_response" not in cols:
+            conn.execute("ALTER TABLE journal_entries ADD COLUMN coaching_response TEXT")
+            conn.commit()
+    except Exception:
+        pass
 
     # One-time backfill: assign orphaned data to the sole manager
     try:
@@ -1077,7 +1088,8 @@ def add_journal_entry(entry_date, entry_type="daily", content=None,
 
 
 def update_journal_entry(entry_id, **kwargs):
-    allowed = {"content", "mood", "energy", "private_notes", "tags", "entry_type"}
+    allowed = {"content", "mood", "energy", "private_notes", "tags", "entry_type",
+                "coaching_response"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return

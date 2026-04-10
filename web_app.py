@@ -224,9 +224,11 @@ def member_options():
 
 
 def render_coaching_pane(notes_text, context_type="journal", member_name=None,
-                         event_type=None, prep_data=None, key_suffix=""):
+                         event_type=None, prep_data=None, key_suffix="",
+                         journal_entry_id=None):
     """Render the AI coaching right-pane for any page.
-    Call this inside a right column. Uses session_state to cache responses."""
+    Call this inside a right column. Uses session_state to cache responses.
+    If journal_entry_id is provided, saves the coaching response to the entry."""
     st.markdown("### \U0001F9E0 Coaching Corner")
     state_key = f"coaching_response_{context_type}_{key_suffix}"
 
@@ -237,6 +239,10 @@ def render_coaching_pane(notes_text, context_type="journal", member_name=None,
                 response = coaching.get_coaching_response(
                     notes_text, context_type, member_name, event_type, prep_data)
                 st.session_state[state_key] = response
+                # Persist coaching response to journal entry if available
+                if journal_entry_id and response:
+                    db.update_journal_entry(journal_entry_id,
+                                            coaching_response=response)
         else:
             st.session_state[state_key] = (
                 "*Write some notes first, then ask for coaching.*")
@@ -1062,8 +1068,10 @@ def page_journal():
         with right_col:
             # Get current text from existing entry or empty
             current_text = (existing["content"] if existing else "") or ""
+            entry_id = existing["id"] if existing else None
             render_coaching_pane(current_text, context_type="journal",
-                                key_suffix="journal_daily")
+                                key_suffix="journal_daily",
+                                journal_entry_id=entry_id)
 
     with tab_weekly:
         # Find current week's Monday
@@ -1101,6 +1109,14 @@ def page_journal():
         history = db.list_journal_entries(limit=30, manager_id=_mid())
         if not history:
             st.caption("No journal entries yet. Start writing — even one sentence counts.")
+        else:
+            # Export button
+            export_df = pd.DataFrame(history)
+            export_cols = [c for c in ["entry_date", "entry_type", "content", "mood",
+                           "energy", "tags", "coaching_response"] if c in export_df.columns]
+            st.download_button(
+                "Export Journal (CSV)", export_df[export_cols].to_csv(index=False),
+                "journal_export.csv", "text/csv", key="export_journal")
         for entry in history:
             mood_e = {1: "\U0001F62B", 2: "\U0001F615", 3: "\U0001F610",
                       4: "\U0001F642", 5: "\U0001F525"}.get(entry.get("mood"), "")
@@ -1110,6 +1126,10 @@ def page_journal():
             with st.expander(label):
                 if entry.get("content"):
                     st.markdown(entry["content"])
+                if entry.get("coaching_response"):
+                    st.markdown("---")
+                    st.markdown("**Coaching Response:**")
+                    st.markdown(entry["coaching_response"])
                 if entry.get("private_notes"):
                     st.caption(f"Coaching notes: {entry['private_notes']}")
                 if entry.get("tags"):
@@ -1289,6 +1309,29 @@ def page_analytics():
                                       values="score", fill_value=0)
             st.subheader("Self-Assessment Trends")
             st.line_chart(pivot)
+
+    # -- Data Export --
+    st.divider()
+    st.subheader("Export Data")
+    exp1, exp2, exp3 = st.columns(3)
+    with exp1:
+        events = db.list_events(status="completed", manager_id=_mid(), limit=500)
+        if events:
+            st.download_button("Export Meetings (CSV)",
+                pd.DataFrame(events).to_csv(index=False),
+                "meetings_export.csv", "text/csv", key="export_meetings")
+    with exp2:
+        feedback = db.list_feedback()
+        if feedback:
+            st.download_button("Export Feedback (CSV)",
+                pd.DataFrame(feedback).to_csv(index=False),
+                "feedback_export.csv", "text/csv", key="export_feedback")
+    with exp3:
+        all_goals = db.list_goals(manager_id=_mid())
+        if all_goals:
+            st.download_button("Export Goals (CSV)",
+                pd.DataFrame(all_goals).to_csv(index=False),
+                "goals_export.csv", "text/csv", key="export_goals")
 
 
 def page_career_development():

@@ -7,3 +7,4 @@ ics_exports/
 *.sqlite3
 .streamlit/secrets.toml
 *.pdf
+.encryption_key
