@@ -6,9 +6,62 @@ Set DATABASE_URL env var or Streamlit secret to use PostgreSQL.
 
 import sqlite3
 import os
+import base64
 from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "manager_data.db")
+
+# ---------------------------------------------------------------------------
+# Sensitive config encryption
+# ---------------------------------------------------------------------------
+
+_SENSITIVE_KEYS = {"anthropic_api_key", "smtp_password", "google_client_secret"}
+_ENC_PREFIX = "enc:"
+
+
+def _get_fernet():
+    """Get a Fernet instance for encrypting/decrypting sensitive config.
+    Returns None if no encryption key is configured (local dev fallback)."""
+    key = os.environ.get("CONFIG_ENCRYPTION_KEY")
+    if not key:
+        key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".encryption_key")
+        if os.path.exists(key_path):
+            with open(key_path, "r") as f:
+                key = f.read().strip()
+        else:
+            # Auto-generate key for first-time use
+            try:
+                from cryptography.fernet import Fernet
+                key = Fernet.generate_key().decode()
+                with open(key_path, "w") as f:
+                    f.write(key)
+            except ImportError:
+                return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(key.encode() if isinstance(key, str) else key)
+    except Exception:
+        return None
+
+
+def _encrypt_value(value):
+    """Encrypt a string value if Fernet is available."""
+    f = _get_fernet()
+    if f and value:
+        return _ENC_PREFIX + f.encrypt(value.encode()).decode()
+    return value
+
+
+def _decrypt_value(value):
+    """Decrypt a string value if it's encrypted."""
+    if value and value.startswith(_ENC_PREFIX):
+        f = _get_fernet()
+        if f:
+            try:
+                return f.decrypt(value[len(_ENC_PREFIX):].encode()).decode()
+            except Exception:
+                return value  # Graceful fallback if key changed
+    return value
 
 # ---------------------------------------------------------------------------
 # Dual-mode connection: PostgreSQL (production) / SQLite (local dev)
@@ -380,6 +433,28 @@ def init_db():
         );
     """)
     conn.commit()
+
+    # One-time backfill: assign orphaned data to the sole manager
+    try:
+        row = conn.execute(
+            "SELECT value FROM config WHERE key = '_migration_backfill_done'"
+        ).fetchone()
+        if not row:
+            managers = conn.execute("SELECT id FROM managers").fetchall()
+            if len(managers) == 1:
+                mid = managers[0]["id"] if isinstance(managers[0], dict) else managers[0][0]
+                for table in ["team_members", "events", "action_items",
+                              "journal_entries", "self_assessments"]:
+                    conn.execute(
+                        f"UPDATE {table} SET manager_id = ? WHERE manager_id IS NULL",
+                        (mid,))
+                conn.commit()
+            conn.execute(
+                "INSERT INTO config (key, value) VALUES ('_migration_backfill_done', '1')")
+            conn.commit()
+    except Exception:
+        pass  # Safe to skip — backfill is best-effort
+
     conn.close()
 
 
@@ -387,11 +462,30 @@ def init_db():
 # Manager Profiles & Authentication
 # ---------------------------------------------------------------------------
 
+def _hash_password(password):
+    """Hash a password using bcrypt."""
+    import bcrypt
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _verify_password(password, stored_hash):
+    """Verify password against stored hash. Supports bcrypt and legacy SHA-256."""
+    import bcrypt
+    # Legacy SHA-256 detection: exactly 64 hex characters
+    if len(stored_hash) == 64:
+        import hashlib
+        return hashlib.sha256(password.encode()).hexdigest() == stored_hash
+    # bcrypt verification
+    try:
+        return bcrypt.checkpw(password.encode(), stored_hash.encode())
+    except Exception:
+        return False
+
+
 def create_manager(username, display_name, password, email=None,
                    work_schedule=None, timezone=None):
     """Create a new manager account. Returns manager_id."""
-    import hashlib
-    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+    pw_hash = _hash_password(password)
     conn = get_connection()
     try:
         mid = _exec_returning_id(
@@ -410,15 +504,26 @@ def create_manager(username, display_name, password, email=None,
 
 
 def authenticate_manager(username, password):
-    """Verify credentials. Returns manager dict or None."""
-    import hashlib
-    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+    """Verify credentials. Returns manager dict or None.
+    Automatically migrates legacy SHA-256 hashes to bcrypt on successful login."""
     conn = get_connection()
     row = _fetchone(
         conn,
-        "SELECT * FROM managers WHERE username = ? AND password_hash = ?",
-        (username.lower().strip(), pw_hash),
+        "SELECT * FROM managers WHERE username = ?",
+        (username.lower().strip(),),
     )
+    if not row:
+        conn.close()
+        return None
+    if not _verify_password(password, row["password_hash"]):
+        conn.close()
+        return None
+    # Migrate legacy SHA-256 hash to bcrypt on successful login
+    if len(row["password_hash"]) == 64:
+        new_hash = _hash_password(password)
+        _exec(conn, "UPDATE managers SET password_hash = ? WHERE id = ?",
+              (new_hash, row["id"]))
+        _commit(conn)
     conn.close()
     return row
 
@@ -448,8 +553,7 @@ def update_manager(manager_id, **kwargs):
 
 def update_manager_password(manager_id, new_password):
     """Change manager password."""
-    import hashlib
-    pw_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    pw_hash = _hash_password(new_password)
     conn = get_connection()
     _exec(conn, "UPDATE managers SET password_hash = ?, updated_at = ? WHERE id = ?",
           (pw_hash, datetime.now().isoformat(), manager_id))
@@ -471,11 +575,12 @@ def manager_exists(username):
 # ---------------------------------------------------------------------------
 
 def set_config(key, value):
+    stored = _encrypt_value(value) if key in _SENSITIVE_KEYS else value
     conn = get_connection()
     _exec(conn,
           "INSERT INTO config (key, value) VALUES (?, ?) "
           "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-          (key, value))
+          (key, stored))
     _commit(conn)
     conn.close()
 
@@ -484,7 +589,10 @@ def get_config(key, default=None):
     conn = get_connection()
     row = _fetchone(conn, "SELECT value FROM config WHERE key = ?", (key,))
     conn.close()
-    return row["value"] if row else default
+    if not row:
+        return default
+    raw = row["value"]
+    return _decrypt_value(raw) if key in _SENSITIVE_KEYS else raw
 
 
 def upsert_user(google_id, email, name=None, picture=None):

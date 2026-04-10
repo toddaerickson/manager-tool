@@ -124,17 +124,31 @@ def _show_auth_screen():
     tab_login, tab_register = st.tabs(["Log In", "Create Account"])
 
     with tab_login:
+        # Rate limiting: block after 5 failed attempts within 15 minutes
+        attempts = st.session_state.get("login_attempts", [])
+        cutoff = datetime.now() - timedelta(minutes=15)
+        attempts = [t for t in attempts if t > cutoff]
+        st.session_state["login_attempts"] = attempts
+        locked = len(attempts) >= 5
+
+        if locked:
+            st.error("Too many failed attempts. Please wait a few minutes.")
+
         with st.form("login_form"):
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
             if st.form_submit_button("Log In", use_container_width=True):
-                if username and password:
+                if locked:
+                    st.error("Account temporarily locked. Try again later.")
+                elif username and password:
                     manager = db.authenticate_manager(username, password)
                     if manager:
+                        st.session_state["login_attempts"] = []
                         st.session_state["manager_id"] = manager["id"]
                         st.session_state["manager_name"] = manager["display_name"]
                         st.rerun()
                     else:
+                        st.session_state.setdefault("login_attempts", []).append(datetime.now())
                         st.error("Invalid username or password.")
                 else:
                     st.warning("Enter both username and password.")
@@ -159,6 +173,8 @@ def _show_auth_screen():
             if st.form_submit_button("Create Account", use_container_width=True):
                 if not new_user or not new_name or not new_pw:
                     st.warning("Username, name, and password are required.")
+                elif len(new_pw) < 8:
+                    st.error("Password must be at least 8 characters.")
                 elif new_pw != new_pw2:
                     st.error("Passwords don't match.")
                 elif db.manager_exists(new_user):
@@ -1456,65 +1472,20 @@ def page_my_profile():
             new_pw = st.text_input("New password", type="password")
             new_pw2 = st.text_input("Confirm new password", type="password")
             if st.form_submit_button("Update Password"):
-                if new_pw and new_pw == new_pw2:
-                    db.update_manager_password(mid, new_pw)
-                    st.success("Password updated.")
+                if not new_pw:
+                    st.warning("Enter a new password.")
+                elif len(new_pw) < 8:
+                    st.error("Password must be at least 8 characters.")
                 elif new_pw != new_pw2:
                     st.error("Passwords don't match.")
+                else:
+                    db.update_manager_password(mid, new_pw)
+                    st.success("Password updated.")
 
 
 # ---------------------------------------------------------------------------
 # Sidebar navigation & dispatch
 # ---------------------------------------------------------------------------
-
-NAV_GROUPS = [
-    ("Overview", {
-        "\U0001F4CA  Dashboard": "Dashboard",
-    }),
-    ("Activities", {
-        "\U0001F4C5  Schedule Event": "Schedule Event",
-        "\U0001F4C6  Upcoming Events": "Upcoming Events",
-        "\U0001F4D6  Event History": "Event History",
-    }),
-    ("People", {
-        "\U0001F465  Team Roster": "Team Roster",
-        "\U0001F464  Add Member": "Add Member",
-    }),
-    ("Tracking", {
-        "\u2705  Action Items": "Action Items",
-        "\u2795  Add Action": "Add Action",
-        "\U0001F4AC  Record Feedback": "Record Feedback",
-    }),
-    ("Goals", {
-        "\U0001F3AF  Quarterly Goals": "Quarterly Goals",
-        "\U0001F4DD  Add Goal": "Add Goal",
-    }),
-    ("Resources", {
-        "\U0001F4CB  Agenda Templates": "Agenda Templates",
-        "\U0001F4A1  Management Tips": "Management Tips",
-    }),
-    ("Settings", {
-        "\u2699\uFE0F  Configuration": "Configuration",
-    }),
-]
-
-DISPATCH = {
-    "Dashboard": page_dashboard,
-    "Schedule Event": page_schedule_event,
-    "Upcoming Events": page_upcoming_events,
-    "Event History": page_event_history,
-    "Team Roster": page_team_roster,
-    "Add Member": page_add_member,
-    "Action Items": page_action_items,
-    "Add Action": page_add_action,
-    "Record Feedback": page_record_feedback,
-    "Quarterly Goals": page_quarterly_goals,
-    "Add Goal": page_add_goal,
-    "Agenda Templates": page_agenda_templates,
-    "Management Tips": page_management_tips,
-    "Configuration": page_configuration,
-}
-
 
 _NAV_GROUPS = [
     (None, {
