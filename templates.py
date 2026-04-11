@@ -633,6 +633,13 @@ _WISDOM_KEYWORDS = {
     "growth": ["growth", "career", "development", "learning", "mentor", "coaching"],
     "change": ["change", "transformation", "adapt", "transition", "reorg"],
     "sales": ["sales", "selling", "customer", "buying", "negotiat", "value"],
+    "boundaries": ["casual", "gossip", "boundaries", "inappropriate", "unprofessional",
+                    "too friendly", "crossed a line", "overshared", "vented", "complained",
+                    "talked about", "said too much"],
+    "rolepower": ["boss", "authority", "role power", "position", "perception",
+                   "how they see me", "respect", "credibility", "professional"],
+    "ethics": ["ethics", "integrity", "honest", "fair", "unfair", "right thing",
+               "moral", "values", "principle", "should I have"],
 }
 
 

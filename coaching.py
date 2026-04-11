@@ -226,7 +226,30 @@ def _generate_template_questions(notes, context_type, member_name=None):
     text = notes.lower()
     name = member_name or "this person"
 
-    # Situation-specific questions
+    # -- Specific situations first (higher priority than generic categories) --
+
+    if any(w in text for w in ["casual", "gossip", "unprofessional", "too friendly",
+                                "vented", "overshared", "said too much",
+                                "crossed a line", "complained about", "talked about"]):
+        questions.append("Horstman: 'Your directs don't see you as a nice person. "
+                        "They see you as their boss.' What did they really hear?")
+        questions.append("What would happen if what you said got repeated? "
+                        "Because assume it will.")
+        questions.append("What boundary do you need to reset — and how will you "
+                        "do it without making it awkward?")
+        questions.append("Hughes Johnson: 'Say the thing you think you cannot say.' "
+                        "But only upward and to peers — never down about others.")
+
+    if any(w in text for w in ["ethics", "integrity", "right thing", "fair",
+                                "unfair", "honest", "should i have", "moral"]):
+        questions.append("What would you think if your team saw you do this?")
+        questions.append("Dellanna: 'Management debt: sacrificing clarity, fairness, "
+                        "or consistency to avoid a difficult conversation.' "
+                        "Are you accumulating debt here?")
+        questions.append("What's the principle you want to be known for upholding?")
+
+    # -- General situation questions --
+
     if any(w in text for w in ["frustrated", "angry", "annoyed", "upset"]):
         questions.append(f"What is {name}'s perspective on this situation?")
         questions.append("Is this a pattern, or a one-time event? What evidence do you have?")
