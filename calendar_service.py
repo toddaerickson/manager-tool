@@ -19,9 +19,12 @@ from database import get_config
 def generate_ics(event, organizer_name=None, organizer_email=None,
                  attendee_name=None, attendee_email=None):
     uid = f"{uuid.uuid4()}@manager-tool"
-    date_str = event["scheduled_date"]
-    time_str = event["scheduled_time"]
-    dt_start = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+    date_str = event.get("scheduled_date", "")
+    time_str = event.get("scheduled_time", "00:00")
+    try:
+        dt_start = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        dt_start = datetime.now()
     dt_end = dt_start + timedelta(minutes=event.get("duration_minutes", 30))
 
     fmt = "%Y%m%dT%H%M%S"
@@ -139,7 +142,8 @@ def send_calendar_invite(event, recipient_email, recipient_name=None):
     msg.attach(cal_part)
 
     try:
-        server = smtplib.SMTP(smtp_server, int(smtp_port))
+        port = int(smtp_port) if smtp_port and str(smtp_port).isdigit() else 587
+        server = smtplib.SMTP(smtp_server, port)
         server.ehlo(); server.starttls(); server.ehlo()
         server.login(smtp_user, smtp_password)
         server.sendmail(manager_email, [recipient_email], msg.as_string())
@@ -271,7 +275,8 @@ def send_weekly_digest(manager_id=None):
     msg.attach(MIMEText(html_body, "html"))
 
     try:
-        server = smtplib.SMTP(smtp_server, int(smtp_port))
+        port = int(smtp_port) if smtp_port and str(smtp_port).isdigit() else 587
+        server = smtplib.SMTP(smtp_server, port)
         server.ehlo(); server.starttls(); server.ehlo()
         server.login(smtp_user, smtp_password)
         server.sendmail(manager_email, [manager_email], msg.as_string())

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import sqlite3
 import os
-import base64
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -334,8 +333,8 @@ def init_db():
                     break
             else:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Schema migration check skipped: %s", e)
     conn = get_connection()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS managers (
@@ -586,8 +585,8 @@ def init_db():
         if "coaching_response" not in cols:
             conn.execute("ALTER TABLE journal_entries ADD COLUMN coaching_response TEXT")
             conn.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Column migration skipped: %s", e)
 
     # One-time backfill: assign orphaned data to the sole manager
     try:
@@ -607,8 +606,8 @@ def init_db():
             conn.execute(
                 "INSERT INTO config (key, value) VALUES ('_migration_backfill_done', '1')")
             conn.commit()
-    except Exception:
-        pass  # Safe to skip — backfill is best-effort
+    except Exception as e:
+        logger.debug("Backfill migration skipped: %s", e)
 
     conn.close()
 
@@ -652,7 +651,8 @@ def create_manager(username: str, display_name: str, password: str, email: str |
              work_schedule, timezone),
         )
         _commit(conn)
-    except Exception:
+    except Exception as e:
+        logger.error("Failed to create manager '%s': %s", username, e)
         conn.close()
         return None
     conn.close()

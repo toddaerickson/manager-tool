@@ -746,31 +746,6 @@ def _render_member_detail(summary):
                     st.rerun()
 
 
-def page_add_member():
-    st.title("Add Team Member")
-
-    # Single-column form (#7)
-    with st.form("add_member"):
-        name = st.text_input("Full Name *")
-        email = st.text_input("Email")
-        role = st.text_input("Role / Title")
-        start_date = st.date_input("Start Date", value=datetime.now().date())
-        notes = st.text_input("Notes")
-        submitted = st.form_submit_button("Add Member", use_container_width=True)
-
-    if submitted:
-        if not name:
-            st.error("Name is required.")
-        else:
-            mid = db.add_team_member(
-                name, email or None, role or None,
-                start_date.strftime("%Y-%m-%d"), notes or None,
-                manager_id=_mid(),
-            )
-            st.toast(f"Added {name} (ID: {mid})", icon="\u2705")
-            st.rerun()
-
-
 # -- Tracking ---------------------------------------------------------------
 
 def page_action_items():
@@ -840,31 +815,6 @@ def page_action_items():
         if st.button("Delete Action Item", key="del_action_btn"):
             db.delete_action_item(int(del_id))
             set_toast("success", f"Action item #{del_id} deleted.")
-            st.rerun()
-
-
-def page_add_action():
-    st.title("Add Action Item")
-
-    # Single-column form (#7)
-    with st.form("add_action"):
-        desc = st.text_input("Description *")
-        assignee = st.text_input("Assignee")
-        due_date = st.date_input("Due Date", value=None)
-        event_id = st.text_input("Related Event ID (optional)")
-        submitted = st.form_submit_button("Add Action Item",
-                                          use_container_width=True)
-
-    if submitted:
-        if not desc:
-            st.error("Description is required.")
-        else:
-            eid = int(event_id) if event_id and event_id.isdigit() else None
-            due = due_date.strftime("%Y-%m-%d") if due_date else None
-            aid = db.add_action_item(desc, event_id=eid,
-                                     assignee=assignee or None, due_date=due,
-                                     manager_id=_mid())
-            st.toast(f"Action item #{aid} added.", icon="\u2705")
             st.rerun()
 
 
@@ -974,38 +924,6 @@ def page_quarterly_goals():
                 db.delete_goal(int(del_gid))
                 st.toast(f"Goal #{del_gid} deleted.", icon="\u2705")
                 st.rerun()
-
-
-def page_add_goal():
-    st.title("Add Quarterly Goal")
-
-    names, name_map = member_options()
-    if not names:
-        st.warning("No team members yet. Add one first.")
-        return
-
-    now = datetime.now()
-    q = (now.month - 1) // 3 + 1
-    default_quarter = f"Q{q} {now.year}"
-
-    # Single-column form (#7)
-    with st.form("add_goal"):
-        member_name = st.selectbox("Team Member", names)
-        quarter = st.text_input("Quarter", value=default_quarter)
-        description = st.text_input("Goal Description *")
-        key_results = st.text_area("Key Results (one per line, optional)")
-        submitted = st.form_submit_button("Add Goal", use_container_width=True)
-
-    if submitted:
-        mid = name_map.get(member_name)
-        if not mid:
-            st.error("Select a team member.")
-        elif not description:
-            st.error("Description is required.")
-        else:
-            gid = db.add_goal(mid, quarter, description, key_results or None)
-            st.toast(f"Goal #{gid} added for {member_name}.", icon="\u2705")
-            st.rerun()
 
 
 # -- Resources --------------------------------------------------------------
@@ -2065,7 +1983,8 @@ def main():
 
         st.caption("TRACKING")
         # Badge counts for urgency
-        overdue_actions = len(db.get_weekly_summary(manager_id=_mid()).get("overdue_actions", []))
+        _summary = db.get_weekly_summary(manager_id=_mid()) or {}
+        overdue_actions = len(_summary.get("overdue_actions", []))
         actions_label = f"\u2705  Actions ({overdue_actions} overdue)" if overdue_actions else "\u2705  Actions"
         _nav_button(actions_label, "Actions", current_page)
         _nav_button("\U0001F4AC  Feedback", "Feedback", current_page)
