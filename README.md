@@ -218,9 +218,18 @@ streamlit run web_app.py
 ### Production (Supabase)
 1. Create a Supabase project
 2. Run `schema_postgres.sql` in the SQL Editor
-3. Set `DATABASE_URL` as a Streamlit secret or environment variable
-4. Optionally set `CONFIG_ENCRYPTION_KEY` for config value encryption
-5. Deploy to Streamlit Cloud or any Python hosting
+3. Get the **Session Pooler** connection string from Supabase (Settings → Database → Connection Pooling). It looks like:
+   ```
+   postgresql://postgres.PROJECT_REF:PASSWORD@aws-X-region.pooler.supabase.com:5432/postgres
+   ```
+   **Important**: Use the pooler URL, not the direct connection. Streamlit Cloud cannot reach Supabase via IPv6 (direct), only IPv4 (pooler).
+4. Set `DATABASE_URL` as a Streamlit secret:
+   ```toml
+   # .streamlit/secrets.toml (or Streamlit Cloud Secrets UI)
+   DATABASE_URL = "postgresql://postgres.YOUR_REF:YOUR_PW@aws-X-region.pooler.supabase.com:5432/postgres"
+   ```
+5. Optionally set `CONFIG_ENCRYPTION_KEY` for config value encryption
+6. Deploy to Streamlit Cloud or any Python hosting
 
 ## Dependencies
 
@@ -237,10 +246,16 @@ cryptography>=41.0.0
 ## Tests
 
 ```bash
-pip install pytest
+pip install pytest bcrypt cryptography
 python -m pytest tests/ -v
 # 61 tests covering database, coaching, and templates
 ```
+
+## Development with Claude Code
+
+This project includes a `CLAUDE.md` file with:
+- Project architecture context for AI-assisted development
+- A **code-validator** skill that activates on review/debug requests with a mandatory validation checklist, troubleshooting recovery table, and critical rules (no hallucinations, test-first debugging)
 
 ## License
 
