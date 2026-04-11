@@ -228,7 +228,7 @@ def _show_auth_screen():
 
 def navigate(page_name):
     """Set the active page in session state."""
-    st.session_state["page"] = page_name
+    st.session_state["nav_page"] = page_name
 
 
 def df_from(rows, columns=None):
