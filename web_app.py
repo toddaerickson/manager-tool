@@ -91,20 +91,32 @@ st.markdown("""
     [data-testid="stSidebar"] .stMarkdown p strong {
         color: #f9a825 !important;
     }
-    /* Compact nav buttons */
+    /* Compact nav buttons — tight spacing */
+    [data-testid="stSidebar"] .stButton {
+        margin-bottom: -0.6rem !important;
+    }
     [data-testid="stSidebar"] .stButton button {
-        padding: 0.3rem 0.6rem !important;
-        font-size: 0.85rem !important;
-        min-height: 2rem !important;
+        padding: 0.2rem 0.5rem !important;
+        font-size: 0.82rem !important;
+        min-height: 1.8rem !important;
+        margin: 0 !important;
     }
     /* Section labels */
     [data-testid="stSidebar"] .stCaption {
-        font-size: 0.65rem !important;
-        letter-spacing: 0.08em !important;
+        font-size: 0.6rem !important;
+        letter-spacing: 0.1em !important;
         text-transform: uppercase !important;
-        margin-top: 0.6rem !important;
-        margin-bottom: 0.2rem !important;
-        opacity: 0.6 !important;
+        margin-top: 0.4rem !important;
+        margin-bottom: -0.4rem !important;
+        padding-bottom: 0 !important;
+        opacity: 0.5 !important;
+    }
+    /* Reduce general sidebar vertical spacing */
+    [data-testid="stSidebar"] .stMarkdown {
+        margin-bottom: -0.5rem !important;
+    }
+    [data-testid="stSidebar"] hr {
+        margin: 0.4rem 0 !important;
     }
 </style>
 """, unsafe_allow_html=True)
