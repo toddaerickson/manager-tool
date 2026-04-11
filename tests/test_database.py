@@ -346,3 +346,44 @@ class TestDecisionLog:
         db.delete_decision(did)
 
         assert len(db.list_decisions(manager_id=mid)) == 0
+
+
+class TestCoachSuggestions:
+    def test_save_and_retrieve(self):
+        mid = db.create_manager("mgr", "Mgr", "pass1234")
+        db.save_coach_suggestion(mid, "Write your journal", tier="rule",
+                                 action_page="Journal")
+        suggestion = db.get_todays_suggestion(mid)
+        assert suggestion is not None
+        assert suggestion["suggestion"] == "Write your journal"
+        assert suggestion["tier"] == "rule"
+        assert suggestion["action_page"] == "Journal"
+
+    def test_dismiss(self):
+        mid = db.create_manager("mgr2", "Mgr2", "pass1234")
+        db.save_coach_suggestion(mid, "Do something", tier="rule")
+        db.dismiss_todays_suggestion(mid)
+        assert db.get_todays_suggestion(mid) is None
+
+    def test_ai_overrides_rule(self):
+        mid = db.create_manager("mgr3", "Mgr3", "pass1234")
+        db.save_coach_suggestion(mid, "Rule suggestion", tier="rule")
+        db.save_coach_suggestion(mid, "AI suggestion", tier="ai")
+        suggestion = db.get_todays_suggestion(mid)
+        assert suggestion["tier"] == "ai"
+        assert suggestion["suggestion"] == "AI suggestion"
+
+    def test_isolation(self):
+        m1 = db.create_manager("cs_m1", "M1", "pass1234")
+        m2 = db.create_manager("cs_m2", "M2", "pass1234")
+        db.save_coach_suggestion(m1, "For M1", tier="rule")
+        db.save_coach_suggestion(m2, "For M2", tier="rule")
+        assert db.get_todays_suggestion(m1)["suggestion"] == "For M1"
+        assert db.get_todays_suggestion(m2)["suggestion"] == "For M2"
+
+    def test_replaces_same_tier_same_day(self):
+        mid = db.create_manager("mgr4", "Mgr4", "pass1234")
+        db.save_coach_suggestion(mid, "First", tier="rule")
+        db.save_coach_suggestion(mid, "Second", tier="rule")
+        suggestion = db.get_todays_suggestion(mid)
+        assert suggestion["suggestion"] == "Second"

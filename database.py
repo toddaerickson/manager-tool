@@ -564,6 +564,18 @@ def init_db():
             updated_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (manager_id) REFERENCES managers(id)
         );
+
+        CREATE TABLE IF NOT EXISTS coach_suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
+            suggestion_date TEXT NOT NULL,
+            tier TEXT NOT NULL DEFAULT 'rule' CHECK(tier IN ('rule', 'ai')),
+            suggestion TEXT NOT NULL,
+            action_page TEXT,
+            dismissed INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id)
+        );
     """)
     conn.commit()
 
@@ -2172,5 +2184,77 @@ def get_decisions_due_for_review(manager_id: int | None = None) -> list[dict[str
         params.append(manager_id)
     sql += " ORDER BY review_date"
     rows = _fetchall(conn, sql, params or None)
+    conn.close()
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Coach Suggestions (daily cached suggestions)
+# ---------------------------------------------------------------------------
+
+def save_coach_suggestion(manager_id: int, suggestion: str,
+                          tier: str = "rule",
+                          action_page: str | None = None,
+                          suggestion_date: str | None = None) -> int | None:
+    """Save a coach suggestion, replacing any existing one for the same date/tier."""
+    if not suggestion_date:
+        suggestion_date = datetime.now().date().isoformat()
+    conn = get_connection()
+    # Remove existing suggestion for same date/tier
+    _exec(conn,
+          "DELETE FROM coach_suggestions WHERE manager_id = ? "
+          "AND suggestion_date = ? AND tier = ?",
+          (manager_id, suggestion_date, tier))
+    sid = _exec_returning_id(
+        conn,
+        "INSERT INTO coach_suggestions "
+        "(manager_id, suggestion_date, tier, suggestion, action_page) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (manager_id, suggestion_date, tier, suggestion, action_page),
+    )
+    _commit(conn)
+    conn.close()
+    return sid
+
+
+def get_todays_suggestion(manager_id: int) -> dict[str, Any] | None:
+    """Get today's active (non-dismissed) suggestion. Prefers AI tier over rule."""
+    today = datetime.now().date().isoformat()
+    conn = get_connection()
+    # Try AI tier first, then rule
+    row = _fetchone(
+        conn,
+        "SELECT * FROM coach_suggestions "
+        "WHERE manager_id = ? AND suggestion_date = ? AND dismissed = 0 "
+        "ORDER BY CASE tier WHEN 'ai' THEN 0 ELSE 1 END LIMIT 1",
+        (manager_id, today),
+    )
+    conn.close()
+    return row
+
+
+def dismiss_todays_suggestion(manager_id: int) -> None:
+    """Dismiss all of today's suggestions for this manager."""
+    today = datetime.now().date().isoformat()
+    conn = get_connection()
+    _exec(conn,
+          "UPDATE coach_suggestions SET dismissed = 1 "
+          "WHERE manager_id = ? AND suggestion_date = ?",
+          (manager_id, today))
+    _commit(conn)
+    conn.close()
+
+
+def get_recent_journal_content(manager_id: int, days: int = 7) -> list[dict[str, Any]]:
+    """Get recent journal entries for AI context building."""
+    cutoff = (datetime.now().date() - timedelta(days=days)).isoformat()
+    conn = get_connection()
+    rows = _fetchall(
+        conn,
+        "SELECT entry_date, entry_type, content, mood, energy "
+        "FROM journal_entries WHERE manager_id = ? AND entry_date >= ? "
+        "ORDER BY entry_date DESC",
+        (manager_id, cutoff),
+    )
     conn.close()
     return rows

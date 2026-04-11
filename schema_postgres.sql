@@ -212,3 +212,15 @@ CREATE TABLE IF NOT EXISTS decisions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Daily coach suggestions (cached, one per manager per day)
+CREATE TABLE IF NOT EXISTS coach_suggestions (
+    id SERIAL PRIMARY KEY,
+    manager_id INTEGER,
+    suggestion_date TEXT NOT NULL,
+    tier TEXT NOT NULL DEFAULT 'rule' CHECK(tier IN ('rule', 'ai')),
+    suggestion TEXT NOT NULL,
+    action_page TEXT,
+    dismissed INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

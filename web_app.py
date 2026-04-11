@@ -331,6 +331,33 @@ def page_dashboard():
     st.title("Dashboard")
     show_toast()
 
+    # -- Daily Coach Suggestion (personalized first action) --
+    if _mid():
+        suggestion = coaching.get_daily_suggestion(_mid())
+        if suggestion and suggestion.get("suggestion"):
+            tier_icon = "\U0001F9E0" if suggestion.get("tier") == "ai" else "\U0001F4A1"
+            sc1, sc2 = st.columns([6, 1])
+            with sc1:
+                st.markdown(
+                    f'<div style="background:linear-gradient(90deg,#1a1a2e,#16213e);'
+                    f'border-left:4px solid #4F8BF9;border-radius:8px;padding:14px 18px;'
+                    f'margin-bottom:16px;">'
+                    f'<span style="color:#4F8BF9;font-weight:600;">'
+                    f'{tier_icon} Coach</span><br>'
+                    f'<span style="color:#e0e0e0;font-style:italic;">'
+                    f'{suggestion["suggestion"]}</span></div>',
+                    unsafe_allow_html=True,
+                )
+            with sc2:
+                action_page = suggestion.get("action_page")
+                if action_page:
+                    if st.button("Go", key="coach_go", use_container_width=True):
+                        navigate(action_page)
+                        st.rerun()
+                if st.button("Got it", key="coach_dismiss", use_container_width=True):
+                    db.dismiss_todays_suggestion(_mid())
+                    st.rerun()
+
     # -- Daily Wisdom (variable reward — different every day) --
     wisdom = templates.get_daily_wisdom()
     st.info(f"\U0001F4A1 **Daily Wisdom #{wisdom['number']}:** {wisdom['text']}")
