@@ -279,21 +279,21 @@ def _sql_now():
 
 
 def _sql_current_date():
-    """SQL expression for current date."""
-    return "CURRENT_DATE" if _detect_pg() else "date('now')"
+    """SQL expression for current date (as text, for comparison with TEXT date columns)."""
+    return "CURRENT_DATE::text" if _detect_pg() else "date('now')"
 
 
 def _sql_days_since(date_col):
-    """SQL expression: integer days between now and a date column."""
+    """SQL expression: integer days between now and a date column (TEXT stored as YYYY-MM-DD)."""
     if _detect_pg():
-        return f"EXTRACT(DAY FROM NOW() - {date_col}::timestamp)::int"
+        return f"EXTRACT(DAY FROM NOW() - {date_col}::date)::int"
     return f"CAST(julianday('now') - julianday({date_col}) AS INTEGER)"
 
 
 def _sql_date_offset(days_param):
-    """SQL expression: date N days ago. Pass the parameter placeholder."""
+    """SQL expression: date N days ago (as text, for comparison with TEXT date columns)."""
     if _detect_pg():
-        return f"CURRENT_DATE - ({days_param} || ' days')::interval"
+        return f"(CURRENT_DATE - ({days_param} || ' days')::interval)::date::text"
     return f"date('now', {days_param} || ' days')"
 
 
