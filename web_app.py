@@ -91,6 +91,21 @@ st.markdown("""
     [data-testid="stSidebar"] .stMarkdown p strong {
         color: #f9a825 !important;
     }
+    /* Compact nav buttons */
+    [data-testid="stSidebar"] .stButton button {
+        padding: 0.3rem 0.6rem !important;
+        font-size: 0.85rem !important;
+        min-height: 2rem !important;
+    }
+    /* Section labels */
+    [data-testid="stSidebar"] .stCaption {
+        font-size: 0.65rem !important;
+        letter-spacing: 0.08em !important;
+        text-transform: uppercase !important;
+        margin-top: 0.6rem !important;
+        margin-bottom: 0.2rem !important;
+        opacity: 0.6 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -595,11 +610,35 @@ def page_team_roster():
     st.title("Team Roster")
 
     members = db.list_team_members(manager_id=_mid())
+
+    # -- Inline Add Member form (collapsible) --
+    with st.expander("Add New Team Member", expanded=not members):
+        with st.form("add_member"):
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                name = st.text_input("Full Name *")
+                email = st.text_input("Email")
+            with ac2:
+                role = st.text_input("Role / Title")
+                start_date = st.date_input("Start Date", value=datetime.now().date())
+            notes = st.text_input("Notes")
+            submitted = st.form_submit_button("Add Member", use_container_width=True)
+        if submitted:
+            if not name:
+                st.error("Name is required.")
+            else:
+                db.add_team_member(
+                    name, email or None, role or None,
+                    start_date.strftime("%Y-%m-%d"), notes or None,
+                    manager_id=_mid(),
+                )
+                st.toast(f"Added {name}", icon="\u2705")
+                st.rerun()
+
     if not members:
-        st.info("No team members yet. Use **Add Member** to add someone.")
         return
 
-    # Search (#4)
+    # Search
     search = st.text_input("Search by name, email, or role", key="tr_search")
     if search:
         q = search.lower()
@@ -708,7 +747,29 @@ def page_add_member():
 # -- Tracking ---------------------------------------------------------------
 
 def page_action_items():
-    st.title("Pending Action Items")
+    st.title("Action Items")
+
+    # -- Inline Add form --
+    with st.expander("Add Action Item"):
+        with st.form("add_action"):
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                desc = st.text_input("Description *")
+                assignee = st.text_input("Assignee")
+            with ac2:
+                due_date = st.date_input("Due Date", value=None)
+                event_id = st.text_input("Related Event ID (optional)")
+            if st.form_submit_button("Add Action Item", use_container_width=True):
+                if not desc:
+                    st.error("Description is required.")
+                else:
+                    eid = int(event_id) if event_id and event_id.isdigit() else None
+                    due = due_date.strftime("%Y-%m-%d") if due_date else None
+                    db.add_action_item(desc, event_id=eid,
+                                       assignee=assignee or None, due_date=due,
+                                       manager_id=_mid())
+                    st.toast("Action item added.", icon="\u2705")
+                    st.rerun()
 
     actions = db.get_pending_action_items(manager_id=_mid())
     if not actions:
@@ -830,6 +891,32 @@ def page_record_feedback():
 def page_quarterly_goals():
     st.title("Quarterly Goals")
 
+    # -- Inline Add Goal form --
+    names, name_map = member_options()
+    if names:
+        with st.expander("Add New Goal"):
+            now = datetime.now()
+            q = (now.month - 1) // 3 + 1
+            default_quarter = f"Q{q} {now.year}"
+            with st.form("add_goal"):
+                gc1, gc2 = st.columns(2)
+                with gc1:
+                    member_name = st.selectbox("Team Member", names)
+                    quarter = st.text_input("Quarter", value=default_quarter)
+                with gc2:
+                    description = st.text_input("Goal Description *")
+                    key_results = st.text_area("Key Results (one per line)", height=68)
+                if st.form_submit_button("Add Goal", use_container_width=True):
+                    mid_g = name_map.get(member_name)
+                    if not mid_g:
+                        st.error("Select a team member.")
+                    elif not description:
+                        st.error("Description is required.")
+                    else:
+                        db.add_goal(mid_g, quarter, description, key_results or None)
+                        st.toast(f"Goal added for {member_name}.", icon="\u2705")
+                        st.rerun()
+
     goals = db.list_goals(manager_id=_mid())
     if not goals:
         st.info("No goals set yet.")
@@ -896,48 +983,50 @@ def page_add_goal():
 
 # -- Resources --------------------------------------------------------------
 
-def page_agenda_templates():
-    st.title("Meeting Agenda Templates")
+def page_resources():
+    st.title("Resources")
 
-    type_options = ["check_in", "coaching", "one_on_one", "quarterly_review"]
-    type_labels = [templates.EVENT_TYPES[t]["label"] for t in type_options]
+    tab_agendas, tab_tips, tab_patterns = st.tabs([
+        "Agenda Templates", "Management Tips", "Anti-Patterns"
+    ])
 
-    label = st.selectbox("Meeting Type", type_labels)
-    name = st.text_input("Participant Name", value="Team Member")
+    with tab_agendas:
+        type_options = ["check_in", "coaching", "one_on_one", "quarterly_review"]
+        type_labels = [templates.EVENT_TYPES[t]["label"] for t in type_options]
 
-    idx = type_labels.index(label)
-    event_type = type_options[idx]
-    agenda = templates.generate_agenda(event_type, name or None)
-    st.code(agenda, language=None)
+        label = st.selectbox("Meeting Type", type_labels)
+        name = st.text_input("Participant Name", value="Team Member")
 
-    if event_type == "one_on_one":
-        with st.expander("Topic Bank — Conversation Starters"):
-            topics = templates.get_topic_suggestions()
-            for category, questions in topics.items():
-                st.markdown(f"**{category}**")
-                for q in questions:
-                    st.markdown(f"- {q}")
+        idx = type_labels.index(label)
+        event_type = type_options[idx]
+        agenda = templates.generate_agenda(event_type, name or None)
+        st.code(agenda, language=None)
 
+        if event_type == "one_on_one":
+            with st.expander("Topic Bank — Conversation Starters"):
+                topics = templates.get_topic_suggestions()
+                for category, questions in topics.items():
+                    st.markdown(f"**{category}**")
+                    for q in questions:
+                        st.markdown(f"- {q}")
 
-def page_management_tips():
-    st.title("Management Tips")
+    with tab_tips:
+        tips = templates.get_tips_by_count(8)
+        for i, tip in enumerate(tips, 1):
+            st.markdown(f"**{i}.** {tip}")
 
-    tips = templates.get_tips_by_count(8)
-    for i, tip in enumerate(tips, 1):
-        st.markdown(f"**{i}.** {tip}")
+        with st.expander("Weekly Manager Self-Assessment"):
+            for dim, question in templates.SELF_ASSESSMENT_DIMENSIONS:
+                st.markdown(f"**{dim}** — {question} &nbsp; ___/5")
 
-    st.divider()
-    st.subheader("Common Anti-Patterns")
-    for ap in templates.ANTI_PATTERNS:
-        with st.container():
-            st.markdown(f":red[**{ap['name']}**]")
-            st.markdown(f"*Symptom:* {ap['symptom']}")
-            st.markdown(f":green[*Fix:* {ap['fix']}]")
-            st.markdown("---")
-
-    with st.expander("Weekly Manager Self-Assessment"):
-        for dim, question in templates.SELF_ASSESSMENT_DIMENSIONS:
-            st.markdown(f"**{dim}** — {question} &nbsp; ___/5")
+    with tab_patterns:
+        st.subheader("Common Anti-Patterns")
+        for ap in templates.ANTI_PATTERNS:
+            with st.container():
+                st.markdown(f":red[**{ap['name']}**]")
+                st.markdown(f"*Symptom:* {ap['symptom']}")
+                st.markdown(f":green[*Fix:* {ap['fix']}]")
+                st.markdown("---")
 
 
 # -- Settings ---------------------------------------------------------------
@@ -1866,73 +1955,53 @@ def page_decision_log():
 # Sidebar navigation & dispatch
 # ---------------------------------------------------------------------------
 
-_NAV_GROUPS = [
-    (None, {
-        "\U0001F4CA  Dashboard": "Dashboard",
-    }),
-    ("\U0001F4D3 My Journal", {
-        "\u270D\uFE0F  Journal": "Journal",
-    }),
-    ("\U0001F4C5 Activities", {
-        "\u2795  Schedule Event": "Schedule Event",
-        "\U0001F4C6  Upcoming": "Upcoming Events",
-        "\U0001F4DA  History": "Event History",
-    }),
-    ("\U0001F465 People", {
-        "\U0001F4CB  Team Roster": "Team Roster",
-        "\U0001F464  Add Member": "Add Member",
-        "\U0001F550  Timeline": "Member Timeline",
-        "\U0001F4DD  1:1 Notes": "Running Notes",
-        "\U0001F680  Career Dev": "Career Development",
-    }),
-    ("\U0001F4CC Tracking", {
-        "\u2705  Action Items": "Action Items",
-        "\u2795  Add Action": "Add Action",
-        "\U0001F4AC  Feedback": "Record Feedback",
-        "\U0001F4E4  Delegations": "Delegations",
-    }),
-    ("\U0001F3AF Goals", {
-        "\U0001F4CA  Quarterly Goals": "Quarterly Goals",
-        "\u2795  Add Goal": "Add Goal",
-    }),
-    ("\U0001F4A1 Insights", {
-        "\U0001F4C8  Analytics": "Analytics",
-        "\U0001F9E0  Decision Log": "Decision Log",
-    }),
-    ("\U0001F4DA Resources", {
-        "\U0001F4DD  Agendas": "Agenda Templates",
-        "\U0001F4A1  Tips": "Management Tips",
-    }),
-    ("\u2699\uFE0F Settings", {
-        "\U0001F464  My Profile": "My Profile",
-        "\U0001F527  Configuration": "Configuration",
-    }),
-]
-
 _DISPATCH = {
     "Dashboard": page_dashboard,
     "Journal": page_journal,
-    "Schedule Event": page_schedule_event,
-    "Upcoming Events": page_upcoming_events,
-    "Event History": page_event_history,
+    "Team": page_team_roster,
+    "Timeline": page_member_timeline,
+    "1:1 Notes": page_running_notes,
+    "Career Dev": page_career_development,
+    "Actions": page_action_items,
+    "Feedback": page_record_feedback,
+    "Delegations": page_delegations,
+    "Goals": page_quarterly_goals,
+    "Decisions": page_decision_log,
+    "Schedule": page_schedule_event,
+    "Upcoming": page_upcoming_events,
+    "History": page_event_history,
+    "Analytics": page_analytics,
+    "Resources": page_resources,
+    "Settings": page_configuration,
+    "My Profile": page_my_profile,
+    # Legacy routes (for backward compat with session state)
     "Team Roster": page_team_roster,
-    "Add Member": page_add_member,
     "Member Timeline": page_member_timeline,
     "Running Notes": page_running_notes,
     "Career Development": page_career_development,
     "Action Items": page_action_items,
-    "Add Action": page_add_action,
     "Record Feedback": page_record_feedback,
-    "Delegations": page_delegations,
     "Quarterly Goals": page_quarterly_goals,
-    "Add Goal": page_add_goal,
-    "Analytics": page_analytics,
     "Decision Log": page_decision_log,
-    "Agenda Templates": page_agenda_templates,
-    "Management Tips": page_management_tips,
-    "My Profile": page_my_profile,
+    "Schedule Event": page_schedule_event,
+    "Upcoming Events": page_upcoming_events,
+    "Event History": page_event_history,
     "Configuration": page_configuration,
+    "Add Member": page_team_roster,
+    "Add Action": page_action_items,
+    "Add Goal": page_quarterly_goals,
+    "Agenda Templates": page_resources,
+    "Management Tips": page_resources,
 }
+
+
+def _nav_button(label, page_key, current_page):
+    """Render a compact nav button. Returns True if clicked."""
+    btn_type = "primary" if current_page == page_key else "secondary"
+    if st.button(label, key=f"nav_{page_key}",
+                 use_container_width=True, type=btn_type):
+        st.session_state["nav_page"] = page_key
+        st.rerun()
 
 
 def main():
@@ -1943,39 +2012,51 @@ def main():
     manager_name = st.session_state.get("manager_name", "Manager")
     current_page = st.session_state.get("nav_page", "Dashboard")
 
-    # -- Sidebar with grouped, icon-based navigation --
+    # -- Sidebar: flat, compact, workflow-ordered --
     with st.sidebar:
         st.markdown("### \U0001F4CB Manager Tool")
-        st.caption(f"*{manager_name}*")
 
-        # Streak badge at top of nav (loss aversion hook)
+        # Streak + daily status (engagement hook)
         streak = db.get_journal_streak(manager_id=_mid())
-        if streak > 0:
-            st.markdown(f"\U0001F525 **{streak}-day streak**")
+        today_entry = db.get_journal_entry_by_date(
+            datetime.now().date().isoformat(), "daily", manager_id=_mid())
+        streak_text = f"\U0001F525 **{streak}-day streak**" if streak > 0 else ""
+        journal_dot = "\U0001F7E2" if today_entry else "\U0001F534"
+        st.markdown(f"{streak_text} &nbsp; {journal_dot} *{manager_name}*")
 
         st.markdown("---")
 
-        for group_label, items in _NAV_GROUPS:
-            if group_label is None:
-                # Top-level items (Dashboard) — no group header
-                for btn_label, page_key in items.items():
-                    btn_type = "primary" if current_page == page_key else "secondary"
-                    if st.button(btn_label, key=f"nav_{page_key}",
-                                 use_container_width=True, type=btn_type):
-                        st.session_state["nav_page"] = page_key
-                        st.rerun()
-            else:
-                # Grouped items with expander — auto-expand active group
-                group_active = current_page in items.values()
-                with st.expander(f"**{group_label}**", expanded=group_active):
-                    for btn_label, page_key in items.items():
-                        btn_type = "primary" if current_page == page_key else "secondary"
-                        if st.button(btn_label, key=f"nav_{page_key}",
-                                     use_container_width=True, type=btn_type):
-                            st.session_state["nav_page"] = page_key
-                            st.rerun()
+        # -- Primary actions (daily use) --
+        _nav_button("\U0001F4CA  Dashboard", "Dashboard", current_page)
+        _nav_button("\u270D\uFE0F  Journal", "Journal", current_page)
+
+        st.caption("PEOPLE")
+        _nav_button("\U0001F465  Team", "Team", current_page)
+        _nav_button("\U0001F550  Timeline", "Timeline", current_page)
+        _nav_button("\U0001F4DD  1:1 Notes", "1:1 Notes", current_page)
+        _nav_button("\U0001F680  Career Dev", "Career Dev", current_page)
+
+        st.caption("TRACKING")
+        # Badge counts for urgency
+        overdue_actions = len(db.get_weekly_summary(manager_id=_mid()).get("overdue_actions", []))
+        actions_label = f"\u2705  Actions ({overdue_actions} overdue)" if overdue_actions else "\u2705  Actions"
+        _nav_button(actions_label, "Actions", current_page)
+        _nav_button("\U0001F4AC  Feedback", "Feedback", current_page)
+        _nav_button("\U0001F4E4  Delegations", "Delegations", current_page)
+        _nav_button("\U0001F3AF  Goals", "Goals", current_page)
+        _nav_button("\U0001F9E0  Decisions", "Decisions", current_page)
+
+        st.caption("EVENTS")
+        _nav_button("\U0001F4C5  Schedule", "Schedule", current_page)
+        _nav_button("\U0001F4C6  Upcoming", "Upcoming", current_page)
+        _nav_button("\U0001F4DA  History", "History", current_page)
+
+        st.caption("REFERENCE")
+        _nav_button("\U0001F4C8  Analytics", "Analytics", current_page)
+        _nav_button("\U0001F4DA  Resources", "Resources", current_page)
 
         st.markdown("---")
+        _nav_button("\u2699\uFE0F  Settings", "Settings", current_page)
         if st.button("\U0001F6AA  Log Out", use_container_width=True):
             for key in ["manager_id", "manager_name", "nav_page"]:
                 st.session_state.pop(key, None)
