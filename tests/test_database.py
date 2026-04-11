@@ -230,3 +230,160 @@ class TestFeedbackAndGoals:
         goals = db.list_goals(team_member_id=tid)
         assert len(goals) == 1
         assert goals[0]["description"] == "Ship v2.0"
+
+
+class TestDelegations:
+    def test_add_and_list(self):
+        mid = db.create_manager("mgr", "Mgr", "pass1234")
+        tid = db.add_team_member("Sarah", manager_id=mid)
+        did = db.add_delegation(
+            task="Lead sprint planning", team_member_id=tid,
+            outcome_expected="Team has clear priorities",
+            autonomy_level="guided", manager_id=mid)
+        assert did is not None
+
+        delegations = db.list_delegations(manager_id=mid)
+        assert len(delegations) == 1
+        assert delegations[0]["task"] == "Lead sprint planning"
+        assert delegations[0]["member_name"] == "Sarah"
+
+    def test_complete_delegation(self):
+        mid = db.create_manager("mgr2", "Mgr2", "pass1234")
+        did = db.add_delegation(task="Write docs", manager_id=mid)
+        db.update_delegation(did, status="completed")
+
+        active = db.list_delegations(manager_id=mid, status="active")
+        assert len(active) == 0
+
+    def test_isolation(self):
+        m1 = db.create_manager("del_m1", "M1", "pass1234")
+        m2 = db.create_manager("del_m2", "M2", "pass1234")
+        db.add_delegation(task="M1 task", manager_id=m1)
+        db.add_delegation(task="M2 task", manager_id=m2)
+
+        assert len(db.list_delegations(manager_id=m1)) == 1
+        assert len(db.list_delegations(manager_id=m2)) == 1
+
+    def test_active_count(self):
+        mid = db.create_manager("mgr3", "Mgr3", "pass1234")
+        db.add_delegation(task="Task 1", manager_id=mid)
+        db.add_delegation(task="Task 2", manager_id=mid)
+        assert db.get_active_delegations_count(manager_id=mid) == 2
+
+
+class TestRunningNotes:
+    def test_add_and_list(self):
+        mid = db.create_manager("mgr", "Mgr", "pass1234")
+        tid = db.add_team_member("Alice", manager_id=mid)
+        nid = db.add_running_note(
+            team_member_id=tid, content="Great presentation today",
+            category="praise", manager_id=mid)
+        assert nid is not None
+
+        notes = db.list_running_notes(tid, manager_id=mid)
+        assert len(notes) == 1
+        assert notes[0]["content"] == "Great presentation today"
+        assert notes[0]["category"] == "praise"
+
+    def test_ordering(self):
+        mid = db.create_manager("mgr2", "Mgr2", "pass1234")
+        tid = db.add_team_member("Bob", manager_id=mid)
+        db.add_running_note(tid, "Old note", note_date="2025-01-01", manager_id=mid)
+        db.add_running_note(tid, "New note", note_date="2025-01-15", manager_id=mid)
+
+        notes = db.list_running_notes(tid, manager_id=mid)
+        assert notes[0]["content"] == "New note"  # newest first
+
+    def test_delete(self):
+        mid = db.create_manager("mgr3", "Mgr3", "pass1234")
+        tid = db.add_team_member("Charlie", manager_id=mid)
+        nid = db.add_running_note(tid, "To delete", manager_id=mid)
+        db.delete_running_note(nid)
+
+        notes = db.list_running_notes(tid, manager_id=mid)
+        assert len(notes) == 0
+
+
+class TestDecisionLog:
+    def test_add_and_list(self):
+        mid = db.create_manager("mgr", "Mgr", "pass1234")
+        did = db.add_decision(
+            title="Hire a senior engineer",
+            context="Team is bottlenecked on backend work",
+            rationale="ROI > contractor, long-term investment",
+            expected_outcome="Reduce sprint carryover by 50%",
+            review_date="2025-06-01",
+            manager_id=mid)
+        assert did is not None
+
+        decisions = db.list_decisions(manager_id=mid)
+        assert len(decisions) == 1
+        assert decisions[0]["title"] == "Hire a senior engineer"
+        assert decisions[0]["status"] == "active"
+
+    def test_update_with_actual_outcome(self):
+        mid = db.create_manager("mgr2", "Mgr2", "pass1234")
+        did = db.add_decision(title="Switch to weekly releases", manager_id=mid)
+        db.update_decision(did, status="validated",
+                          actual_outcome="Reduced deployment risk significantly")
+
+        decisions = db.list_decisions(manager_id=mid)
+        assert decisions[0]["status"] == "validated"
+        assert "deployment risk" in decisions[0]["actual_outcome"]
+
+    def test_isolation(self):
+        m1 = db.create_manager("dec_m1", "M1", "pass1234")
+        m2 = db.create_manager("dec_m2", "M2", "pass1234")
+        db.add_decision(title="M1 decision", manager_id=m1)
+        db.add_decision(title="M2 decision", manager_id=m2)
+
+        assert len(db.list_decisions(manager_id=m1)) == 1
+        assert len(db.list_decisions(manager_id=m2)) == 1
+
+    def test_delete(self):
+        mid = db.create_manager("mgr3", "Mgr3", "pass1234")
+        did = db.add_decision(title="To delete", manager_id=mid)
+        db.delete_decision(did)
+
+        assert len(db.list_decisions(manager_id=mid)) == 0
+
+
+class TestCoachSuggestions:
+    def test_save_and_retrieve(self):
+        mid = db.create_manager("mgr", "Mgr", "pass1234")
+        db.save_coach_suggestion(mid, "Write your journal", tier="rule",
+                                 action_page="Journal")
+        suggestion = db.get_todays_suggestion(mid)
+        assert suggestion is not None
+        assert suggestion["suggestion"] == "Write your journal"
+        assert suggestion["tier"] == "rule"
+        assert suggestion["action_page"] == "Journal"
+
+    def test_dismiss(self):
+        mid = db.create_manager("mgr2", "Mgr2", "pass1234")
+        db.save_coach_suggestion(mid, "Do something", tier="rule")
+        db.dismiss_todays_suggestion(mid)
+        assert db.get_todays_suggestion(mid) is None
+
+    def test_ai_overrides_rule(self):
+        mid = db.create_manager("mgr3", "Mgr3", "pass1234")
+        db.save_coach_suggestion(mid, "Rule suggestion", tier="rule")
+        db.save_coach_suggestion(mid, "AI suggestion", tier="ai")
+        suggestion = db.get_todays_suggestion(mid)
+        assert suggestion["tier"] == "ai"
+        assert suggestion["suggestion"] == "AI suggestion"
+
+    def test_isolation(self):
+        m1 = db.create_manager("cs_m1", "M1", "pass1234")
+        m2 = db.create_manager("cs_m2", "M2", "pass1234")
+        db.save_coach_suggestion(m1, "For M1", tier="rule")
+        db.save_coach_suggestion(m2, "For M2", tier="rule")
+        assert db.get_todays_suggestion(m1)["suggestion"] == "For M1"
+        assert db.get_todays_suggestion(m2)["suggestion"] == "For M2"
+
+    def test_replaces_same_tier_same_day(self):
+        mid = db.create_manager("mgr4", "Mgr4", "pass1234")
+        db.save_coach_suggestion(mid, "First", tier="rule")
+        db.save_coach_suggestion(mid, "Second", tier="rule")
+        suggestion = db.get_todays_suggestion(mid)
+        assert suggestion["suggestion"] == "Second"

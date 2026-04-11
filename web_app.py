@@ -91,6 +91,21 @@ st.markdown("""
     [data-testid="stSidebar"] .stMarkdown p strong {
         color: #f9a825 !important;
     }
+    /* Compact nav buttons */
+    [data-testid="stSidebar"] .stButton button {
+        padding: 0.3rem 0.6rem !important;
+        font-size: 0.85rem !important;
+        min-height: 2rem !important;
+    }
+    /* Section labels */
+    [data-testid="stSidebar"] .stCaption {
+        font-size: 0.65rem !important;
+        letter-spacing: 0.08em !important;
+        text-transform: uppercase !important;
+        margin-top: 0.6rem !important;
+        margin-bottom: 0.2rem !important;
+        opacity: 0.6 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -316,6 +331,33 @@ def page_dashboard():
     st.title("Dashboard")
     show_toast()
 
+    # -- Daily Coach Suggestion (personalized first action) --
+    if _mid():
+        suggestion = coaching.get_daily_suggestion(_mid())
+        if suggestion and suggestion.get("suggestion"):
+            tier_icon = "\U0001F9E0" if suggestion.get("tier") == "ai" else "\U0001F4A1"
+            sc1, sc2 = st.columns([6, 1])
+            with sc1:
+                st.markdown(
+                    f'<div style="background:linear-gradient(90deg,#1a1a2e,#16213e);'
+                    f'border-left:4px solid #4F8BF9;border-radius:8px;padding:14px 18px;'
+                    f'margin-bottom:16px;">'
+                    f'<span style="color:#4F8BF9;font-weight:600;">'
+                    f'{tier_icon} Coach</span><br>'
+                    f'<span style="color:#e0e0e0;font-style:italic;">'
+                    f'{suggestion["suggestion"]}</span></div>',
+                    unsafe_allow_html=True,
+                )
+            with sc2:
+                action_page = suggestion.get("action_page")
+                if action_page:
+                    if st.button("Go", key="coach_go", use_container_width=True):
+                        navigate(action_page)
+                        st.rerun()
+                if st.button("Got it", key="coach_dismiss", use_container_width=True):
+                    db.dismiss_todays_suggestion(_mid())
+                    st.rerun()
+
     # -- Daily Wisdom (variable reward — different every day) --
     wisdom = templates.get_daily_wisdom()
     st.info(f"\U0001F4A1 **Daily Wisdom #{wisdom['number']}:** {wisdom['text']}")
@@ -343,6 +385,16 @@ def page_dashboard():
     if ap:
         p = ap[0]
         st.warning(f"**{p['pattern']}:** {p['evidence']} — {p['suggestion']}")
+
+    # -- Delegation & decision review nudges --
+    overdue_dels = db.get_overdue_delegations(manager_id=_mid())
+    if overdue_dels:
+        st.warning(f"\U0001F4E4 **{len(overdue_dels)} delegation(s) past check-in date** — "
+                   f"review them in Delegations.")
+    decisions_due = db.get_decisions_due_for_review(manager_id=_mid())
+    if decisions_due:
+        st.info(f"\U0001F9E0 **{len(decisions_due)} decision(s) due for review** — "
+                f"did they play out as expected? Check the Decision Log.")
 
     # -- Quick stats [C7: System 1 — emoji indicators for instant scanning] --
     summary = db.get_weekly_summary(manager_id=_mid())
@@ -585,11 +637,35 @@ def page_team_roster():
     st.title("Team Roster")
 
     members = db.list_team_members(manager_id=_mid())
+
+    # -- Inline Add Member form (collapsible) --
+    with st.expander("Add New Team Member", expanded=not members):
+        with st.form("add_member"):
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                name = st.text_input("Full Name *")
+                email = st.text_input("Email")
+            with ac2:
+                role = st.text_input("Role / Title")
+                start_date = st.date_input("Start Date", value=datetime.now().date())
+            notes = st.text_input("Notes")
+            submitted = st.form_submit_button("Add Member", use_container_width=True)
+        if submitted:
+            if not name:
+                st.error("Name is required.")
+            else:
+                db.add_team_member(
+                    name, email or None, role or None,
+                    start_date.strftime("%Y-%m-%d"), notes or None,
+                    manager_id=_mid(),
+                )
+                st.toast(f"Added {name}", icon="\u2705")
+                st.rerun()
+
     if not members:
-        st.info("No team members yet. Use **Add Member** to add someone.")
         return
 
-    # Search (#4)
+    # Search
     search = st.text_input("Search by name, email, or role", key="tr_search")
     if search:
         q = search.lower()
@@ -698,7 +774,29 @@ def page_add_member():
 # -- Tracking ---------------------------------------------------------------
 
 def page_action_items():
-    st.title("Pending Action Items")
+    st.title("Action Items")
+
+    # -- Inline Add form --
+    with st.expander("Add Action Item"):
+        with st.form("add_action"):
+            ac1, ac2 = st.columns(2)
+            with ac1:
+                desc = st.text_input("Description *")
+                assignee = st.text_input("Assignee")
+            with ac2:
+                due_date = st.date_input("Due Date", value=None)
+                event_id = st.text_input("Related Event ID (optional)")
+            if st.form_submit_button("Add Action Item", use_container_width=True):
+                if not desc:
+                    st.error("Description is required.")
+                else:
+                    eid = int(event_id) if event_id and event_id.isdigit() else None
+                    due = due_date.strftime("%Y-%m-%d") if due_date else None
+                    db.add_action_item(desc, event_id=eid,
+                                       assignee=assignee or None, due_date=due,
+                                       manager_id=_mid())
+                    st.toast("Action item added.", icon="\u2705")
+                    st.rerun()
 
     actions = db.get_pending_action_items(manager_id=_mid())
     if not actions:
@@ -820,6 +918,32 @@ def page_record_feedback():
 def page_quarterly_goals():
     st.title("Quarterly Goals")
 
+    # -- Inline Add Goal form --
+    names, name_map = member_options()
+    if names:
+        with st.expander("Add New Goal"):
+            now = datetime.now()
+            q = (now.month - 1) // 3 + 1
+            default_quarter = f"Q{q} {now.year}"
+            with st.form("add_goal"):
+                gc1, gc2 = st.columns(2)
+                with gc1:
+                    member_name = st.selectbox("Team Member", names)
+                    quarter = st.text_input("Quarter", value=default_quarter)
+                with gc2:
+                    description = st.text_input("Goal Description *")
+                    key_results = st.text_area("Key Results (one per line)", height=68)
+                if st.form_submit_button("Add Goal", use_container_width=True):
+                    mid_g = name_map.get(member_name)
+                    if not mid_g:
+                        st.error("Select a team member.")
+                    elif not description:
+                        st.error("Description is required.")
+                    else:
+                        db.add_goal(mid_g, quarter, description, key_results or None)
+                        st.toast(f"Goal added for {member_name}.", icon="\u2705")
+                        st.rerun()
+
     goals = db.list_goals(manager_id=_mid())
     if not goals:
         st.info("No goals set yet.")
@@ -886,48 +1010,50 @@ def page_add_goal():
 
 # -- Resources --------------------------------------------------------------
 
-def page_agenda_templates():
-    st.title("Meeting Agenda Templates")
+def page_resources():
+    st.title("Resources")
 
-    type_options = ["check_in", "coaching", "one_on_one", "quarterly_review"]
-    type_labels = [templates.EVENT_TYPES[t]["label"] for t in type_options]
+    tab_agendas, tab_tips, tab_patterns = st.tabs([
+        "Agenda Templates", "Management Tips", "Anti-Patterns"
+    ])
 
-    label = st.selectbox("Meeting Type", type_labels)
-    name = st.text_input("Participant Name", value="Team Member")
+    with tab_agendas:
+        type_options = ["check_in", "coaching", "one_on_one", "quarterly_review"]
+        type_labels = [templates.EVENT_TYPES[t]["label"] for t in type_options]
 
-    idx = type_labels.index(label)
-    event_type = type_options[idx]
-    agenda = templates.generate_agenda(event_type, name or None)
-    st.code(agenda, language=None)
+        label = st.selectbox("Meeting Type", type_labels)
+        name = st.text_input("Participant Name", value="Team Member")
 
-    if event_type == "one_on_one":
-        with st.expander("Topic Bank — Conversation Starters"):
-            topics = templates.get_topic_suggestions()
-            for category, questions in topics.items():
-                st.markdown(f"**{category}**")
-                for q in questions:
-                    st.markdown(f"- {q}")
+        idx = type_labels.index(label)
+        event_type = type_options[idx]
+        agenda = templates.generate_agenda(event_type, name or None)
+        st.code(agenda, language=None)
 
+        if event_type == "one_on_one":
+            with st.expander("Topic Bank — Conversation Starters"):
+                topics = templates.get_topic_suggestions()
+                for category, questions in topics.items():
+                    st.markdown(f"**{category}**")
+                    for q in questions:
+                        st.markdown(f"- {q}")
 
-def page_management_tips():
-    st.title("Management Tips")
+    with tab_tips:
+        tips = templates.get_tips_by_count(8)
+        for i, tip in enumerate(tips, 1):
+            st.markdown(f"**{i}.** {tip}")
 
-    tips = templates.get_tips_by_count(8)
-    for i, tip in enumerate(tips, 1):
-        st.markdown(f"**{i}.** {tip}")
+        with st.expander("Weekly Manager Self-Assessment"):
+            for dim, question in templates.SELF_ASSESSMENT_DIMENSIONS:
+                st.markdown(f"**{dim}** — {question} &nbsp; ___/5")
 
-    st.divider()
-    st.subheader("Common Anti-Patterns")
-    for ap in templates.ANTI_PATTERNS:
-        with st.container():
-            st.markdown(f":red[**{ap['name']}**]")
-            st.markdown(f"*Symptom:* {ap['symptom']}")
-            st.markdown(f":green[*Fix:* {ap['fix']}]")
-            st.markdown("---")
-
-    with st.expander("Weekly Manager Self-Assessment"):
-        for dim, question in templates.SELF_ASSESSMENT_DIMENSIONS:
-            st.markdown(f"**{dim}** — {question} &nbsp; ___/5")
+    with tab_patterns:
+        st.subheader("Common Anti-Patterns")
+        for ap in templates.ANTI_PATTERNS:
+            with st.container():
+                st.markdown(f":red[**{ap['name']}**]")
+                st.markdown(f"*Symptom:* {ap['symptom']}")
+                st.markdown(f":green[*Fix:* {ap['fix']}]")
+                st.markdown("---")
 
 
 # -- Settings ---------------------------------------------------------------
@@ -1220,6 +1346,18 @@ def page_member_timeline():
             for p in provocations:
                 st.warning(f"**{p['observation']}**")
                 st.caption(f"> {p['wisdom']}")
+
+    # -- Running 1:1 Notes (persistent across meetings) --
+    recent_notes = db.list_running_notes(member_id, manager_id=_mid(), limit=5)
+    if recent_notes:
+        st.divider()
+        st.subheader(f"Recent Notes about {selected}")
+        for n in recent_notes:
+            cat_icons = {"general": "\U0001F4DD", "meeting_prep": "\U0001F4C5",
+                        "observation": "\U0001F440", "follow_up": "\U0001F504",
+                        "praise": "\u2B50"}
+            icon = cat_icons.get(n.get("category", ""), "\U0001F4DD")
+            st.markdown(f"{icon} **{n['note_date']}** — {n['content']}")
 
     # -- Coaching pane for this member --
     st.divider()
@@ -1568,70 +1706,329 @@ def page_my_profile():
 
 
 # ---------------------------------------------------------------------------
-# Sidebar navigation & dispatch
+# Delegation Tracker
 # ---------------------------------------------------------------------------
 
-_NAV_GROUPS = [
-    (None, {
-        "\U0001F4CA  Dashboard": "Dashboard",
-    }),
-    ("\U0001F4D3 My Journal", {
-        "\u270D\uFE0F  Journal": "Journal",
-    }),
-    ("\U0001F4C5 Activities", {
-        "\u2795  Schedule Event": "Schedule Event",
-        "\U0001F4C6  Upcoming": "Upcoming Events",
-        "\U0001F4DA  History": "Event History",
-    }),
-    ("\U0001F465 People", {
-        "\U0001F4CB  Team Roster": "Team Roster",
-        "\U0001F464  Add Member": "Add Member",
-        "\U0001F550  Timeline": "Member Timeline",
-        "\U0001F680  Career Dev": "Career Development",
-    }),
-    ("\U0001F4CC Tracking", {
-        "\u2705  Action Items": "Action Items",
-        "\u2795  Add Action": "Add Action",
-        "\U0001F4AC  Feedback": "Record Feedback",
-    }),
-    ("\U0001F3AF Goals", {
-        "\U0001F4CA  Quarterly Goals": "Quarterly Goals",
-        "\u2795  Add Goal": "Add Goal",
-    }),
-    ("\U0001F4A1 Insights", {
-        "\U0001F4C8  Analytics": "Analytics",
-    }),
-    ("\U0001F4DA Resources", {
-        "\U0001F4DD  Agendas": "Agenda Templates",
-        "\U0001F4A1  Tips": "Management Tips",
-    }),
-    ("\u2699\uFE0F Settings", {
-        "\U0001F464  My Profile": "My Profile",
-        "\U0001F527  Configuration": "Configuration",
-    }),
-]
+def page_delegations():
+    st.title("Delegation Tracker")
+    show_toast()
+    st.caption(
+        '*"Delegate results, not methods. Prescribing methods removes '
+        'accountability."* — Dellanna'
+    )
+
+    names, name_map = member_options()
+
+    # -- Active delegations --
+    active = db.list_delegations(manager_id=_mid(), status="active")
+    overdue = db.get_overdue_delegations(manager_id=_mid())
+
+    if overdue:
+        st.warning(f"{len(overdue)} delegation(s) past check-in date!")
+
+    if active:
+        st.subheader(f"Active Delegations ({len(active)})")
+        for d in active:
+            is_overdue = d in overdue
+            icon = "\U0001F534" if is_overdue else "\U0001F7E2"
+            label = (f"{icon} {d['task'][:60]} — "
+                     f"{d.get('member_name', 'Unassigned')} "
+                     f"[{d['autonomy_level']}]")
+            with st.expander(label):
+                st.markdown(f"**Expected Outcome:** {d.get('outcome_expected', 'N/A')}")
+                st.markdown(f"**Autonomy Level:** {d['autonomy_level'].title()} "
+                           f"&nbsp; **Check-in:** {d.get('check_in_date', 'Not set')}")
+                if d.get("notes"):
+                    st.markdown(f"**Notes:** {d['notes']}")
+                dc1, dc2, dc3 = st.columns(3)
+                with dc1:
+                    if st.button("Complete", key=f"del_done_{d['id']}"):
+                        db.update_delegation(d["id"], status="completed")
+                        set_toast("success", f"Delegation '{d['task'][:30]}' completed.")
+                        st.rerun()
+                with dc2:
+                    if st.button("Stalled", key=f"del_stall_{d['id']}"):
+                        db.update_delegation(d["id"], status="stalled")
+                        set_toast("warning", f"Delegation marked as stalled.")
+                        st.rerun()
+                with dc3:
+                    if st.button("Delete", key=f"del_rm_{d['id']}"):
+                        db.delete_delegation(d["id"])
+                        set_toast("success", "Delegation deleted.")
+                        st.rerun()
+    else:
+        st.info("No active delegations. Use the form below to delegate a task.")
+
+    # -- Add delegation form --
+    st.subheader("Delegate a Task")
+    with st.form("add_delegation"):
+        task = st.text_input("What are you delegating? *")
+        member = st.selectbox("Delegated to", ["(none)"] + names)
+        outcome = st.text_area("Expected outcome (results, not methods)", height=80)
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            autonomy = st.selectbox("Autonomy level", [
+                ("directed", "Directed — step-by-step guidance"),
+                ("guided", "Guided — check in at milestones"),
+                ("autonomous", "Autonomous — deliver the result"),
+            ], format_func=lambda x: x[1])
+        with dc2:
+            check_in = st.date_input("Check-in date", value=None)
+        notes = st.text_input("Notes (optional)")
+        if st.form_submit_button("Delegate", use_container_width=True):
+            if not task:
+                st.error("Describe what you're delegating.")
+            else:
+                member_id = name_map.get(member) if member != "(none)" else None
+                db.add_delegation(
+                    task=task, team_member_id=member_id,
+                    outcome_expected=outcome or None,
+                    autonomy_level=autonomy[0],
+                    check_in_date=check_in.isoformat() if check_in else None,
+                    notes=notes or None, manager_id=_mid(),
+                )
+                set_toast("success", f"Delegated: {task[:40]}")
+                st.rerun()
+
+    # -- History --
+    with st.expander("Completed / Past Delegations"):
+        past = db.list_delegations(manager_id=_mid())
+        past = [d for d in past if d["status"] != "active"]
+        if past:
+            st.dataframe(
+                df_from(past, ["id", "task", "member_name", "autonomy_level",
+                               "status", "created_at", "completed_at"]),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.caption("No completed delegations yet.")
+
+
+# ---------------------------------------------------------------------------
+# Running 1:1 Notes
+# ---------------------------------------------------------------------------
+
+def page_running_notes():
+    st.title("Running 1:1 Notes")
+    show_toast()
+    st.caption(
+        "Persistent notes per team member — visible at every meeting prep. "
+        "Not tied to a single event."
+    )
+
+    names, mapping = member_options()
+    if not names:
+        st.info("Add team members first.")
+        return
+
+    selected = st.selectbox("Team member", names, key="rn_member")
+    member_id = mapping[selected]
+
+    # -- Add note --
+    with st.form("add_running_note"):
+        nc1, nc2 = st.columns([3, 1])
+        with nc1:
+            content = st.text_area(f"Note about {selected}", height=100,
+                placeholder="Observation, meeting prep, follow-up, praise...")
+        with nc2:
+            category = st.selectbox("Category", [
+                "general", "meeting_prep", "observation", "follow_up", "praise"])
+            note_date = st.date_input("Date", value=datetime.now().date())
+        if st.form_submit_button("Add Note", use_container_width=True):
+            if content and content.strip():
+                db.add_running_note(
+                    team_member_id=member_id, content=content,
+                    category=category, note_date=note_date.isoformat(),
+                    manager_id=_mid(),
+                )
+                set_toast("success", "Note added.")
+                st.rerun()
+            else:
+                st.warning("Write something first.")
+
+    # -- Display notes --
+    notes = db.list_running_notes(member_id, manager_id=_mid())
+    if notes:
+        st.subheader(f"Notes for {selected} ({len(notes)})")
+        category_icons = {
+            "general": "\U0001F4DD", "meeting_prep": "\U0001F4C5",
+            "observation": "\U0001F440", "follow_up": "\U0001F504",
+            "praise": "\u2B50",
+        }
+        for n in notes:
+            icon = category_icons.get(n.get("category", ""), "\U0001F4DD")
+            col_note, col_del = st.columns([6, 1])
+            with col_note:
+                st.markdown(
+                    f"{icon} **{n['note_date']}** [{n.get('category', 'general')}]  \n"
+                    f"{n['content']}"
+                )
+            with col_del:
+                if st.button("X", key=f"del_rn_{n['id']}"):
+                    db.delete_running_note(n["id"])
+                    st.rerun()
+            st.markdown("---")
+    else:
+        st.caption(f"No notes yet for {selected}. Start building a history.")
+
+
+# ---------------------------------------------------------------------------
+# Decision Log
+# ---------------------------------------------------------------------------
+
+def page_decision_log():
+    st.title("Decision Log")
+    show_toast()
+    st.caption(
+        '*"For every unambiguous decision we make, we probably nudge things '
+        'a dozen times."* — Andy Grove'
+    )
+
+    # -- Decisions due for review (nudge) --
+    due = db.get_decisions_due_for_review(manager_id=_mid())
+    if due:
+        st.warning(f"{len(due)} decision(s) due for review:")
+        for d in due:
+            st.markdown(f"- **{d['title']}** (review date: {d['review_date']})")
+
+    # -- Add decision form --
+    st.subheader("Record a Decision")
+    with st.form("add_decision"):
+        title = st.text_input("Decision *", placeholder="What did you decide?")
+        context = st.text_area("Context", height=80,
+            placeholder="What situation or problem prompted this decision?")
+        alternatives = st.text_area("Alternatives considered", height=60,
+            placeholder="What other options did you weigh?")
+        rationale = st.text_area("Rationale", height=80,
+            placeholder="Why this option? What trade-offs did you accept?")
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            expected = st.text_input("Expected outcome",
+                placeholder="What should happen if this is the right call?")
+        with dc2:
+            review_date = st.date_input("Review by (when to check if it worked)",
+                                         value=None)
+        if st.form_submit_button("Log Decision", use_container_width=True):
+            if not title:
+                st.error("Describe the decision.")
+            else:
+                db.add_decision(
+                    title=title, context=context or None,
+                    alternatives=alternatives or None,
+                    rationale=rationale or None,
+                    expected_outcome=expected or None,
+                    review_date=review_date.isoformat() if review_date else None,
+                    manager_id=_mid(),
+                )
+                set_toast("success", f"Decision logged: {title[:40]}")
+                st.rerun()
+
+    # -- Decision history --
+    st.subheader("Decision History")
+    decisions = db.list_decisions(manager_id=_mid())
+    if not decisions:
+        st.caption("No decisions logged yet. Start recording your thinking.")
+        return
+
+    statuses = ["active", "validated", "revised", "reversed"]
+    status_colors = {"active": "blue", "validated": "green",
+                     "revised": "orange", "reversed": "red"}
+
+    for d in decisions:
+        color = status_colors.get(d["status"], "blue")
+        label = (f":{color}[**{d['status'].upper()}**] "
+                 f"{d['title']} — {d['created_at'][:10]}")
+        with st.expander(label):
+            if d.get("context"):
+                st.markdown(f"**Context:** {d['context']}")
+            if d.get("alternatives"):
+                st.markdown(f"**Alternatives:** {d['alternatives']}")
+            if d.get("rationale"):
+                st.markdown(f"**Rationale:** {d['rationale']}")
+            if d.get("expected_outcome"):
+                st.markdown(f"**Expected outcome:** {d['expected_outcome']}")
+            if d.get("review_date"):
+                st.markdown(f"**Review by:** {d['review_date']}")
+            if d.get("actual_outcome"):
+                st.markdown(f"**Actual outcome:** {d['actual_outcome']}")
+
+            # Update status / record actual outcome
+            with st.form(f"update_decision_{d['id']}"):
+                uc1, uc2 = st.columns(2)
+                with uc1:
+                    new_status = st.selectbox("Update status", statuses,
+                        index=statuses.index(d["status"]),
+                        key=f"ds_{d['id']}")
+                with uc2:
+                    actual = st.text_input("Actual outcome (what really happened)",
+                        value=d.get("actual_outcome") or "",
+                        key=f"da_{d['id']}")
+                uf1, uf2 = st.columns(2)
+                with uf1:
+                    if st.form_submit_button("Update", use_container_width=True):
+                        updates = {"status": new_status}
+                        if actual:
+                            updates["actual_outcome"] = actual
+                        db.update_decision(d["id"], **updates)
+                        set_toast("success", f"Decision updated.")
+                        st.rerun()
+            if st.button("Delete", key=f"del_dec_{d['id']}"):
+                db.delete_decision(d["id"])
+                set_toast("success", "Decision deleted.")
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Sidebar navigation & dispatch
+# ---------------------------------------------------------------------------
 
 _DISPATCH = {
     "Dashboard": page_dashboard,
     "Journal": page_journal,
+    "Team": page_team_roster,
+    "Timeline": page_member_timeline,
+    "1:1 Notes": page_running_notes,
+    "Career Dev": page_career_development,
+    "Actions": page_action_items,
+    "Feedback": page_record_feedback,
+    "Delegations": page_delegations,
+    "Goals": page_quarterly_goals,
+    "Decisions": page_decision_log,
+    "Schedule": page_schedule_event,
+    "Upcoming": page_upcoming_events,
+    "History": page_event_history,
+    "Analytics": page_analytics,
+    "Resources": page_resources,
+    "Settings": page_configuration,
+    "My Profile": page_my_profile,
+    # Legacy routes (for backward compat with session state)
+    "Team Roster": page_team_roster,
+    "Member Timeline": page_member_timeline,
+    "Running Notes": page_running_notes,
+    "Career Development": page_career_development,
+    "Action Items": page_action_items,
+    "Record Feedback": page_record_feedback,
+    "Quarterly Goals": page_quarterly_goals,
+    "Decision Log": page_decision_log,
     "Schedule Event": page_schedule_event,
     "Upcoming Events": page_upcoming_events,
     "Event History": page_event_history,
-    "Team Roster": page_team_roster,
-    "Add Member": page_add_member,
-    "Member Timeline": page_member_timeline,
-    "Career Development": page_career_development,
-    "Action Items": page_action_items,
-    "Add Action": page_add_action,
-    "Record Feedback": page_record_feedback,
-    "Quarterly Goals": page_quarterly_goals,
-    "Add Goal": page_add_goal,
-    "Analytics": page_analytics,
-    "Agenda Templates": page_agenda_templates,
-    "Management Tips": page_management_tips,
-    "My Profile": page_my_profile,
     "Configuration": page_configuration,
+    "Add Member": page_team_roster,
+    "Add Action": page_action_items,
+    "Add Goal": page_quarterly_goals,
+    "Agenda Templates": page_resources,
+    "Management Tips": page_resources,
 }
+
+
+def _nav_button(label, page_key, current_page):
+    """Render a compact nav button. Returns True if clicked."""
+    btn_type = "primary" if current_page == page_key else "secondary"
+    if st.button(label, key=f"nav_{page_key}",
+                 use_container_width=True, type=btn_type):
+        st.session_state["nav_page"] = page_key
+        st.rerun()
 
 
 def main():
@@ -1642,39 +2039,51 @@ def main():
     manager_name = st.session_state.get("manager_name", "Manager")
     current_page = st.session_state.get("nav_page", "Dashboard")
 
-    # -- Sidebar with grouped, icon-based navigation --
+    # -- Sidebar: flat, compact, workflow-ordered --
     with st.sidebar:
         st.markdown("### \U0001F4CB Manager Tool")
-        st.caption(f"*{manager_name}*")
 
-        # Streak badge at top of nav (loss aversion hook)
+        # Streak + daily status (engagement hook)
         streak = db.get_journal_streak(manager_id=_mid())
-        if streak > 0:
-            st.markdown(f"\U0001F525 **{streak}-day streak**")
+        today_entry = db.get_journal_entry_by_date(
+            datetime.now().date().isoformat(), "daily", manager_id=_mid())
+        streak_text = f"\U0001F525 **{streak}-day streak**" if streak > 0 else ""
+        journal_dot = "\U0001F7E2" if today_entry else "\U0001F534"
+        st.markdown(f"{streak_text} &nbsp; {journal_dot} *{manager_name}*")
 
         st.markdown("---")
 
-        for group_label, items in _NAV_GROUPS:
-            if group_label is None:
-                # Top-level items (Dashboard) — no group header
-                for btn_label, page_key in items.items():
-                    btn_type = "primary" if current_page == page_key else "secondary"
-                    if st.button(btn_label, key=f"nav_{page_key}",
-                                 use_container_width=True, type=btn_type):
-                        st.session_state["nav_page"] = page_key
-                        st.rerun()
-            else:
-                # Grouped items with expander — auto-expand active group
-                group_active = current_page in items.values()
-                with st.expander(f"**{group_label}**", expanded=group_active):
-                    for btn_label, page_key in items.items():
-                        btn_type = "primary" if current_page == page_key else "secondary"
-                        if st.button(btn_label, key=f"nav_{page_key}",
-                                     use_container_width=True, type=btn_type):
-                            st.session_state["nav_page"] = page_key
-                            st.rerun()
+        # -- Primary actions (daily use) --
+        _nav_button("\U0001F4CA  Dashboard", "Dashboard", current_page)
+        _nav_button("\u270D\uFE0F  Journal", "Journal", current_page)
+
+        st.caption("PEOPLE")
+        _nav_button("\U0001F465  Team", "Team", current_page)
+        _nav_button("\U0001F550  Timeline", "Timeline", current_page)
+        _nav_button("\U0001F4DD  1:1 Notes", "1:1 Notes", current_page)
+        _nav_button("\U0001F680  Career Dev", "Career Dev", current_page)
+
+        st.caption("TRACKING")
+        # Badge counts for urgency
+        overdue_actions = len(db.get_weekly_summary(manager_id=_mid()).get("overdue_actions", []))
+        actions_label = f"\u2705  Actions ({overdue_actions} overdue)" if overdue_actions else "\u2705  Actions"
+        _nav_button(actions_label, "Actions", current_page)
+        _nav_button("\U0001F4AC  Feedback", "Feedback", current_page)
+        _nav_button("\U0001F4E4  Delegations", "Delegations", current_page)
+        _nav_button("\U0001F3AF  Goals", "Goals", current_page)
+        _nav_button("\U0001F9E0  Decisions", "Decisions", current_page)
+
+        st.caption("EVENTS")
+        _nav_button("\U0001F4C5  Schedule", "Schedule", current_page)
+        _nav_button("\U0001F4C6  Upcoming", "Upcoming", current_page)
+        _nav_button("\U0001F4DA  History", "History", current_page)
+
+        st.caption("REFERENCE")
+        _nav_button("\U0001F4C8  Analytics", "Analytics", current_page)
+        _nav_button("\U0001F4DA  Resources", "Resources", current_page)
 
         st.markdown("---")
+        _nav_button("\u2699\uFE0F  Settings", "Settings", current_page)
         if st.button("\U0001F6AA  Log Out", use_container_width=True):
             for key in ["manager_id", "manager_name", "nav_page"]:
                 st.session_state.pop(key, None)

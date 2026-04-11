@@ -166,3 +166,61 @@ CREATE TABLE IF NOT EXISTS users (
     picture TEXT,
     last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Delegation tracker
+CREATE TABLE IF NOT EXISTS delegations (
+    id SERIAL PRIMARY KEY,
+    manager_id INTEGER,
+    team_member_id INTEGER REFERENCES team_members(id),
+    task TEXT NOT NULL,
+    outcome_expected TEXT,
+    autonomy_level TEXT DEFAULT 'guided' CHECK(autonomy_level IN
+        ('directed', 'guided', 'autonomous')),
+    check_in_date TEXT,
+    status TEXT DEFAULT 'active' CHECK(status IN
+        ('active', 'completed', 'revoked', 'stalled')),
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+-- Running 1:1 notes (persistent per-member notes across meetings)
+CREATE TABLE IF NOT EXISTS running_notes (
+    id SERIAL PRIMARY KEY,
+    manager_id INTEGER,
+    team_member_id INTEGER NOT NULL REFERENCES team_members(id),
+    note_date TEXT NOT NULL DEFAULT CURRENT_DATE,
+    content TEXT NOT NULL,
+    category TEXT DEFAULT 'general' CHECK(category IN
+        ('general', 'meeting_prep', 'observation', 'follow_up', 'praise')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Decision log / decision journal
+CREATE TABLE IF NOT EXISTS decisions (
+    id SERIAL PRIMARY KEY,
+    manager_id INTEGER,
+    title TEXT NOT NULL,
+    context TEXT,
+    alternatives TEXT,
+    rationale TEXT,
+    expected_outcome TEXT,
+    review_date TEXT,
+    status TEXT DEFAULT 'active' CHECK(status IN
+        ('active', 'validated', 'revised', 'reversed')),
+    actual_outcome TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Daily coach suggestions (cached, one per manager per day)
+CREATE TABLE IF NOT EXISTS coach_suggestions (
+    id SERIAL PRIMARY KEY,
+    manager_id INTEGER,
+    suggestion_date TEXT NOT NULL,
+    tier TEXT NOT NULL DEFAULT 'rule' CHECK(tier IN ('rule', 'ai')),
+    suggestion TEXT NOT NULL,
+    action_page TEXT,
+    dismissed INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

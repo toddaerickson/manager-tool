@@ -298,3 +298,216 @@ def _generate_template_questions(notes, context_type, member_name=None):
         questions.append("What's the thing you're not saying out loud?")
 
     return questions[:4]  # Max 4 questions
+
+
+# ---------------------------------------------------------------------------
+# Daily Coach Suggestion — "What should I do right now?"
+# ---------------------------------------------------------------------------
+
+DAILY_COACH_SYSTEM = """You are a concise management coach. The manager just opened their
+daily tool. Based on their recent activity data, suggest ONE specific action they should
+take right now.
+
+RULES:
+- ONE suggestion only. 1-2 sentences max.
+- Be specific: name people, reference real situations from their data.
+- If their mood has been low (1-2), be supportive first, then suggest.
+- If they have a streak going, acknowledge it briefly.
+- Never be generic. "Schedule a 1-on-1" is bad. "Schedule a 1-on-1 with Sarah —
+  it's been 18 days" is good.
+- Vary the type: sometimes a meeting, sometimes journaling, sometimes feedback,
+  sometimes a delegation check-in, sometimes celebration.
+- End with a brief reason WHY this matters (reference a management principle).
+"""
+
+
+def generate_rule_based_suggestion(manager_id):
+    """Tier 1: Instant rule-based suggestion from existing data.
+    Returns (suggestion_text, action_page) or (None, None)."""
+
+    streak = db.get_journal_streak(manager_id=manager_id)
+    today = db.get_journal_entry_by_date(
+        __import__("datetime").datetime.now().date().isoformat(), "daily",
+        manager_id=manager_id)
+
+    # Recent journal for mood-awareness
+    recent = db.get_recent_journal_content(manager_id, days=2)
+    recent_mood = None
+    if recent and recent[0].get("mood"):
+        recent_mood = recent[0]["mood"]
+
+    nudges = db.get_nudges(manager_id=manager_id)
+    overdue_dels = db.get_overdue_delegations(manager_id=manager_id)
+    decisions_due = db.get_decisions_due_for_review(manager_id=manager_id)
+
+    # -- Mood-aware: if low mood, be supportive first --
+    if recent_mood and recent_mood <= 2:
+        if not today:
+            return ("Yesterday was tough. Start today by writing in your journal — "
+                    "even a few words can shift your perspective.",
+                    "Journal")
+        return ("You've been having a hard stretch. Consider taking 5 minutes "
+                "to note one thing that went well today, however small.",
+                "Journal")
+
+    # -- Streak at risk: journal not written today --
+    if streak > 2 and not today:
+        return (f"Your {streak}-day journal streak is on the line. "
+                f"Write today's entry to keep it alive — consistency compounds.",
+                "Journal")
+
+    # -- No streak yet: encourage the habit --
+    if streak == 0 and not today:
+        return ("Start your day with a journal entry — even one sentence. "
+                "Grove: 'Reports are self-discipline, not communication.'",
+                "Journal")
+
+    # -- Critical nudges: overdue meetings --
+    critical = [n for n in nudges if n["severity"] == "critical"]
+    if critical:
+        n = critical[0]
+        if n["type"] == "meeting":
+            return (n["message"] + " Horstman: 'Weekly 1-on-1s are the single "
+                    "most important management behavior.'",
+                    "Schedule")
+
+    # -- Overdue delegations --
+    if overdue_dels:
+        d = overdue_dels[0]
+        name = d.get("member_name", "your team member")
+        return (f"Check in on your delegation to {name}: "
+                f"'{d['task'][:50]}' is past its check-in date. "
+                f"Dellanna: 'Delegate results, not methods — but still follow up.'",
+                "Delegations")
+
+    # -- Decisions due for review --
+    if decisions_due:
+        d = decisions_due[0]
+        return (f"Your decision '{d['title'][:50]}' is due for review. "
+                f"Did it play out as expected? Grove: 'Let chaos reign, then rein in chaos.'",
+                "Decisions")
+
+    # -- Warning nudges --
+    warnings = [n for n in nudges if n["severity"] == "warning"]
+    if warnings:
+        return (warnings[0]["message"], "Actions")
+
+    # -- Feedback nudge --
+    info_nudges = [n for n in nudges if n["type"] == "feedback"]
+    if info_nudges:
+        return (info_nudges[0]["message"] + " Catch someone doing something right today.",
+                "Feedback")
+
+    # -- All clear: celebrate or suggest reflection --
+    if streak > 5:
+        return (f"You're on a {streak}-day streak and your team is well-covered. "
+                f"Use this momentum — is there a career development conversation "
+                f"you've been putting off?",
+                "Career Dev")
+
+    return ("You're caught up. Consider reviewing your quarterly goals — "
+            "are they still the right goals?",
+            "Goals")
+
+
+def generate_ai_suggestion(manager_id):
+    """Tier 2: AI-enhanced suggestion using Claude. Returns suggestion text or None."""
+    client = _get_client()
+    if not client:
+        return None
+
+    # Build rich context from recent activity
+    parts = []
+
+    # Recent journal entries (mood + content)
+    recent_journal = db.get_recent_journal_content(manager_id, days=7)
+    if recent_journal:
+        parts.append("RECENT JOURNAL ENTRIES:")
+        for j in recent_journal[:5]:
+            mood_label = {1: "very low", 2: "low", 3: "neutral",
+                          4: "good", 5: "great"}.get(j.get("mood"), "unknown")
+            parts.append(f"  {j['entry_date']} (mood: {mood_label}): "
+                        f"{(j.get('content') or '')[:200]}")
+
+    # Streak
+    streak = db.get_journal_streak(manager_id=manager_id)
+    parts.append(f"JOURNAL STREAK: {streak} days")
+
+    # Today's journal status
+    today = db.get_journal_entry_by_date(
+        __import__("datetime").datetime.now().date().isoformat(), "daily",
+        manager_id=manager_id)
+    parts.append(f"TODAY'S JOURNAL: {'Written' if today else 'Not yet written'}")
+
+    # Nudges
+    nudges = db.get_nudges(manager_id=manager_id)
+    if nudges:
+        parts.append("ACTIVE NUDGES:")
+        for n in nudges[:5]:
+            parts.append(f"  [{n['severity']}] {n['message']}")
+
+    # Overdue delegations
+    overdue_dels = db.get_overdue_delegations(manager_id=manager_id)
+    if overdue_dels:
+        parts.append("OVERDUE DELEGATIONS:")
+        for d in overdue_dels[:3]:
+            parts.append(f"  {d.get('member_name', '?')}: {d['task'][:60]}")
+
+    # Decisions due
+    decisions_due = db.get_decisions_due_for_review(manager_id=manager_id)
+    if decisions_due:
+        parts.append("DECISIONS DUE FOR REVIEW:")
+        for d in decisions_due[:3]:
+            parts.append(f"  {d['title'][:60]} (review by {d['review_date']})")
+
+    # Team summary
+    members = db.list_team_members(manager_id=manager_id)
+    parts.append(f"TEAM SIZE: {len(members)} direct reports")
+
+    # Meeting cadence
+    meeting_data = db.get_time_since_last_event_per_member(manager_id=manager_id)
+    if meeting_data:
+        parts.append("DAYS SINCE LAST MEETING:")
+        for m in meeting_data[:5]:
+            days = m.get("days_since")
+            label = f"{days} days" if days is not None else "never met"
+            parts.append(f"  {m['member_name']}: {label}")
+
+    user_message = "\n".join(parts)
+
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=150,
+            system=DAILY_COACH_SYSTEM,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        return message.content[0].text
+    except Exception as e:
+        logger.error("Daily coach AI suggestion failed: %s", e)
+        return None
+
+
+def get_daily_suggestion(manager_id):
+    """Get today's coach suggestion. Uses cache, generates if needed.
+    Returns dict with 'suggestion', 'tier', 'action_page' or None if dismissed."""
+
+    # Check cache first
+    cached = db.get_todays_suggestion(manager_id)
+    if cached:
+        return cached
+
+    # Generate rule-based suggestion (instant, always works)
+    suggestion_text, action_page = generate_rule_based_suggestion(manager_id)
+    if suggestion_text:
+        db.save_coach_suggestion(
+            manager_id, suggestion_text, tier="rule", action_page=action_page)
+
+    # Try AI enhancement in the background (upgrades the cached suggestion)
+    ai_text = generate_ai_suggestion(manager_id)
+    if ai_text:
+        db.save_coach_suggestion(
+            manager_id, ai_text, tier="ai", action_page=action_page)
+        return db.get_todays_suggestion(manager_id)
+
+    return db.get_todays_suggestion(manager_id)
