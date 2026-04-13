@@ -652,15 +652,18 @@ def page_team_roster():
 
     # -- Inline Add Member form (collapsible) --
     with st.expander("Add New Team Member", expanded=not members):
-        with st.form("add_member"):
+        # Counter in widget keys forces fresh fields after each save
+        nonce = st.session_state.get("add_member_nonce", 0)
+        with st.form(f"add_member_{nonce}"):
             ac1, ac2 = st.columns(2)
             with ac1:
-                name = st.text_input("Full Name *")
-                email = st.text_input("Email")
+                name = st.text_input("Full Name *", key=f"tm_name_{nonce}")
+                email = st.text_input("Email", key=f"tm_email_{nonce}")
             with ac2:
-                role = st.text_input("Role / Title")
-                start_date = st.date_input("Start Date", value=datetime.now().date())
-            notes = st.text_input("Notes")
+                role = st.text_input("Role / Title", key=f"tm_role_{nonce}")
+                start_date = st.date_input("Start Date",
+                    value=datetime.now().date(), key=f"tm_start_{nonce}")
+            notes = st.text_input("Notes", key=f"tm_notes_{nonce}")
             submitted = st.form_submit_button("Add Member", use_container_width=True)
         if submitted:
             if not name:
@@ -671,7 +674,8 @@ def page_team_roster():
                     start_date.strftime("%Y-%m-%d"), notes or None,
                     manager_id=_mid(),
                 )
-                st.toast(f"Added {name}", icon="\u2705")
+                st.session_state["add_member_nonce"] = nonce + 1
+                set_toast("success", f"Added {name}")
                 st.rerun()
 
     if not members:
@@ -765,14 +769,16 @@ def page_action_items():
 
     # -- Inline Add form --
     with st.expander("Add Action Item"):
-        with st.form("add_action"):
+        nonce = st.session_state.get("add_action_nonce", 0)
+        with st.form(f"add_action_{nonce}"):
             ac1, ac2 = st.columns(2)
             with ac1:
-                desc = st.text_input("Description *")
-                assignee = st.text_input("Assignee")
+                desc = st.text_input("Description *", key=f"ai_desc_{nonce}")
+                assignee = st.text_input("Assignee", key=f"ai_assignee_{nonce}")
             with ac2:
-                due_date = st.date_input("Due Date", value=None)
-                event_id = st.text_input("Related Event ID (optional)")
+                due_date = st.date_input("Due Date", value=None, key=f"ai_due_{nonce}")
+                event_id = st.text_input("Related Event ID (optional)",
+                    key=f"ai_eid_{nonce}")
             if st.form_submit_button("Add Action Item", use_container_width=True):
                 if not desc:
                     st.error("Description is required.")
@@ -782,7 +788,8 @@ def page_action_items():
                     db.add_action_item(desc, event_id=eid,
                                        assignee=assignee or None, due_date=due,
                                        manager_id=_mid())
-                    st.toast("Action item added.", icon="\u2705")
+                    st.session_state["add_action_nonce"] = nonce + 1
+                    set_toast("success", "Action item added.")
                     st.rerun()
 
     actions = db.get_pending_action_items(manager_id=_mid())
@@ -887,14 +894,19 @@ def page_quarterly_goals():
             now = datetime.now()
             q = (now.month - 1) // 3 + 1
             default_quarter = f"Q{q} {now.year}"
-            with st.form("add_goal"):
+            nonce = st.session_state.get("add_goal_nonce", 0)
+            with st.form(f"add_goal_{nonce}"):
                 gc1, gc2 = st.columns(2)
                 with gc1:
-                    member_name = st.selectbox("Team Member", names)
-                    quarter = st.text_input("Quarter", value=default_quarter)
+                    member_name = st.selectbox("Team Member", names,
+                        key=f"g_member_{nonce}")
+                    quarter = st.text_input("Quarter", value=default_quarter,
+                        key=f"g_quarter_{nonce}")
                 with gc2:
-                    description = st.text_input("Goal Description *")
-                    key_results = st.text_area("Key Results (one per line)", height=68)
+                    description = st.text_input("Goal Description *",
+                        key=f"g_desc_{nonce}")
+                    key_results = st.text_area("Key Results (one per line)",
+                        height=68, key=f"g_kr_{nonce}")
                 if st.form_submit_button("Add Goal", use_container_width=True):
                     mid_g = name_map.get(member_name)
                     if not mid_g:
@@ -903,7 +915,8 @@ def page_quarterly_goals():
                         st.error("Description is required.")
                     else:
                         db.add_goal(mid_g, quarter, description, key_results or None)
-                        st.toast(f"Goal added for {member_name}.", icon="\u2705")
+                        st.session_state["add_goal_nonce"] = nonce + 1
+                        set_toast("success", f"Goal added for {member_name}.")
                         st.rerun()
 
     goals = db.list_goals(manager_id=_mid())
