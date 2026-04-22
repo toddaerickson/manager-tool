@@ -1,5 +1,5 @@
--- Manager Tool: PostgreSQL schema for Supabase
--- Paste this into Supabase SQL Editor to initialize the database
+-- Manager Tool: PostgreSQL schema (Neon / any standard PostgreSQL provider)
+-- Run via: psql "$DATABASE_URL" -f schema_postgres.sql
 
 CREATE TABLE IF NOT EXISTS managers (
     id SERIAL PRIMARY KEY,

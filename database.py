@@ -120,41 +120,15 @@ def pg_connection_failed() -> tuple[bool, str]:
     return _PG_FAILED, _PG_ERROR
 
 
-_pg_pool = None
-
-
-def _get_pg_pool():
-    """Get or create a PostgreSQL connection pool (lazy singleton)."""
-    global _pg_pool
-    if _pg_pool is None:
-        try:
-            import psycopg2.pool
-            from psycopg2.extras import RealDictCursor
-            _pg_pool = psycopg2.pool.SimpleConnectionPool(
-                minconn=1, maxconn=5, dsn=_get_pg_url(),
-                cursor_factory=RealDictCursor,
-            )
-            logger.info("PostgreSQL connection pool created (1-5 connections)")
-        except Exception as e:
-            logger.error("Failed to create PG connection pool: %s", e)
-            _pg_pool = None
-    return _pg_pool
-
-
 def get_connection():
+    """Get a database connection (PostgreSQL direct or SQLite fallback).
+
+    Uses direct psycopg2 connections rather than a pool because Neon's
+    serverless proxy handles connection pooling and scales compute to zero
+    after idle periods — app-side pools would hold stale connections.
+    """
     global _PG_FAILED, _PG_ERROR
     if _detect_pg():
-        pool = _get_pg_pool()
-        if pool:
-            try:
-                conn = pool.getconn()
-                conn.autocommit = True
-                _PG_FAILED = False
-                _PG_ERROR = ""
-                return _PooledConnection(conn, pool)
-            except Exception as e:
-                logger.warning("PostgreSQL pool.getconn() failed: %s", e)
-        # Pool creation or getconn failed — try direct connection
         try:
             import psycopg2
             from psycopg2.extras import RealDictCursor
@@ -179,43 +153,10 @@ def get_connection():
     return conn
 
 
-class _PooledConnection:
-    """Wrapper that returns PG connections to pool on close() instead of destroying them."""
-    __slots__ = ("_conn", "_pool")
-
-    def __init__(self, conn, pool):
-        self._conn = conn
-        self._pool = pool
-
-    def close(self):
-        if self._pool and self._conn:
-            try:
-                self._pool.putconn(self._conn)
-            except Exception:
-                try:
-                    self._conn.close()
-                except Exception:
-                    pass
-            self._conn = None
-        elif self._conn:
-            self._conn.close()
-            self._conn = None
-
-    def __getattr__(self, name):
-        return getattr(self._conn, name)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        self.close()
-
-
 @contextmanager
 def _connect():
     """Context manager for database connections.
-    Automatically returns PG connections to pool or closes SQLite connections.
-    Protects against connection leaks on exceptions."""
+    Closes connections on exit. Protects against connection leaks on exceptions."""
     conn = get_connection()
     try:
         yield conn

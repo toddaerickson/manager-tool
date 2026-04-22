@@ -8,3 +8,4 @@ ics_exports/
 .streamlit/secrets.toml
 *.pdf
 .encryption_key
+backups/
