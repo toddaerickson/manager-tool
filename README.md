@@ -100,20 +100,20 @@ At login, a personalized suggestion tells you exactly what to do next — no bla
 | File | Purpose |
 |---|---|
 | `web_app.py` | Streamlit web application — all pages, navigation, and UI |
-| `database.py` | Dual-mode database layer (SQLite + PostgreSQL/Supabase) with connection pooling, ~70 typed functions |
+| `database.py` | Dual-mode database layer (SQLite + Neon PostgreSQL), ~70 typed functions |
 | `coaching.py` | Claude API integration for coaching sidebar + daily coach suggestion engine (rule-based + AI) |
 | `templates.py` | Wisdom engine, coaching provocations, anti-pattern detector, meeting agendas, addictive design framework |
 | `calendar_service.py` | iCalendar generation, SMTP email, weekly digest |
 | `auth.py` | Google OAuth 2.0 authentication |
 | `365_Great_Management_Ideas.md` | 620 management ideas from 23 books |
-| `schema_postgres.sql` | PostgreSQL schema for Supabase deployment |
+| `schema_postgres.sql` | PostgreSQL schema (Neon or any standard Postgres) |
 | `tests/` | 61 tests covering database CRUD, multi-tenancy, coaching, templates |
 | `manager_tool.py` | CLI interface (legacy) |
 | `gui.py` | Tkinter desktop GUI (legacy) |
 
 ## Database
 
-**Dual-mode**: SQLite for local development, PostgreSQL (Supabase) for production. Auto-detects via `DATABASE_URL` environment variable. Connection pooling (1-5 connections) for PostgreSQL with transparent pool-return on close.
+**Dual-mode**: SQLite for local development, Neon PostgreSQL for production. Auto-detects via `DATABASE_URL` environment variable. Neon's serverless proxy handles pooling; the app opens direct connections.
 
 ### Tables
 
@@ -215,18 +215,21 @@ streamlit run web_app.py
 3. Connect your repo, set `web_app.py` as the main file
 4. Deploy
 
-### Production (Supabase)
-1. Create a Supabase project
-2. Run `schema_postgres.sql` in the SQL Editor
-3. Get the **Session Pooler** connection string from Supabase (Settings → Database → Connection Pooling). It looks like:
+### Production (Neon)
+1. Create a Neon project (neon.tech)
+2. Copy the **pooled** connection string from the Neon dashboard (Connection Details → "Pooled connection"). It looks like:
    ```
-   postgresql://postgres.PROJECT_REF:PASSWORD@aws-X-region.pooler.supabase.com:5432/postgres
+   postgresql://USER:PASSWORD@ep-xxx-pooler.REGION.aws.neon.tech/neondb?sslmode=require&channel_binding=require
    ```
-   **Important**: Use the pooler URL, not the direct connection. Streamlit Cloud cannot reach Supabase via IPv6 (direct), only IPv4 (pooler).
+   Use the pooled endpoint (`-pooler` in the hostname) for Streamlit Cloud — it's serverless-friendly and handles connection churn.
+3. Apply the schema:
+   ```bash
+   psql "$DATABASE_URL" -f schema_postgres.sql
+   ```
 4. Set `DATABASE_URL` as a Streamlit secret:
    ```toml
    # .streamlit/secrets.toml (or Streamlit Cloud Secrets UI)
-   DATABASE_URL = "postgresql://postgres.YOUR_REF:YOUR_PW@aws-X-region.pooler.supabase.com:5432/postgres"
+   DATABASE_URL = "postgresql://USER:PASSWORD@ep-xxx-pooler.REGION.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
    ```
 5. Optionally set `CONFIG_ENCRYPTION_KEY` for config value encryption
 6. Deploy to Streamlit Cloud or any Python hosting

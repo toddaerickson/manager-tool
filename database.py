@@ -1,6 +1,6 @@
 """
 Database layer for Manager Tool.
-Dual-mode: PostgreSQL (Supabase) in production, SQLite for local dev.
+Dual-mode: PostgreSQL (Neon) in production, SQLite for local dev.
 Set DATABASE_URL env var or Streamlit secret to use PostgreSQL.
 """
 
@@ -261,7 +261,7 @@ def _sql_left(col, n):
 def init_db():
     """Initialize database tables (SQLite only — PostgreSQL uses schema_postgres.sql)."""
     if _detect_pg():
-        return  # Tables created via Supabase SQL editor
+        return  # Tables created via schema_postgres.sql
     # Migrate: if old schema has NOT NULL manager_id, drop and recreate
     if os.path.exists(DB_PATH):
         try:

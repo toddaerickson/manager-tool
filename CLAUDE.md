@@ -1,7 +1,7 @@
 # CLAUDE.md — Project Intelligence
 
 ## Project Overview
-Manager Tool is a Streamlit-based management coaching journal with a dual-mode database (SQLite local / PostgreSQL Supabase). The primary interface is `web_app.py`. The wisdom library contains 620 management ideas from 23 books.
+Manager Tool is a Streamlit-based management coaching journal with a dual-mode database (SQLite local / Neon PostgreSQL). The primary interface is `web_app.py`. The wisdom library contains 620 management ideas from 23 books.
 
 ## Development Commands
 ```bash
@@ -20,7 +20,7 @@ python -c "import py_compile; py_compile.compile('web_app.py', doraise=True)"
 - All user-owned data is filtered by `manager_id` for multi-tenancy
 - Date columns are TEXT (YYYY-MM-DD) — SQL helpers cast to `::text` for PostgreSQL comparison
 - Passwords use bcrypt; sensitive config values use Fernet encryption
-- Connection pooling via `_PooledConnection` wrapper (transparent to callers)
+- Pooling is handled by Neon's serverless proxy; the app opens direct connections (no app-side pool)
 
 ---
 

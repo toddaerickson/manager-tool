@@ -33,7 +33,7 @@ if _pg_failed:
         f'<div style="background:#2d0000;border:1px solid #ff4444;border-radius:8px;'
         f'padding:12px 16px;margin-bottom:16px;">'
         f'<span style="color:#ff4444;font-weight:700;font-size:1.1rem;">'
-        f'\u26A0 Supabase connection failed</span><br>'
+        f'\u26A0 Database connection failed</span><br>'
         f'<span style="color:#ff8888;font-size:0.85rem;">'
         f'Running on local SQLite — data will not persist across restarts.<br>'
         f'Error: {_pg_error[:120]}</span></div>',
