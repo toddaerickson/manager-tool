@@ -1066,7 +1066,7 @@ def page_configuration():
     config = db.get_all_config()
     if config:
         for key, value in config.items():
-            display = "********" if "password" in key or "secret" in key else value
+            display = "********" if key in db._SENSITIVE_KEYS else value
             st.text(f"{key}: {display}")
     else:
         st.caption("No configuration set yet.")

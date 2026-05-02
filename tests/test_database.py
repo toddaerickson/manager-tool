@@ -183,6 +183,50 @@ class TestConfig:
         assert db.get_config("changing") == "v2"
 
 
+class TestSensitiveConfigEncryption:
+    """Regression for AUDIT C4 — sensitive config must encrypt at rest and
+    fail loud when encryption is unavailable."""
+
+    def test_sensitive_config_roundtrip(self):
+        secret = "sk-test-1234567890abcdef"
+        db.set_config("anthropic_api_key", secret)
+
+        assert db.get_config("anthropic_api_key") == secret
+
+        raw = db.get_all_config()["anthropic_api_key"]
+        assert raw.startswith(db._ENC_PREFIX), "Sensitive value must be encrypted at rest"
+        assert secret not in raw, "Plaintext secret must not appear in stored value"
+
+    def test_non_sensitive_config_not_encrypted(self):
+        db.set_config("manager_name", "Alice")
+        assert db.get_all_config()["manager_name"] == "Alice"
+
+    def test_encryption_unavailable_fails_loud_on_write(self, monkeypatch):
+        monkeypatch.setattr(db, "_get_fernet", lambda: None)
+        try:
+            db.set_config("smtp_password", "hunter2")
+        except db.EncryptionUnavailableError:
+            return
+        raise AssertionError(
+            "set_config must raise EncryptionUnavailableError for sensitive keys "
+            "when encryption is not available; instead it silently stored the value"
+        )
+
+    def test_decryption_failure_raises(self, monkeypatch):
+        secret = "sk-original"
+        db.set_config("anthropic_api_key", secret)
+
+        monkeypatch.setattr(db, "_get_fernet", lambda: None)
+        try:
+            db.get_config("anthropic_api_key")
+        except db.EncryptionUnavailableError:
+            return
+        raise AssertionError(
+            "get_config must raise EncryptionUnavailableError when an encrypted "
+            "value cannot be decrypted; instead it returned the ciphertext"
+        )
+
+
 class TestJournal:
     def test_add_and_retrieve(self):
         mid = db.create_manager("mgr", "Mgr", "pass1234")
