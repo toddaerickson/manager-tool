@@ -590,15 +590,28 @@ def _run_migrations(conn) -> list[str]:
     return newly_applied
 
 
-def init_db():
+_INIT_DB_DONE = False
+
+
+def init_db(*, force: bool = False):
     """Initialize database tables and apply pending migrations.
 
     SQLite: creates tables if missing, then runs migrations.
     PostgreSQL: assumes schema_postgres.sql ran at bootstrap; only runs
-    migrations to bring an older deploy forward."""
+    migrations to bring an older deploy forward.
+
+    Streamlit re-runs the script top-to-bottom on every interaction. Without
+    a guard, every render re-executes init_db's PRAGMA checks and migration-
+    ledger reads, which is wasted work. We skip after the first successful
+    call per process (P4.2 / AUDIT M4). Pass force=True to override (used
+    by tests that monkeypatch DB_PATH per case)."""
+    global _INIT_DB_DONE
+    if _INIT_DB_DONE and not force:
+        return
     if _detect_pg():
         with _connect() as conn:
             _run_migrations(conn)
+        _INIT_DB_DONE = True
         return
     if os.path.exists(DB_PATH):
         try:
@@ -917,6 +930,8 @@ def init_db():
         conn.commit()
 
         _run_migrations(conn)
+
+    _INIT_DB_DONE = True
 
 
 # ---------------------------------------------------------------------------
@@ -1497,6 +1512,9 @@ def update_action_item_status(item_id: int, status: str, manager_id: int) -> Non
 
 
 def list_action_items(event_id=None, status=None, assignee=None, manager_id=None):
+    """List action items. `status` may be a string (single value) or an
+    iterable of strings (matched via IN). Used by get_pending_action_items
+    to fold two queries into one (P4.2 / AUDIT M4)."""
     with _connect() as conn:
         query = (
             "SELECT ai.*, e.title AS event_title "
@@ -1511,8 +1529,15 @@ def list_action_items(event_id=None, status=None, assignee=None, manager_id=None
             query += " AND ai.event_id = ?"
             params.append(event_id)
         if status:
-            query += " AND ai.status = ?"
-            params.append(status)
+            if isinstance(status, (list, tuple, set)):
+                statuses = list(status)
+                if statuses:
+                    placeholders = ",".join("?" for _ in statuses)
+                    query += f" AND ai.status IN ({placeholders})"
+                    params.extend(statuses)
+            else:
+                query += " AND ai.status = ?"
+                params.append(status)
         if assignee:
             query += " AND LOWER(ai.assignee) = LOWER(?)"
             params.append(assignee)
@@ -1523,8 +1548,10 @@ def list_action_items(event_id=None, status=None, assignee=None, manager_id=None
 
 
 def get_pending_action_items(manager_id: int | None = None) -> list[dict[str, Any]]:
-    return (list_action_items(status="pending", manager_id=manager_id) +
-            list_action_items(status="in_progress", manager_id=manager_id))
+    """Single-query fetch of pending+in_progress action items (was two
+    separate queries; P4.2 / AUDIT M4)."""
+    return list_action_items(
+        status=("pending", "in_progress"), manager_id=manager_id)
 
 
 def delete_action_item(item_id: int, manager_id: int) -> None:
@@ -2425,6 +2452,26 @@ def list_milestones(plan_id: int, manager_id: int) -> list[dict[str, Any]]:
             "SELECT * FROM milestones WHERE plan_id = ? AND manager_id = ? ORDER BY id",
             (plan_id, manager_id))
     return rows
+
+
+def list_milestones_for_plans(plan_ids, manager_id: int) -> dict[int, list[dict[str, Any]]]:
+    """Batch fetch: one query, returns {plan_id: [milestone_rows]}.
+    Replaces the N+1 loop at web_app.py page_career_development that
+    called list_milestones once per plan (P4.2 / AUDIT M4)."""
+    plan_ids = list(plan_ids)
+    if not plan_ids:
+        return {}
+    placeholders = ",".join("?" for _ in plan_ids)
+    with _connect() as conn:
+        rows = _fetchall(conn,
+            f"SELECT * FROM milestones "
+            f"WHERE plan_id IN ({placeholders}) AND manager_id = ? "
+            f"ORDER BY plan_id, id",
+            (*plan_ids, manager_id))
+    out: dict[int, list[dict[str, Any]]] = {pid: [] for pid in plan_ids}
+    for r in rows:
+        out.setdefault(r["plan_id"], []).append(r)
+    return out
 
 
 # ---------------------------------------------------------------------------

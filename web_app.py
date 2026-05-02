@@ -136,6 +136,38 @@ def get_current_manager_id():
 _mid = get_current_manager_id
 
 
+# ---------------------------------------------------------------------------
+# Dashboard read bundle (P4.2 / AUDIT M4)
+#
+# The dashboard previously opened 6+ separate connections per render to
+# fetch streak / nudges / meeting cadence / feedback ratios / overdue
+# delegations / decisions due / weekly summary. Streamlit re-runs the
+# script top-to-bottom on every interaction, so this storm fires for
+# every keystroke, button click, and form submit on the dashboard.
+#
+# We bundle those 7 reads into one cached helper keyed on manager_id with
+# a short TTL. After a mutation the user sees stale data for up to TTL
+# seconds, which is acceptable for aggregate dashboard panels — and far
+# better than hammering Neon's connection cap.
+# ---------------------------------------------------------------------------
+
+_DASHBOARD_CACHE_TTL_SECONDS = 15
+
+
+@st.cache_data(ttl=_DASHBOARD_CACHE_TTL_SECONDS, show_spinner=False)
+def _dashboard_bundle(manager_id: int) -> dict:
+    """One-shot read of every aggregate the dashboard needs."""
+    return {
+        "streak": db.get_journal_streak(manager_id=manager_id),
+        "nudges": db.get_nudges(manager_id=manager_id),
+        "meeting_data": db.get_time_since_last_event_per_member(manager_id=manager_id),
+        "feedback_data": db.get_feedback_ratios(manager_id=manager_id),
+        "overdue_dels": db.get_overdue_delegations(manager_id=manager_id),
+        "decisions_due": db.get_decisions_due_for_review(manager_id=manager_id),
+        "summary": db.get_weekly_summary(manager_id=manager_id),
+    }
+
+
 def _current_user_agent_hash() -> str | None:
     """Best-effort User-Agent hash for binding a session token to its origin.
     Returns None if the User-Agent is not exposed to Streamlit."""
@@ -399,13 +431,16 @@ def page_dashboard():
     wisdom = templates.get_daily_wisdom()
     st.info(f"\U0001F4A1 **Daily Wisdom #{wisdom['number']}:** {wisdom['text']}")
 
+    # -- Bundle 7 dashboard reads behind one cached call --
+    bundle = _dashboard_bundle(_mid())
+
     # -- Streaks (loss aversion) --
-    streak = db.get_journal_streak(manager_id=_mid())
+    streak = bundle["streak"]
     if streak > 0:
         st.markdown(f"\U0001F525 **Journal streak: {streak} day{'s' if streak != 1 else ''}**")
 
     # -- Nudges (triggers for action) --
-    nudges = db.get_nudges(manager_id=_mid())
+    nudges = bundle["nudges"]
     if nudges:
         for n in nudges:
             if n["severity"] == "critical":
@@ -416,25 +451,25 @@ def page_dashboard():
                 st.info(f"{n['message']}")
 
     # -- Anti-pattern alert (identity hook) --
-    meeting_data = db.get_time_since_last_event_per_member(manager_id=_mid())
-    feedback_data = db.get_feedback_ratios(manager_id=_mid())
+    meeting_data = bundle["meeting_data"]
+    feedback_data = bundle["feedback_data"]
     ap = templates.detect_anti_patterns(meeting_data, feedback_data)
     if ap:
         p = ap[0]
         st.warning(f"**{p['pattern']}:** {p['evidence']} — {p['suggestion']}")
 
     # -- Delegation & decision review nudges --
-    overdue_dels = db.get_overdue_delegations(manager_id=_mid())
+    overdue_dels = bundle["overdue_dels"]
     if overdue_dels:
         st.warning(f"\U0001F4E4 **{len(overdue_dels)} delegation(s) past check-in date** — "
                    f"review them in Delegations.")
-    decisions_due = db.get_decisions_due_for_review(manager_id=_mid())
+    decisions_due = bundle["decisions_due"]
     if decisions_due:
         st.info(f"\U0001F9E0 **{len(decisions_due)} decision(s) due for review** — "
                 f"did they play out as expected? Check the Decision Log.")
 
     # -- Quick stats [C7: System 1 — emoji indicators for instant scanning] --
-    summary = db.get_weekly_summary(manager_id=_mid())
+    summary = bundle["summary"]
     c1, c2, c3, c4 = st.columns(4)
     upcoming_n = len(summary["upcoming_events"])
     pending_n = len(summary["pending_actions"])
@@ -1565,13 +1600,16 @@ def page_career_development():
 
     with tab_plans:
         plans = db.list_development_plans(member_id, manager_id=_mid())
+        # Batch-fetch milestones for all plans in one query (was N+1).
+        milestones_by_plan = db.list_milestones_for_plans(
+            [p["id"] for p in plans], manager_id=_mid())
         for plan in plans:
             with st.expander(f"{plan['title']} [{plan['status']}]"):
                 if plan.get("description"):
                     st.markdown(plan["description"])
                 if plan.get("target_date"):
                     st.caption(f"Target: {plan['target_date']}")
-                milestones = db.list_milestones(plan["id"], manager_id=_mid())
+                milestones = milestones_by_plan.get(plan["id"], [])
                 for ms in milestones:
                     done = "\u2705" if ms["completed"] else "\u2B1C"
                     st.markdown(f"{done} {ms['description']}")

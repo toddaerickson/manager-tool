@@ -657,7 +657,9 @@ class TestOrphanTableManagerId:
         conn.commit()
         conn.close()
 
-        db.init_db()  # Should apply 0002 again, which backfills the NULL row.
+        # init_db is guarded once-per-process; force a re-run to simulate
+        # the upgrade path.
+        db.init_db(force=True)  # Should apply 0002 again, which backfills the NULL row.
 
         conn = db.get_connection()
         rows = conn.execute(
@@ -963,6 +965,111 @@ class TestRaceConditionFreeUpserts:
                 (mid, "2026-05-02", "rule"))
             count = cur.fetchone()["c"]
         assert count == 1, f"Expected exactly 1 row, got {count}"
+
+
+class TestQueryEfficiency:
+    """Regressions for AUDIT M4 / P4.2 — fewer queries, batch fetches,
+    once-per-process init_db()."""
+
+    def test_get_pending_action_items_uses_in_clause(self):
+        """Was two queries (status='pending', then status='in_progress');
+        now one query with IN. We verify by counting connections during
+        the call."""
+        mid = db.create_manager("perf_qe", "P", "pass1234")
+        eid = db.create_event("e", "one_on_one", "2026-05-01", "10:00", manager_id=mid)
+        db.add_action_item("a", event_id=eid, manager_id=mid)
+        db.add_action_item("b", event_id=eid, manager_id=mid)
+        # Patch get_connection to count calls
+        original = db.get_connection
+        calls = {"n": 0}
+
+        def counting():
+            calls["n"] += 1
+            return original()
+
+        try:
+            db.get_connection = counting
+            rows = db.get_pending_action_items(manager_id=mid)
+        finally:
+            db.get_connection = original
+        assert len(rows) == 2
+        assert calls["n"] == 1, f"Expected 1 connection, got {calls['n']}"
+
+    def test_list_action_items_status_iterable(self):
+        """Status can be a tuple/list — produces an IN (?, ?) clause."""
+        mid = db.create_manager("perf_status", "P", "pass1234")
+        eid = db.create_event("e", "one_on_one", "2026-05-01", "10:00", manager_id=mid)
+        a1 = db.add_action_item("pending one", event_id=eid, manager_id=mid)
+        a2 = db.add_action_item("in-progress one", event_id=eid, manager_id=mid)
+        db.update_action_item_status(a2, "in_progress", manager_id=mid)
+
+        rows = db.list_action_items(
+            status=("pending", "in_progress"), manager_id=mid)
+        ids = {r["id"] for r in rows}
+        assert ids == {a1, a2}
+
+    def test_list_milestones_for_plans_one_query(self):
+        """Was N+1 (one query per plan); now one query for all plans.
+        Connection-count test confirms it."""
+        mid = db.create_manager("perf_ms", "P", "pass1234")
+        tid = db.add_team_member("Alice", manager_id=mid)
+        plan_ids = [
+            db.add_development_plan(tid, f"Plan {i}", manager_id=mid)
+            for i in range(3)
+        ]
+        for pid in plan_ids:
+            db.add_milestone(pid, f"Milestone for {pid}", manager_id=mid)
+            db.add_milestone(pid, f"Second for {pid}", manager_id=mid)
+
+        original = db.get_connection
+        calls = {"n": 0}
+
+        def counting():
+            calls["n"] += 1
+            return original()
+
+        try:
+            db.get_connection = counting
+            result = db.list_milestones_for_plans(plan_ids, manager_id=mid)
+        finally:
+            db.get_connection = original
+
+        assert calls["n"] == 1, f"Expected 1 connection, got {calls['n']}"
+        assert set(result.keys()) == set(plan_ids)
+        for pid in plan_ids:
+            assert len(result[pid]) == 2
+
+    def test_list_milestones_for_plans_empty_input(self):
+        mid = db.create_manager("perf_empty", "P", "pass1234")
+        assert db.list_milestones_for_plans([], manager_id=mid) == {}
+
+    def test_list_milestones_for_plans_cross_manager_safe(self):
+        """Cross-manager call returns empty for each requested plan id."""
+        m1 = db.create_manager("perf_xm1", "M1", "pass1234")
+        m2 = db.create_manager("perf_xm2", "M2", "pass1234")
+        t1 = db.add_team_member("Alice", manager_id=m1)
+        pid = db.add_development_plan(t1, "Plan", manager_id=m1)
+        db.add_milestone(pid, "M1 milestone", manager_id=m1)
+        result = db.list_milestones_for_plans([pid], manager_id=m2)
+        assert result == {pid: []}
+
+    def test_init_db_is_once_per_process(self, monkeypatch):
+        """The default init_db() returns immediately after the first
+        success per process. force=True overrides for tests."""
+        monkeypatch.setattr(db, "_INIT_DB_DONE", True)
+        called = {"n": 0}
+        original = db._run_migrations
+
+        def counting(conn):
+            called["n"] += 1
+            return original(conn)
+
+        monkeypatch.setattr(db, "_run_migrations", counting)
+        db.init_db()  # Should be a no-op (flag already True)
+        assert called["n"] == 0, "init_db without force must skip when already done"
+
+        db.init_db(force=True)
+        assert called["n"] == 1, "force=True must run the migrations"
 
 
 class TestHotPathIndexes:
