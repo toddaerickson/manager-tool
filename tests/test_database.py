@@ -221,6 +221,16 @@ class TestPerTenantConfig:
 
         assert db.get_config("anthropic_api_key", manager_id=m1) == "M1 key"
         assert db.get_config("anthropic_api_key", manager_id=m2) == "M2 key"
+        # Explicit cross-tenant negative: m2 must NEVER see m1's key.
+        assert db.get_config("anthropic_api_key", manager_id=m2) != "M1 key"
+        assert db.get_config("anthropic_api_key", manager_id=m1) != "M2 key"
+
+    def test_per_tenant_isolation_one_sided(self):
+        """Only m1 sets a key; m2 must read None, not m1's value."""
+        m1 = db.create_manager("ptc_only_m1", "M1", "pass1234")
+        m2 = db.create_manager("ptc_only_m2", "M2", "pass1234")
+        db.set_config("anthropic_api_key", "M1 key", manager_id=m1)
+        assert db.get_config("anthropic_api_key", manager_id=m2) is None
 
     def test_get_all_config_scoped(self):
         m1 = db.create_manager("ptc_all_m1", "M1", "pass1234")
