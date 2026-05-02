@@ -312,6 +312,20 @@ def _commit(conn):
         conn.commit()
 
 
+def _to_datetime(value):
+    """Normalize a TIMESTAMP column value to a datetime.
+
+    psycopg2 returns datetime objects for TIMESTAMP columns, while SQLite
+    stores them as ISO-formatted strings. Code that compares or parses
+    these values must coerce both shapes; otherwise PG hits a TypeError
+    (datetime vs str) where SQLite quietly works."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(value)
+
+
 # ---------------------------------------------------------------------------
 # SQL dialect helpers — generate correct SQL for SQLite or PostgreSQL
 # ---------------------------------------------------------------------------
@@ -1149,7 +1163,7 @@ def validate_session(token: str, user_agent_hash: str | None = None) -> int | No
     None if the token is missing, expired, or its UA hash mismatches."""
     if not token:
         return None
-    now_iso = datetime.now().isoformat()
+    now = datetime.now()
     with _connect() as conn:
         row = _fetchone(conn,
                         "SELECT manager_id, expires_at, user_agent_hash "
@@ -1157,7 +1171,7 @@ def validate_session(token: str, user_agent_hash: str | None = None) -> int | No
                         (token,))
         if not row:
             return None
-        if row["expires_at"] <= now_iso:
+        if _to_datetime(row["expires_at"]) <= now:
             # Expired: clean up and reject.
             _exec(conn, "DELETE FROM sessions WHERE id = ?", (token,))
             _commit(conn)
@@ -1167,7 +1181,7 @@ def validate_session(token: str, user_agent_hash: str | None = None) -> int | No
             return None
         _exec(conn,
               "UPDATE sessions SET last_seen = ? WHERE id = ?",
-              (now_iso, token))
+              (now.isoformat(), token))
         _commit(conn)
         return row["manager_id"]
 
@@ -1213,7 +1227,7 @@ def get_lockout_until(username: str) -> datetime | None:
                         (uname,))
     if not row or not row["locked_until"]:
         return None
-    locked_until = datetime.fromisoformat(row["locked_until"])
+    locked_until = _to_datetime(row["locked_until"])
     return locked_until if locked_until > datetime.now() else None
 
 
@@ -2310,10 +2324,9 @@ def get_pre_meeting_prep(member_id: int, manager_id: int) -> dict | None:
             "ORDER BY created_at DESC LIMIT 1",
             (member_id, manager_id))
         if last_fb:
-            prep["last_feedback_date"] = last_fb["created_at"][:10]
-            prep["days_since_feedback"] = (
-                datetime.now().date() - datetime.fromisoformat(last_fb["created_at"][:10]).date()
-            ).days
+            fb_created = _to_datetime(last_fb["created_at"])
+            prep["last_feedback_date"] = fb_created.date().isoformat()
+            prep["days_since_feedback"] = (datetime.now().date() - fb_created.date()).days
         else:
             prep["last_feedback_date"] = None
             prep["days_since_feedback"] = None
