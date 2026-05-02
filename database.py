@@ -93,32 +93,39 @@ def _decrypt_value(value):
 _USE_PG = None
 
 
+def _read_streamlit_secret(key: str, default: str = "") -> str:
+    """Best-effort read from Streamlit's secrets.toml — empty string when
+    Streamlit isn't installed or no secrets file exists. Logs a debug
+    message on unexpected failures so a misconfigured secrets store
+    isn't completely silent (P5 / AUDIT M6)."""
+    try:
+        import streamlit as st  # noqa: F401 — needed for st.secrets attr
+    except ImportError:
+        return default
+    try:
+        return st.secrets.get(key, default)
+    except FileNotFoundError:
+        # Common case in non-Streamlit contexts (CLI, tests) — no secrets
+        # file present. Don't warn.
+        return default
+    except Exception as e:
+        logger.debug("Streamlit secrets unavailable for %s: %s", key, e)
+        return default
+
+
 def _detect_pg():
     """Detect if we should use PostgreSQL."""
     global _USE_PG
     if _USE_PG is not None:
         return _USE_PG
-    url = os.environ.get("DATABASE_URL", "")
-    if not url:
-        try:
-            import streamlit as st
-            url = st.secrets.get("DATABASE_URL", "")
-        except Exception:
-            url = ""
+    url = os.environ.get("DATABASE_URL", "") or _read_streamlit_secret("DATABASE_URL")
     _USE_PG = bool(url)
     return _USE_PG
 
 
 def _get_pg_url():
     """Get PostgreSQL connection URL."""
-    url = os.environ.get("DATABASE_URL", "")
-    if not url:
-        try:
-            import streamlit as st
-            url = st.secrets.get("DATABASE_URL", "")
-        except Exception:
-            pass
-    return url
+    return os.environ.get("DATABASE_URL", "") or _read_streamlit_secret("DATABASE_URL")
 
 
 def _q(sql):
