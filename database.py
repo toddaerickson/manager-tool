@@ -425,6 +425,40 @@ def _migration_sole_manager_backfill(conn) -> None:
     _commit(conn)
 
 
+def _migration_save_uniqueness_constraints(conn) -> None:
+    """P2.6: add UNIQUE indexes that let save_self_assessment and
+    save_coach_suggestion use INSERT ... ON CONFLICT DO UPDATE atomically
+    instead of the race-prone DELETE-then-INSERT pattern under autocommit.
+
+    Dedup pre-existing duplicates first (keep the highest-id row per group),
+    otherwise the unique index creation fails."""
+    # coach_suggestions: one row per (manager_id, suggestion_date, tier)
+    conn.execute(_q(
+        "DELETE FROM coach_suggestions "
+        "WHERE id NOT IN ("
+        "  SELECT MAX(id) FROM coach_suggestions "
+        "  GROUP BY manager_id, suggestion_date, tier"
+        ")"
+    ))
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_suggestions_mid_date_tier "
+        "ON coach_suggestions (manager_id, suggestion_date, tier)"
+    )
+    # self_assessments: one row per (manager_id, week_date, dimension)
+    conn.execute(_q(
+        "DELETE FROM self_assessments "
+        "WHERE id NOT IN ("
+        "  SELECT MAX(id) FROM self_assessments "
+        "  GROUP BY manager_id, week_date, dimension"
+        ")"
+    ))
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_self_assessments_mid_week_dim "
+        "ON self_assessments (manager_id, week_date, dimension)"
+    )
+    _commit(conn)
+
+
 def _migration_sessions_and_login_attempts(conn) -> None:
     """P2.3: add server-side sessions + persistent login_attempts tables for
     deployments that pre-date schema_postgres.sql carrying these tables."""
@@ -473,6 +507,7 @@ _MIGRATIONS: list[tuple[str, Any]] = [
     ("0003_partition_config_table", _migration_partition_config_table),
     ("0004_sole_manager_backfill", _migration_sole_manager_backfill),
     ("0005_sessions_and_login_attempts", _migration_sessions_and_login_attempts),
+    ("0006_save_uniqueness_constraints", _migration_save_uniqueness_constraints),
 ]
 
 
@@ -820,6 +855,11 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (manager_id) REFERENCES managers(id)
         );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_suggestions_mid_date_tier
+            ON coach_suggestions (manager_id, suggestion_date, tier);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_self_assessments_mid_week_dim
+            ON self_assessments (manager_id, week_date, dimension);
         """)
         conn.commit()
 
@@ -1758,19 +1798,19 @@ def get_journal_streak(manager_id: int | None = None) -> int:
 
 def save_self_assessment(week_date, scores_dict, manager_id=None):
     """Save or replace self-assessment scores for a week.
-    scores_dict: {dimension_name: score}"""
+    scores_dict: {dimension_name: score}
+
+    Uses INSERT ... ON CONFLICT DO UPDATE under the (manager_id, week_date,
+    dimension) unique index so concurrent saves cannot produce duplicate or
+    missing rows under autocommit (regression for AUDIT H6)."""
     with _connect() as conn:
-        sql = "DELETE FROM self_assessments WHERE week_date = ?"
-        params = [week_date]
-        if manager_id is not None:
-            sql += " AND manager_id = ?"
-            params.append(manager_id)
-        _exec(conn, sql, params)
         for dim, score in scores_dict.items():
             _exec(conn,
-                  "INSERT INTO self_assessments (week_date, dimension, score, manager_id) "
-                  "VALUES (?, ?, ?, ?)",
-                  (week_date, dim, score, manager_id))
+                  "INSERT INTO self_assessments "
+                  "(manager_id, week_date, dimension, score) VALUES (?, ?, ?, ?) "
+                  "ON CONFLICT(manager_id, week_date, dimension) "
+                  "DO UPDATE SET score = excluded.score",
+                  (manager_id, week_date, dim, score))
         _commit(conn)
 
 
@@ -2572,20 +2612,24 @@ def save_coach_suggestion(manager_id: int, suggestion: str,
                           tier: str = "rule",
                           action_page: str | None = None,
                           suggestion_date: str | None = None) -> int | None:
-    """Save a coach suggestion, replacing any existing one for the same date/tier."""
+    """Save a coach suggestion, replacing any existing one for the same
+    (manager_id, suggestion_date, tier).
+
+    Uses INSERT ... ON CONFLICT DO UPDATE under the unique index so concurrent
+    saves cannot produce duplicate or missing rows under autocommit
+    (regression for AUDIT H6)."""
     if not suggestion_date:
         suggestion_date = datetime.now().date().isoformat()
     with _connect() as conn:
-        # Remove existing suggestion for same date/tier
-        _exec(conn,
-              "DELETE FROM coach_suggestions WHERE manager_id = ? "
-              "AND suggestion_date = ? AND tier = ?",
-              (manager_id, suggestion_date, tier))
         sid = _exec_returning_id(
             conn,
             "INSERT INTO coach_suggestions "
             "(manager_id, suggestion_date, tier, suggestion, action_page) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(manager_id, suggestion_date, tier) "
+            "DO UPDATE SET suggestion = excluded.suggestion, "
+            "              action_page = excluded.action_page, "
+            "              dismissed = 0",
             (manager_id, suggestion_date, tier, suggestion, action_page),
         )
         _commit(conn)
