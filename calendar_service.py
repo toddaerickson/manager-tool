@@ -4,6 +4,7 @@ Generates iCalendar (.ics) files and sends them via SMTP email
 so recipients can accept and add events to Google Calendar.
 """
 
+import logging
 import re
 import smtplib
 import uuid
@@ -17,6 +18,8 @@ from email.utils import formataddr, parseaddr
 from email import encoders
 
 from database import get_config
+
+logger = logging.getLogger("manager_tool.calendar")
 
 
 # ---------------------------------------------------------------------------
@@ -214,11 +217,17 @@ def send_calendar_invite(event, recipient_email, recipient_name=None, manager_id
         server.quit()
         return (True, f"Invitation sent to {recipient_email}")
     except smtplib.SMTPAuthenticationError:
+        logger.exception("SMTP auth failed for %s", smtp_user)
         return (False, "SMTP authentication failed. For Gmail, use an App Password: https://myaccount.google.com/apppasswords")
-    except smtplib.SMTPException as e:
-        return (False, f"SMTP error: {e}")
-    except Exception as e:
-        return (False, f"Failed to send email: {e}")
+    except smtplib.SMTPException:
+        # SMTP exceptions can include the server hostname, port, and
+        # sometimes the auth username — log the full traceback for ops
+        # and surface a generic message to the UI (AUDIT M8).
+        logger.exception("SMTP error sending to %s", recipient_email)
+        return (False, "SMTP error. Check the server logs for details.")
+    except Exception:
+        logger.exception("Failed to send calendar invite to %s", recipient_email)
+        return (False, "Failed to send email. Check the server logs for details.")
 
 
 def send_invite_to_self(event, manager_id=None):
@@ -369,6 +378,8 @@ def send_weekly_digest(manager_id):
         server.quit()
         return (True, f"Weekly digest sent to {manager_email}")
     except smtplib.SMTPAuthenticationError:
+        logger.exception("Weekly digest SMTP auth failed for %s", smtp_user)
         return (False, "SMTP authentication failed. Check your App Password.")
-    except Exception as e:
-        return (False, f"Failed to send digest: {e}")
+    except Exception:
+        logger.exception("Failed to send weekly digest to %s", manager_email)
+        return (False, "Failed to send digest. Check the server logs for details.")
