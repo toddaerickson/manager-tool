@@ -501,6 +501,41 @@ def _migration_sessions_and_login_attempts(conn) -> None:
     _commit(conn)
 
 
+def _migration_hot_path_indexes(conn) -> None:
+    """P4.1: btree indexes on hot WHERE columns (AUDIT M5). Idempotent via
+    `IF NOT EXISTS`. Operators on Postgres prod should consider running
+    `CREATE INDEX CONCURRENTLY` manually for zero-downtime, but this
+    migration is safe to run even on small/medium tables."""
+    statements = [
+        "CREATE INDEX IF NOT EXISTS ix_events_manager_date_status "
+        "ON events (manager_id, scheduled_date, status)",
+
+        "CREATE INDEX IF NOT EXISTS ix_action_items_manager_status_due "
+        "ON action_items (manager_id, status, due_date)",
+
+        "CREATE INDEX IF NOT EXISTS ix_journal_entries_manager_date "
+        "ON journal_entries (manager_id, entry_date)",
+
+        "CREATE INDEX IF NOT EXISTS ix_feedback_member_created "
+        "ON feedback (team_member_id, created_at)",
+
+        "CREATE INDEX IF NOT EXISTS ix_team_members_manager "
+        "ON team_members (manager_id)",
+
+        "CREATE INDEX IF NOT EXISTS ix_running_notes_member_date "
+        "ON running_notes (team_member_id, note_date)",
+
+        "CREATE INDEX IF NOT EXISTS ix_delegations_manager_status_checkin "
+        "ON delegations (manager_id, status, check_in_date)",
+
+        "CREATE INDEX IF NOT EXISTS ix_coach_suggestions_manager_date "
+        "ON coach_suggestions (manager_id, suggestion_date)",
+    ]
+    for sql in statements:
+        conn.execute(sql)
+    _commit(conn)
+
+
 _MIGRATIONS: list[tuple[str, Any]] = [
     ("0001_journal_coaching_response", _migration_journal_coaching_response),
     ("0002_orphan_table_manager_id", _migration_orphan_table_manager_id),
@@ -508,6 +543,7 @@ _MIGRATIONS: list[tuple[str, Any]] = [
     ("0004_sole_manager_backfill", _migration_sole_manager_backfill),
     ("0005_sessions_and_login_attempts", _migration_sessions_and_login_attempts),
     ("0006_save_uniqueness_constraints", _migration_save_uniqueness_constraints),
+    ("0007_hot_path_indexes", _migration_hot_path_indexes),
 ]
 
 
@@ -860,6 +896,23 @@ def init_db():
             ON coach_suggestions (manager_id, suggestion_date, tier);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_self_assessments_mid_week_dim
             ON self_assessments (manager_id, week_date, dimension);
+
+        CREATE INDEX IF NOT EXISTS ix_events_manager_date_status
+            ON events (manager_id, scheduled_date, status);
+        CREATE INDEX IF NOT EXISTS ix_action_items_manager_status_due
+            ON action_items (manager_id, status, due_date);
+        CREATE INDEX IF NOT EXISTS ix_journal_entries_manager_date
+            ON journal_entries (manager_id, entry_date);
+        CREATE INDEX IF NOT EXISTS ix_feedback_member_created
+            ON feedback (team_member_id, created_at);
+        CREATE INDEX IF NOT EXISTS ix_team_members_manager
+            ON team_members (manager_id);
+        CREATE INDEX IF NOT EXISTS ix_running_notes_member_date
+            ON running_notes (team_member_id, note_date);
+        CREATE INDEX IF NOT EXISTS ix_delegations_manager_status_checkin
+            ON delegations (manager_id, status, check_in_date);
+        CREATE INDEX IF NOT EXISTS ix_coach_suggestions_manager_date
+            ON coach_suggestions (manager_id, suggestion_date);
         """)
         conn.commit()
 

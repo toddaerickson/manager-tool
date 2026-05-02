@@ -263,3 +263,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_suggestions_mid_date_tier
     ON coach_suggestions (manager_id, suggestion_date, tier);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_self_assessments_mid_week_dim
     ON self_assessments (manager_id, week_date, dimension);
+
+-- Hot-path indexes (P4.1 / AUDIT M5).
+-- Note: in production, prefer `CREATE INDEX CONCURRENTLY` to avoid locking
+-- the table during the build. The runner-applied form below uses plain
+-- CREATE INDEX IF NOT EXISTS because `CONCURRENTLY` can't run inside a
+-- transaction; the migration ledger wraps each migration in one. Run the
+-- CONCURRENTLY variants manually for zero-downtime.
+CREATE INDEX IF NOT EXISTS ix_events_manager_date_status
+    ON events (manager_id, scheduled_date, status);
+CREATE INDEX IF NOT EXISTS ix_action_items_manager_status_due
+    ON action_items (manager_id, status, due_date);
+CREATE INDEX IF NOT EXISTS ix_journal_entries_manager_date
+    ON journal_entries (manager_id, entry_date);
+CREATE INDEX IF NOT EXISTS ix_feedback_member_created
+    ON feedback (team_member_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_team_members_manager
+    ON team_members (manager_id);
+CREATE INDEX IF NOT EXISTS ix_running_notes_member_date
+    ON running_notes (team_member_id, note_date);
+CREATE INDEX IF NOT EXISTS ix_delegations_manager_status_checkin
+    ON delegations (manager_id, status, check_in_date);
+CREATE INDEX IF NOT EXISTS ix_coach_suggestions_manager_date
+    ON coach_suggestions (manager_id, suggestion_date);
