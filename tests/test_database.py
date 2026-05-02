@@ -41,11 +41,34 @@ class TestManagerAuth:
         assert db.manager_exists("dave") is True
         assert db.manager_exists("nonexistent") is False
 
-    def test_update_password(self):
+    def test_update_password_with_correct_old_password(self):
         mid = db.create_manager("eve", "Eve E", "oldpass99")
-        db.update_manager_password(mid, "newpass99")
+        db.update_manager_password(mid, "oldpass99", "newpass99")
         assert db.authenticate_manager("eve", "newpass99") is not None
         assert db.authenticate_manager("eve", "oldpass99") is None
+
+    def test_update_password_rejects_wrong_old_password(self):
+        """Regression for AUDIT H4 — must verify current password before update."""
+        mid = db.create_manager("frank", "Frank F", "realpass99")
+        try:
+            db.update_manager_password(mid, "wrongpass", "newpass99")
+        except db.IncorrectPasswordError:
+            pass
+        else:
+            raise AssertionError(
+                "update_manager_password must reject an incorrect old password"
+            )
+        assert db.authenticate_manager("frank", "realpass99") is not None
+        assert db.authenticate_manager("frank", "newpass99") is None
+
+    def test_update_password_rejects_unknown_manager_id(self):
+        try:
+            db.update_manager_password(999999, "anything", "newpass99")
+        except db.IncorrectPasswordError:
+            return
+        raise AssertionError(
+            "update_manager_password must reject an unknown manager_id"
+        )
 
 
 class TestMultiTenancy:
@@ -181,6 +204,50 @@ class TestConfig:
         assert db.get_config("changing") == "v1"
         db.set_config("changing", "v2")
         assert db.get_config("changing") == "v2"
+
+
+class TestSensitiveConfigEncryption:
+    """Regression for AUDIT C4 — sensitive config must encrypt at rest and
+    fail loud when encryption is unavailable."""
+
+    def test_sensitive_config_roundtrip(self):
+        secret = "sk-test-1234567890abcdef"
+        db.set_config("anthropic_api_key", secret)
+
+        assert db.get_config("anthropic_api_key") == secret
+
+        raw = db.get_all_config()["anthropic_api_key"]
+        assert raw.startswith(db._ENC_PREFIX), "Sensitive value must be encrypted at rest"
+        assert secret not in raw, "Plaintext secret must not appear in stored value"
+
+    def test_non_sensitive_config_not_encrypted(self):
+        db.set_config("manager_name", "Alice")
+        assert db.get_all_config()["manager_name"] == "Alice"
+
+    def test_encryption_unavailable_fails_loud_on_write(self, monkeypatch):
+        monkeypatch.setattr(db, "_get_fernet", lambda: None)
+        try:
+            db.set_config("smtp_password", "hunter2")
+        except db.EncryptionUnavailableError:
+            return
+        raise AssertionError(
+            "set_config must raise EncryptionUnavailableError for sensitive keys "
+            "when encryption is not available; instead it silently stored the value"
+        )
+
+    def test_decryption_failure_raises(self, monkeypatch):
+        secret = "sk-original"
+        db.set_config("anthropic_api_key", secret)
+
+        monkeypatch.setattr(db, "_get_fernet", lambda: None)
+        try:
+            db.get_config("anthropic_api_key")
+        except db.EncryptionUnavailableError:
+            return
+        raise AssertionError(
+            "get_config must raise EncryptionUnavailableError when an encrypted "
+            "value cannot be decrypted; instead it returned the ciphertext"
+        )
 
 
 class TestJournal:
@@ -387,3 +454,39 @@ class TestCoachSuggestions:
         db.save_coach_suggestion(mid, "Second", tier="rule")
         suggestion = db.get_todays_suggestion(mid)
         assert suggestion["suggestion"] == "Second"
+
+
+class TestSchemaMigrationSafety:
+    """Regression for AUDIT C5 — init_db must NOT delete a legacy DB."""
+
+    def test_legacy_schema_does_not_delete_db(self, tmp_path, monkeypatch):
+        import os
+        import sqlite3
+
+        legacy_path = str(tmp_path / "legacy.db")
+        conn = sqlite3.connect(legacy_path)
+        conn.execute(
+            "CREATE TABLE journal_entries ("
+            "id INTEGER PRIMARY KEY, "
+            "manager_id INTEGER NOT NULL, "
+            "entry_date TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO journal_entries (manager_id, entry_date) VALUES (1, '2026-01-01')"
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(db, "DB_PATH", legacy_path)
+        monkeypatch.setattr(db, "_USE_PG", False)
+
+        try:
+            db.init_db()
+        except RuntimeError:
+            pass  # Acceptable: refuse-to-migrate is the new contract.
+
+        assert os.path.exists(legacy_path), "init_db must never delete an existing database file"
+        conn = sqlite3.connect(legacy_path)
+        rows = conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()
+        conn.close()
+        assert rows[0] == 1, "Existing rows must be preserved"

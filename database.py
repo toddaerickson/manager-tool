@@ -25,9 +25,21 @@ _SENSITIVE_KEYS = {"anthropic_api_key", "smtp_password", "google_client_secret"}
 _ENC_PREFIX = "enc:"
 
 
+class EncryptionUnavailableError(RuntimeError):
+    """Raised when sensitive config cannot be encrypted or decrypted."""
+
+
 def _get_fernet():
     """Get a Fernet instance for encrypting/decrypting sensitive config.
-    Returns None if no encryption key is configured (local dev fallback)."""
+    Returns None only if `cryptography` is not installed."""
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError:
+        logger.error(
+            "cryptography library is not installed; sensitive config cannot be protected"
+        )
+        return None
+
     key = os.environ.get("CONFIG_ENCRYPTION_KEY")
     if not key:
         key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".encryption_key")
@@ -35,39 +47,44 @@ def _get_fernet():
             with open(key_path, "r") as f:
                 key = f.read().strip()
         else:
-            # Auto-generate key for first-time use
-            try:
-                from cryptography.fernet import Fernet
-                key = Fernet.generate_key().decode()
-                with open(key_path, "w") as f:
-                    f.write(key)
-            except ImportError:
-                return None
-    try:
-        from cryptography.fernet import Fernet
-        return Fernet(key.encode() if isinstance(key, str) else key)
-    except Exception:
-        return None
+            key = Fernet.generate_key().decode()
+            with open(key_path, "w") as f:
+                f.write(key)
+    return Fernet(key.encode() if isinstance(key, str) else key)
 
 
 def _encrypt_value(value):
-    """Encrypt a string value if Fernet is available."""
+    """Encrypt a sensitive string value. Raises EncryptionUnavailableError if
+    encryption is not available (refuses to write plaintext for sensitive keys)."""
+    if not value:
+        return value
     f = _get_fernet()
-    if f and value:
-        return _ENC_PREFIX + f.encrypt(value.encode()).decode()
-    return value
+    if f is None:
+        raise EncryptionUnavailableError(
+            "Cannot store sensitive configuration: cryptography is not installed. "
+            "Install it via `pip install cryptography`."
+        )
+    return _ENC_PREFIX + f.encrypt(value.encode()).decode()
 
 
 def _decrypt_value(value):
-    """Decrypt a string value if it's encrypted."""
-    if value and value.startswith(_ENC_PREFIX):
-        f = _get_fernet()
-        if f:
-            try:
-                return f.decrypt(value[len(_ENC_PREFIX):].encode()).decode()
-            except Exception:
-                return value  # Graceful fallback if key changed
-    return value
+    """Decrypt a sensitive string value. Raises EncryptionUnavailableError on
+    any decryption failure (refuses to return ciphertext as plaintext)."""
+    if not value or not value.startswith(_ENC_PREFIX):
+        return value
+    f = _get_fernet()
+    if f is None:
+        raise EncryptionUnavailableError(
+            "Cannot decrypt sensitive configuration: cryptography is not installed."
+        )
+    try:
+        return f.decrypt(value[len(_ENC_PREFIX):].encode()).decode()
+    except Exception as e:
+        logger.exception("Failed to decrypt sensitive config value")
+        raise EncryptionUnavailableError(
+            "Failed to decrypt sensitive config value "
+            "(encryption key may have changed or value is corrupt)."
+        ) from e
 
 # ---------------------------------------------------------------------------
 # Dual-mode connection: PostgreSQL (production) / SQLite (local dev)
@@ -262,20 +279,21 @@ def init_db():
     """Initialize database tables (SQLite only — PostgreSQL uses schema_postgres.sql)."""
     if _detect_pg():
         return  # Tables created via schema_postgres.sql
-    # Migrate: if old schema has NOT NULL manager_id, drop and recreate
     if os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH)
             info = conn.execute("PRAGMA table_info(journal_entries)").fetchall()
+            conn.close()
             for col in info:
                 if col[1] == "manager_id" and col[3] == 1:  # notnull=1
-                    conn.close()
-                    os.remove(DB_PATH)
-                    break
-            else:
-                conn.close()
-        except Exception as e:
-            logger.debug("Schema migration check skipped: %s", e)
+                    raise RuntimeError(
+                        f"Detected legacy schema in {DB_PATH}: "
+                        "journal_entries.manager_id is NOT NULL. "
+                        "Refusing to auto-migrate (would destroy data). "
+                        "Back up the file, then run a manual migration to make manager_id nullable."
+                    )
+        except sqlite3.Error as e:
+            logger.warning("Schema migration check failed: %s", e)
     conn = get_connection()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS managers (
@@ -648,10 +666,23 @@ def update_manager(manager_id: int, **kwargs: Any) -> None:
     conn.close()
 
 
-def update_manager_password(manager_id: int, new_password: str) -> None:
-    """Change manager password."""
-    pw_hash = _hash_password(new_password)
+class IncorrectPasswordError(ValueError):
+    """Raised when a password change is attempted with the wrong current password."""
+
+
+def update_manager_password(manager_id: int, old_password: str, new_password: str) -> None:
+    """Change manager password after verifying the current one.
+
+    Raises IncorrectPasswordError if old_password does not match, or if the
+    manager does not exist. This guard prevents account takeover from any code
+    path that exposes update_manager_password with a caller-supplied manager_id.
+    """
     conn = get_connection()
+    row = _fetchone(conn, "SELECT password_hash FROM managers WHERE id = ?", (manager_id,))
+    if not row or not _verify_password(old_password, row["password_hash"]):
+        conn.close()
+        raise IncorrectPasswordError("Current password is incorrect")
+    pw_hash = _hash_password(new_password)
     _exec(conn, "UPDATE managers SET password_hash = ?, updated_at = ? WHERE id = ?",
           (pw_hash, datetime.now().isoformat(), manager_id))
     _commit(conn)
