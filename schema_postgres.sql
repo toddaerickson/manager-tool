@@ -13,6 +13,13 @@ CREATE TABLE IF NOT EXISTS managers (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Migration ledger (P2.1). Records which sequenced migrations have been applied
+-- so they don't re-run on startup.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    id TEXT PRIMARY KEY,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS team_members (
     id SERIAL PRIMARY KEY,
     manager_id INTEGER,

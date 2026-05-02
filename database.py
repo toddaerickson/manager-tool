@@ -275,10 +275,188 @@ def _sql_left(col, n):
     return f"substr({col}, 1, {n})"
 
 
-def init_db():
-    """Initialize database tables (SQLite only — PostgreSQL uses schema_postgres.sql)."""
+# ---------------------------------------------------------------------------
+# Migration runner (P2.1)
+#
+# A small homegrown migration system: each entry in `_MIGRATIONS` is a
+# (id, fn) pair. Every startup, `_run_migrations(conn)` reads
+# `schema_migrations` and applies any whose id is not yet recorded. Every
+# migration function is itself idempotent (it inspects schema before mutating)
+# so it's safe even if the ledger row is missing or hand-cleared. Works for
+# SQLite and Postgres uniformly via _detect_pg() + helpers.
+# ---------------------------------------------------------------------------
+
+
+def _table_columns(conn, table: str) -> list[str]:
+    """Return list of column names for a table on either dialect."""
     if _detect_pg():
-        return  # Tables created via schema_postgres.sql
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = %s",
+            (table,),
+        )
+        return [r["column_name"] if isinstance(r, dict) else r[0] for r in cur.fetchall()]
+    cur = conn.execute(f"PRAGMA table_info({table})")
+    return [c[1] for c in cur.fetchall()]
+
+
+def _migration_journal_coaching_response(conn) -> None:
+    """Add coaching_response column to journal_entries if missing."""
+    cols = _table_columns(conn, "journal_entries")
+    if "coaching_response" in cols:
+        return
+    conn.execute("ALTER TABLE journal_entries ADD COLUMN coaching_response TEXT")
+    _commit(conn)
+
+
+def _migration_orphan_table_manager_id(conn) -> None:
+    """P1.1: add manager_id to feedback / goals / career_conversations / skills /
+    development_plans / milestones; backfill from parent."""
+    for table in ("feedback", "goals", "career_conversations", "skills",
+                  "development_plans", "milestones"):
+        cols = _table_columns(conn, table)
+        if "manager_id" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN manager_id INTEGER")
+            _commit(conn)
+    # Backfill (idempotent; cheap once all rows are populated)
+    for table in ("feedback", "goals", "career_conversations", "skills",
+                  "development_plans"):
+        conn.execute(_q(
+            f"UPDATE {table} SET manager_id = ("
+            "SELECT manager_id FROM team_members WHERE team_members.id = "
+            f"{table}.team_member_id"
+            ") WHERE manager_id IS NULL"
+        ))
+    conn.execute(_q(
+        "UPDATE milestones SET manager_id = ("
+        "SELECT manager_id FROM development_plans "
+        "WHERE development_plans.id = milestones.plan_id"
+        ") WHERE manager_id IS NULL"
+    ))
+    _commit(conn)
+
+
+def _migration_partition_config_table(conn) -> None:
+    """P1.3: replace single-key PK on config with composite (manager_id, key).
+    Reassign legacy rows: system keys → SYSTEM_MANAGER_ID, others → sole manager
+    if exactly one exists, else SYSTEM_MANAGER_ID."""
+    cols = _table_columns(conn, "config")
+    if "manager_id" in cols:
+        return
+
+    cur = conn.execute(_q("SELECT id FROM managers"))
+    rows = cur.fetchall()
+    if len(rows) == 1:
+        first = rows[0]
+        sole_mid = first["id"] if isinstance(first, dict) else first[0]
+    else:
+        sole_mid = SYSTEM_MANAGER_ID
+
+    conn.execute(
+        "CREATE TABLE config_new ("
+        "  manager_id INTEGER NOT NULL DEFAULT 0,"
+        "  key TEXT NOT NULL,"
+        "  value TEXT,"
+        "  PRIMARY KEY (manager_id, key))"
+    )
+    cur = conn.execute(_q("SELECT key, value FROM config"))
+    old_rows = cur.fetchall()
+    for r in old_rows:
+        k = r["key"] if isinstance(r, dict) else r[0]
+        v = r["value"] if isinstance(r, dict) else r[1]
+        target_mid = SYSTEM_MANAGER_ID if _is_system_key(k) else sole_mid
+        conn.execute(_q(
+            "INSERT INTO config_new (manager_id, key, value) VALUES (?, ?, ?)"
+        ), (target_mid, k, v))
+    conn.execute("DROP TABLE config")
+    conn.execute("ALTER TABLE config_new RENAME TO config")
+    _commit(conn)
+    logger.info("config table partitioned by manager_id "
+                "(%d rows reassigned; sole_mid=%s)", len(old_rows), sole_mid)
+
+
+def _migration_sole_manager_backfill(conn) -> None:
+    """One-shot backfill: assign orphaned rows in scoped tables to the sole
+    manager. Only runs when exactly one manager exists; otherwise no-op."""
+    cur = conn.execute(_q("SELECT id FROM managers"))
+    rows = cur.fetchall()
+    if len(rows) != 1:
+        return
+    first = rows[0]
+    mid = first["id"] if isinstance(first, dict) else first[0]
+    for table in ("team_members", "events", "action_items",
+                  "journal_entries", "self_assessments"):
+        conn.execute(_q(
+            f"UPDATE {table} SET manager_id = ? WHERE manager_id IS NULL"
+        ), (mid,))
+    _commit(conn)
+
+
+_MIGRATIONS: list[tuple[str, Any]] = [
+    ("0001_journal_coaching_response", _migration_journal_coaching_response),
+    ("0002_orphan_table_manager_id", _migration_orphan_table_manager_id),
+    ("0003_partition_config_table", _migration_partition_config_table),
+    ("0004_sole_manager_backfill", _migration_sole_manager_backfill),
+]
+
+
+def _ensure_schema_migrations_table(conn) -> None:
+    """Make sure schema_migrations exists (Postgres bootstraps via
+    schema_postgres.sql; this handles older deploys that haven't run it
+    against the latest schema yet)."""
+    if _detect_pg():
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "  id TEXT PRIMARY KEY,"
+            "  applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+    else:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "  id TEXT PRIMARY KEY,"
+            "  applied_at TEXT DEFAULT (datetime('now')))"
+        )
+    _commit(conn)
+
+
+def _run_migrations(conn) -> list[str]:
+    """Apply any migrations not yet recorded in schema_migrations.
+    Returns the list of migration ids applied this run."""
+    _ensure_schema_migrations_table(conn)
+    cur = conn.execute(_q("SELECT id FROM schema_migrations"))
+    applied = {r["id"] if isinstance(r, dict) else r[0] for r in cur.fetchall()}
+
+    newly_applied: list[str] = []
+    for mid, fn in _MIGRATIONS:
+        if mid in applied:
+            continue
+        try:
+            fn(conn)
+        except Exception as e:
+            logger.exception("Migration %s failed: %s", mid, e)
+            raise
+        conn.execute(
+            _q("INSERT INTO schema_migrations (id) VALUES (?)"), (mid,))
+        _commit(conn)
+        newly_applied.append(mid)
+        logger.info("Applied migration %s", mid)
+    return newly_applied
+
+
+def init_db():
+    """Initialize database tables and apply pending migrations.
+
+    SQLite: creates tables if missing, then runs migrations.
+    PostgreSQL: assumes schema_postgres.sql ran at bootstrap; only runs
+    migrations to bring an older deploy forward."""
+    if _detect_pg():
+        conn = get_connection()
+        try:
+            _run_migrations(conn)
+        finally:
+            conn.close()
+        return
     if os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -306,6 +484,11 @@ def init_db():
             timezone TEXT DEFAULT 'America/New_York',
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            id TEXT PRIMARY KEY,
+            applied_at TEXT DEFAULT (datetime('now'))
         );
 
         CREATE TABLE IF NOT EXISTS team_members (
@@ -551,112 +734,7 @@ def init_db():
     """)
     conn.commit()
 
-    # Migration: add coaching_response column to journal_entries if missing
-    try:
-        cols = [c[1] for c in conn.execute(
-            "PRAGMA table_info(journal_entries)").fetchall()]
-        if "coaching_response" not in cols:
-            conn.execute("ALTER TABLE journal_entries ADD COLUMN coaching_response TEXT")
-            conn.commit()
-    except sqlite3.Error as e:
-        logger.warning("Column migration (coaching_response) failed: %s", e)
-
-    # Migration P1.1: add manager_id to orphan tables that previously scoped
-    # only via team_member_id / plan_id. Idempotent: only ALTER if missing.
-    for table in ("feedback", "goals", "career_conversations", "skills",
-                  "development_plans", "milestones"):
-        try:
-            cols = [c[1] for c in conn.execute(
-                f"PRAGMA table_info({table})").fetchall()]
-            if "manager_id" not in cols:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN manager_id INTEGER")
-                conn.commit()
-        except sqlite3.Error as e:
-            logger.warning("manager_id ALTER on %s failed: %s", table, e)
-
-    # Backfill manager_id for the orphan tables. Runs every startup but is a
-    # cheap no-op once all rows are populated.
-    try:
-        # Tables with team_member_id parent
-        for table in ("feedback", "goals", "career_conversations", "skills",
-                      "development_plans"):
-            conn.execute(
-                f"UPDATE {table} SET manager_id = ("
-                "SELECT manager_id FROM team_members WHERE team_members.id = "
-                f"{table}.team_member_id"
-                ") WHERE manager_id IS NULL"
-            )
-        # milestones piggyback on development_plans (must run after development_plans)
-        conn.execute(
-            "UPDATE milestones SET manager_id = ("
-            "SELECT manager_id FROM development_plans "
-            "WHERE development_plans.id = milestones.plan_id"
-            ") WHERE manager_id IS NULL"
-        )
-        conn.commit()
-    except sqlite3.Error as e:
-        logger.warning("manager_id backfill on orphan tables failed: %s", e)
-
-    # Migration P1.3: partition the config table by manager_id. The legacy
-    # schema had a single (key) PK, so all tenants shared one set of secrets.
-    # Detect the legacy schema and rebuild with composite (manager_id, key) PK.
-    try:
-        cols = [c[1] for c in conn.execute("PRAGMA table_info(config)").fetchall()]
-        if "manager_id" not in cols:
-            managers = conn.execute("SELECT id FROM managers").fetchall()
-            sole_mid = (managers[0]["id"] if isinstance(managers[0], dict) else managers[0][0]) \
-                if len(managers) == 1 else SYSTEM_MANAGER_ID
-            conn.execute(
-                "CREATE TABLE config_new ("
-                "  manager_id INTEGER NOT NULL DEFAULT 0,"
-                "  key TEXT NOT NULL,"
-                "  value TEXT,"
-                "  PRIMARY KEY (manager_id, key))"
-            )
-            old_rows = conn.execute("SELECT key, value FROM config").fetchall()
-            for r in old_rows:
-                k = r["key"] if isinstance(r, dict) else r[0]
-                v = r["value"] if isinstance(r, dict) else r[1]
-                target_mid = SYSTEM_MANAGER_ID if _is_system_key(k) else sole_mid
-                conn.execute(
-                    "INSERT INTO config_new (manager_id, key, value) VALUES (?, ?, ?)",
-                    (target_mid, k, v))
-            conn.execute("DROP TABLE config")
-            conn.execute("ALTER TABLE config_new RENAME TO config")
-            conn.execute(
-                "INSERT OR IGNORE INTO config (manager_id, key, value) "
-                "VALUES (?, '_migration_config_partitioned', '1')",
-                (SYSTEM_MANAGER_ID,))
-            conn.commit()
-            logger.info("Config table partitioned by manager_id "
-                        "(%d rows reassigned; sole_mid=%s)",
-                        len(old_rows), sole_mid)
-    except sqlite3.Error as e:
-        logger.warning("Config partition migration skipped: %s", e)
-
-    # One-time backfill: assign orphaned data to the sole manager
-    try:
-        row = conn.execute(
-            "SELECT value FROM config "
-            "WHERE manager_id = ? AND key = '_migration_backfill_done'",
-            (SYSTEM_MANAGER_ID,),
-        ).fetchone()
-        if not row:
-            managers = conn.execute("SELECT id FROM managers").fetchall()
-            if len(managers) == 1:
-                mid = managers[0]["id"] if isinstance(managers[0], dict) else managers[0][0]
-                for table in ["team_members", "events", "action_items",
-                              "journal_entries", "self_assessments"]:
-                    conn.execute(
-                        f"UPDATE {table} SET manager_id = ? WHERE manager_id IS NULL",
-                        (mid,))
-                conn.commit()
-            conn.execute(
-                "INSERT INTO config (manager_id, key, value) VALUES (?, ?, ?)",
-                (SYSTEM_MANAGER_ID, "_migration_backfill_done", "1"))
-            conn.commit()
-    except sqlite3.Error as e:
-        logger.warning("Sole-manager backfill skipped: %s", e)
+    _run_migrations(conn)
 
     conn.close()
 
