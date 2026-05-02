@@ -965,6 +965,59 @@ class TestRaceConditionFreeUpserts:
         assert count == 1, f"Expected exactly 1 row, got {count}"
 
 
+class TestHotPathIndexes:
+    """Regression for AUDIT M5 / P4.1 — every hot WHERE column listed in
+    the audit must have a backing index after init_db()."""
+
+    EXPECTED_INDEXES = (
+        ("events", "ix_events_manager_date_status"),
+        ("action_items", "ix_action_items_manager_status_due"),
+        ("journal_entries", "ix_journal_entries_manager_date"),
+        ("feedback", "ix_feedback_member_created"),
+        ("team_members", "ix_team_members_manager"),
+        ("running_notes", "ix_running_notes_member_date"),
+        ("delegations", "ix_delegations_manager_status_checkin"),
+        ("coach_suggestions", "ix_coach_suggestions_manager_date"),
+    )
+
+    def test_all_hot_path_indexes_exist(self):
+        with db._connect() as conn:
+            cur = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'")
+            names = {r["name"] if isinstance(r, dict) else r[0]
+                     for r in cur.fetchall()}
+        missing = [(t, ix) for t, ix in self.EXPECTED_INDEXES if ix not in names]
+        assert not missing, f"Missing hot-path indexes: {missing}"
+
+    def test_indexes_use_correct_columns(self):
+        """Sanity-check that each index covers the expected columns in the
+        expected order (so the planner can use it for the audit's queries)."""
+        expected = {
+            "ix_events_manager_date_status":
+                ("manager_id", "scheduled_date", "status"),
+            "ix_action_items_manager_status_due":
+                ("manager_id", "status", "due_date"),
+            "ix_journal_entries_manager_date":
+                ("manager_id", "entry_date"),
+            "ix_feedback_member_created":
+                ("team_member_id", "created_at"),
+            "ix_team_members_manager":
+                ("manager_id",),
+            "ix_running_notes_member_date":
+                ("team_member_id", "note_date"),
+            "ix_delegations_manager_status_checkin":
+                ("manager_id", "status", "check_in_date"),
+            "ix_coach_suggestions_manager_date":
+                ("manager_id", "suggestion_date"),
+        }
+        with db._connect() as conn:
+            for ix_name, expected_cols in expected.items():
+                cur = conn.execute(f"PRAGMA index_info({ix_name})")
+                actual = tuple(r[2] for r in cur.fetchall())
+                assert actual == expected_cols, \
+                    f"{ix_name}: expected {expected_cols}, got {actual}"
+
+
 class TestProductionFallbackGate:
     """Regression for AUDIT H5 / P2.5 — SQLite fallback is disabled when
     MANAGER_TOOL_ENV=prod; outside production the fallback behaves as before."""
