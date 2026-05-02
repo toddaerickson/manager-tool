@@ -16,6 +16,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 import json
+import html
 import database as db
 import templates
 import coaching
@@ -36,7 +37,7 @@ if _pg_failed:
         f'\u26A0 Database connection failed</span><br>'
         f'<span style="color:#ff8888;font-size:0.85rem;">'
         f'Running on local SQLite — data will not persist across restarts.<br>'
-        f'Error: {_pg_error[:120]}</span></div>',
+        f'Error: {html.escape(_pg_error[:120])}</span></div>',
         unsafe_allow_html=True,
     )
 
@@ -369,6 +370,11 @@ def page_dashboard():
             tier_icon = "\U0001F9E0" if suggestion.get("tier") == "ai" else "\U0001F4A1"
             sc1, sc2 = st.columns([6, 1])
             with sc1:
+                # Escape suggestion content: it originates from the Claude
+                # API (or rule fallback), which can be prompt-injected to
+                # return arbitrary HTML. Only the surrounding chrome is
+                # trusted markup. Regression for AUDIT M1.
+                safe_suggestion = html.escape(suggestion["suggestion"])
                 st.markdown(
                     f'<div style="background:linear-gradient(90deg,#1a1a2e,#16213e);'
                     f'border-left:4px solid #4F8BF9;border-radius:8px;padding:14px 18px;'
@@ -376,7 +382,7 @@ def page_dashboard():
                     f'<span style="color:#4F8BF9;font-weight:600;">'
                     f'{tier_icon} Coach</span><br>'
                     f'<span style="color:#e0e0e0;font-style:italic;">'
-                    f'{suggestion["suggestion"]}</span></div>',
+                    f'{safe_suggestion}</span></div>',
                     unsafe_allow_html=True,
                 )
             with sc2:
