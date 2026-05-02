@@ -10,3 +10,25 @@ maxUploadSize = 5
 
 [browser]
 gatherUsageStats = false
+
+# ---------------------------------------------------------------------------
+# Security headers (AUDIT L12)
+#
+# Streamlit doesn't expose first-class config for HSTS / X-Frame-Options /
+# CSP. In production the app should sit behind a reverse proxy (nginx,
+# Caddy, Cloudflare, Streamlit Community Cloud's edge, etc.) that adds:
+#
+#   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+#   X-Frame-Options: DENY
+#   X-Content-Type-Options: nosniff
+#   Referrer-Policy: strict-origin-when-cross-origin
+#   Content-Security-Policy: default-src 'self';
+#                            script-src  'self' 'unsafe-inline';
+#                            style-src   'self' 'unsafe-inline';
+#                            connect-src 'self' wss:;
+#                            frame-ancestors 'none';
+#
+# Note: Streamlit injects inline scripts/styles, so 'unsafe-inline' is
+# required in script-src and style-src. wss: in connect-src is required
+# for the live WebSocket.
+# ---------------------------------------------------------------------------

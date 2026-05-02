@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

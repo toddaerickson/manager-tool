@@ -273,10 +273,15 @@ def _exec(conn, sql, params=None):
 
 
 def _exec_returning_id(conn, sql, params=None):
-    """Execute INSERT and return the new row ID. Handles PG vs SQLite."""
+    """Execute INSERT and return the new row ID. Handles PG vs SQLite.
+
+    The Postgres path appends ` RETURNING id`. Strip any trailing
+    whitespace and semicolon from the caller's SQL first so the
+    concatenation produces a syntactically valid statement (AUDIT L11)."""
     if _detect_pg():
         cur = conn.cursor()
-        cur.execute(_q(sql) + " RETURNING id", params or ())
+        cleaned_sql = _q(sql).rstrip().rstrip(";").rstrip()
+        cur.execute(cleaned_sql + " RETURNING id", params or ())
         row = cur.fetchone()
         return row["id"] if row else None
     else:
@@ -990,7 +995,10 @@ def init_db(*, force: bool = False):
 def _hash_password(password):
     """Hash a password using bcrypt."""
     import bcrypt
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    # Pin rounds=12 explicitly (AUDIT L2). Default has shifted across
+    # bcrypt versions; pinning makes hash cost deterministic across
+    # deploys and avoids silent CPU-cost drift on library upgrades.
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
 
 
 def _verify_password(password, stored_hash):
@@ -1995,7 +2003,14 @@ def get_time_since_last_event_per_member(manager_id=None):
     return rows
 
 
-def get_stale_feedback_members(days=21, manager_id=None):
+# Nudge thresholds (AUDIT L9). Promoted from inline magic numbers so the
+# dashboard's "you haven't met X in N days" semantics live in one place.
+MEETING_CRITICAL_DAYS = 21
+MEETING_WARNING_DAYS = 14
+STALE_FEEDBACK_DAYS = 21
+
+
+def get_stale_feedback_members(days=STALE_FEEDBACK_DAYS, manager_id=None):
     with _connect() as conn:
         days_expr = _sql_days_since("MAX(f.created_at)")
         sql = f"""
@@ -2044,13 +2059,13 @@ def get_nudges(manager_id: int | None = None) -> list[dict[str, Any]]:
                 "message": f"You have never had a recorded meeting with {m['member_name']}.",
                 "member_id": m["member_id"],
             })
-        elif days > 21:
+        elif days > MEETING_CRITICAL_DAYS:
             nudges.append({
                 "type": "meeting", "severity": "critical",
                 "message": f"It's been {days} days since your last meeting with {m['member_name']}.",
                 "member_id": m["member_id"],
             })
-        elif days > 14:
+        elif days > MEETING_WARNING_DAYS:
             nudges.append({
                 "type": "meeting", "severity": "warning",
                 "message": f"It's been {days} days since your last meeting with {m['member_name']}.",
@@ -2065,7 +2080,7 @@ def get_nudges(manager_id: int | None = None) -> list[dict[str, Any]]:
             "member_id": None,
         })
 
-    for m in get_stale_feedback_members(days=21, manager_id=manager_id):
+    for m in get_stale_feedback_members(days=STALE_FEEDBACK_DAYS, manager_id=manager_id):
         days = m["days_since"]
         label = f"{days} days" if days else "ever"
         nudges.append({
