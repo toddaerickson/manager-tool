@@ -81,6 +81,21 @@ def main() -> int:
     locked = db.get_lockout_until("nonexistent-user")
     print(f"[ok] record_failed_login + get_lockout_until → {locked}")
 
+    member_id = db.add_team_member(
+        name="Smoke Member", email="member@test.local", role="IC", manager_id=mid)
+    if not member_id:
+        print("error: add_team_member returned None", file=sys.stderr)
+        return 1
+    db.add_feedback(
+        team_member_id=member_id, feedback_type="positive",
+        situation="s", behavior="b", impact="i", manager_id=mid)
+
+    timeline = db.get_member_timeline(member_id, manager_id=mid)
+    print(f"[ok] get_member_timeline → {len(timeline)} row(s)")
+
+    prep = db.get_pre_meeting_prep(member_id, manager_id=mid)
+    print(f"[ok] get_pre_meeting_prep → keys={sorted((prep or {}).keys())}")
+
     db.revoke_session(token)
     after_revoke = db.validate_session(token, user_agent_hash="ua-hash")
     if after_revoke is not None:
