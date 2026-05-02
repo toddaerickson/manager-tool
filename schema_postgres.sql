@@ -20,6 +20,26 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Server-side sessions (P2.3 / AUDIT H3). Token-based session validation
+-- replaces the per-tab st.session_state-only auth.
+CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    manager_id INTEGER NOT NULL REFERENCES managers(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    user_agent_hash TEXT
+);
+
+-- Persistent failed-login counters (P2.3 / AUDIT H2). Keyed by username so
+-- attempts can't be reset by opening a new tab.
+CREATE TABLE IF NOT EXISTS login_attempts (
+    username TEXT PRIMARY KEY,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMP NOT NULL,
+    locked_until TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS team_members (
     id SERIAL PRIMARY KEY,
     manager_id INTEGER,

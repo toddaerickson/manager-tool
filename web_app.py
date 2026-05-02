@@ -135,10 +135,28 @@ def get_current_manager_id():
 _mid = get_current_manager_id
 
 
+def _current_user_agent_hash() -> str | None:
+    """Best-effort User-Agent hash for binding a session token to its origin.
+    Returns None if the User-Agent is not exposed to Streamlit."""
+    try:
+        ua = st.context.headers.get("User-Agent")
+    except Exception:
+        ua = None
+    return db.hash_user_agent(ua)
+
+
 def require_auth():
-    """Show login/register screen if not authenticated. Returns True if authed."""
-    if "manager_id" in st.session_state and st.session_state["manager_id"]:
-        return True
+    """Validate the session token (server-side), gate access on success.
+    Returns True if authed."""
+    token = st.session_state.get("session_token")
+    if token:
+        manager_id = db.validate_session(token, _current_user_agent_hash())
+        if manager_id:
+            st.session_state["manager_id"] = manager_id
+            return True
+        # Token invalid/expired/UA mismatch — clear and force re-login.
+        for key in ("session_token", "manager_id", "manager_name"):
+            st.session_state.pop(key, None)
     _show_auth_screen()
     return False
 
@@ -151,34 +169,35 @@ def _show_auth_screen():
     tab_login, tab_register = st.tabs(["Log In", "Create Account"])
 
     with tab_login:
-        # Rate limiting: block after 5 failed attempts within 15 minutes
-        attempts = st.session_state.get("login_attempts", [])
-        cutoff = datetime.now() - timedelta(minutes=15)
-        attempts = [t for t in attempts if t > cutoff]
-        st.session_state["login_attempts"] = attempts
-        locked = len(attempts) >= 5
-
-        if locked:
-            st.error("Too many failed attempts. Please wait a few minutes.")
-
         with st.form("login_form"):
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
             if st.form_submit_button("Log In", use_container_width=True):
-                if locked:
-                    st.error("Account temporarily locked. Try again later.")
-                elif username and password:
-                    manager = db.authenticate_manager(username, password)
-                    if manager:
-                        st.session_state["login_attempts"] = []
-                        st.session_state["manager_id"] = manager["id"]
-                        st.session_state["manager_name"] = manager["display_name"]
-                        st.rerun()
-                    else:
-                        st.session_state.setdefault("login_attempts", []).append(datetime.now())
-                        st.error("Invalid username or password.")
+                if not (username and password):
+                    st.error("Enter both username and password.")
                 else:
-                    st.warning("Enter both username and password.")
+                    locked_until = db.get_lockout_until(username)
+                    if locked_until:
+                        wait_secs = int((locked_until - datetime.now()).total_seconds())
+                        st.error(
+                            f"Too many failed attempts. Try again in "
+                            f"{max(1, wait_secs // 60)} minute(s)."
+                        )
+                    else:
+                        manager = db.authenticate_manager(username, password)
+                        if manager:
+                            db.clear_failed_logins(username)
+                            token = db.create_session(
+                                manager["id"],
+                                user_agent_hash=_current_user_agent_hash(),
+                            )
+                            st.session_state["session_token"] = token
+                            st.session_state["manager_id"] = manager["id"]
+                            st.session_state["manager_name"] = manager["display_name"]
+                            st.rerun()
+                        else:
+                            db.record_failed_login(username)
+                            st.error("Invalid username or password.")
 
     with tab_register:
         with st.form("register_form"):
@@ -2039,7 +2058,8 @@ def main():
         st.markdown("---")
         _nav_button("\u2699\uFE0F  Settings", "Settings", current_page)
         if st.button("\U0001F6AA  Log Out", use_container_width=True):
-            for key in ["manager_id", "manager_name", "nav_page"]:
+            db.revoke_session(st.session_state.get("session_token"))
+            for key in ["session_token", "manager_id", "manager_name", "nav_page"]:
                 st.session_state.pop(key, None)
             st.rerun()
 
