@@ -387,3 +387,39 @@ class TestCoachSuggestions:
         db.save_coach_suggestion(mid, "Second", tier="rule")
         suggestion = db.get_todays_suggestion(mid)
         assert suggestion["suggestion"] == "Second"
+
+
+class TestSchemaMigrationSafety:
+    """Regression for AUDIT C5 — init_db must NOT delete a legacy DB."""
+
+    def test_legacy_schema_does_not_delete_db(self, tmp_path, monkeypatch):
+        import os
+        import sqlite3
+
+        legacy_path = str(tmp_path / "legacy.db")
+        conn = sqlite3.connect(legacy_path)
+        conn.execute(
+            "CREATE TABLE journal_entries ("
+            "id INTEGER PRIMARY KEY, "
+            "manager_id INTEGER NOT NULL, "
+            "entry_date TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO journal_entries (manager_id, entry_date) VALUES (1, '2026-01-01')"
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(db, "DB_PATH", legacy_path)
+        monkeypatch.setattr(db, "_USE_PG", False)
+
+        try:
+            db.init_db()
+        except RuntimeError:
+            pass  # Acceptable: refuse-to-migrate is the new contract.
+
+        assert os.path.exists(legacy_path), "init_db must never delete an existing database file"
+        conn = sqlite3.connect(legacy_path)
+        rows = conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()
+        conn.close()
+        assert rows[0] == 1, "Existing rows must be preserved"

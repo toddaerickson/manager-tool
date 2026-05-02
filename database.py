@@ -262,20 +262,21 @@ def init_db():
     """Initialize database tables (SQLite only — PostgreSQL uses schema_postgres.sql)."""
     if _detect_pg():
         return  # Tables created via schema_postgres.sql
-    # Migrate: if old schema has NOT NULL manager_id, drop and recreate
     if os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH)
             info = conn.execute("PRAGMA table_info(journal_entries)").fetchall()
+            conn.close()
             for col in info:
                 if col[1] == "manager_id" and col[3] == 1:  # notnull=1
-                    conn.close()
-                    os.remove(DB_PATH)
-                    break
-            else:
-                conn.close()
-        except Exception as e:
-            logger.debug("Schema migration check skipped: %s", e)
+                    raise RuntimeError(
+                        f"Detected legacy schema in {DB_PATH}: "
+                        "journal_entries.manager_id is NOT NULL. "
+                        "Refusing to auto-migrate (would destroy data). "
+                        "Back up the file, then run a manual migration to make manager_id nullable."
+                    )
+        except sqlite3.Error as e:
+            logger.warning("Schema migration check failed: %s", e)
     conn = get_connection()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS managers (
