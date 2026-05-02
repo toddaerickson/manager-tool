@@ -1,6 +1,11 @@
 -- Migration P1.3: partition the config table by manager_id (AUDIT C3).
 -- Run via: psql "$DATABASE_URL" -f scripts/migrate_p1_3_per_tenant_config.sql
 --
+-- NOTE: As of P2.1, this migration is also applied automatically at app
+-- startup via database.py `_run_migrations` (id `0003_partition_config_table`).
+-- This .sql file remains as a manual escape hatch for DBA-driven deploys or
+-- recovery from a corrupted schema_migrations ledger.
+--
 -- Background: AUDIT.md C3 — the config table had a single (key) PK, so all
 -- tenants shared one set of API keys / SMTP credentials. This migration
 -- partitions it by manager_id, with manager_id=0 reserved for system-wide

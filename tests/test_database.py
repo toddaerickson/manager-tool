@@ -639,19 +639,23 @@ class TestOrphanTableManagerId:
         assert row["manager_id"] == mid_other
 
     def test_backfill_populates_existing_null_rows(self):
-        """An existing row with NULL manager_id should be backfilled by the
-        next init_db() call. Simulates an upgrade path."""
+        """Upgrade path simulation: a pre-migration DB has rows with NULL
+        manager_id, no schema_migrations entry → next init_db() applies the
+        backfill migration."""
         mid, tid = self._seed_member("m_backfill")
-        # Insert a row with NULL manager_id directly (simulates pre-migration data)
         conn = db.get_connection()
         conn.execute(
             "INSERT INTO feedback (manager_id, team_member_id, feedback_type, situation) "
             "VALUES (NULL, ?, 'positive', 'old row')",
             (tid,))
+        # Force re-application of the orphan-table backfill migration by
+        # clearing its ledger row, simulating an unmigrated upgrade.
+        conn.execute(
+            "DELETE FROM schema_migrations WHERE id = '0002_orphan_table_manager_id'")
         conn.commit()
         conn.close()
 
-        db.init_db()  # Should backfill
+        db.init_db()  # Should apply 0002 again, which backfills the NULL row.
 
         conn = db.get_connection()
         rows = conn.execute(
@@ -847,3 +851,69 @@ class TestCrossManagerScoping:
         m1, m2, t1 = self._two_managers()
         assert db.get_pre_meeting_prep(t1, manager_id=m1) is not None
         assert db.get_pre_meeting_prep(t1, manager_id=m2) is None
+
+
+class TestMigrationRunner:
+    """Regression for AUDIT C5 / P2.1 — schema_migrations ledger + sequenced
+    migrations applied automatically at startup."""
+
+    def test_schema_migrations_table_exists(self):
+        conn = db.get_connection()
+        cols = db._table_columns(conn, "schema_migrations")
+        conn.close()
+        assert "id" in cols
+        assert "applied_at" in cols
+
+    def test_all_migrations_applied_after_init_db(self):
+        conn = db.get_connection()
+        cur = conn.execute("SELECT id FROM schema_migrations")
+        applied = {r["id"] if isinstance(r, dict) else r[0] for r in cur.fetchall()}
+        conn.close()
+        expected = {mid for mid, _ in db._MIGRATIONS}
+        assert expected.issubset(applied), \
+            f"Missing migrations: {expected - applied}"
+
+    def test_migrations_idempotent(self):
+        """Calling init_db() twice in a row leaves the ledger unchanged."""
+        conn = db.get_connection()
+        before = conn.execute(
+            "SELECT id, applied_at FROM schema_migrations ORDER BY id"
+        ).fetchall()
+        conn.close()
+
+        db.init_db()  # second call — should be a no-op
+
+        conn = db.get_connection()
+        after = conn.execute(
+            "SELECT id, applied_at FROM schema_migrations ORDER BY id"
+        ).fetchall()
+        conn.close()
+        # Same IDs and same applied_at timestamps (no re-application).
+        assert [(r["id"], r["applied_at"]) for r in before] == \
+               [(r["id"], r["applied_at"]) for r in after]
+
+    def test_migration_failure_propagates(self, monkeypatch):
+        """If a migration raises, the runner re-raises and does NOT record the
+        ledger row — ensuring the failure is loud and the migration retries."""
+        boom_id = "9999_boom"
+
+        def boom(_):
+            raise RuntimeError("synthetic failure")
+
+        # Inject a failing migration into the registry, then re-run.
+        monkeypatch.setattr(db, "_MIGRATIONS", db._MIGRATIONS + [(boom_id, boom)])
+
+        conn = db.get_connection()
+        try:
+            try:
+                db._run_migrations(conn)
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("Failing migration must propagate")
+            cur = conn.execute(
+                "SELECT id FROM schema_migrations WHERE id = ?", (boom_id,))
+            assert cur.fetchone() is None, \
+                "Failed migration must NOT be recorded as applied"
+        finally:
+            conn.close()

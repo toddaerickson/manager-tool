@@ -1,6 +1,11 @@
 -- Migration P1.1: add manager_id to orphan child tables and backfill from parents.
 -- Idempotent: safe to re-run. Run via: psql "$DATABASE_URL" -f scripts/migrate_p1_1_manager_id.sql
 --
+-- NOTE: As of P2.1, this migration is also applied automatically at app
+-- startup via database.py `_run_migrations` (id `0002_orphan_table_manager_id`).
+-- This .sql file remains as a manual escape hatch for DBA-driven deploys or
+-- recovery from a corrupted schema_migrations ledger.
+--
 -- Background: AUDIT.md C2 — feedback, goals, career_conversations, skills,
 -- development_plans, and milestones lacked a manager_id column. Without it,
 -- IDOR scoping requires joining through team_members on every read/write
