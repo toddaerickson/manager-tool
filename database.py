@@ -11,7 +11,7 @@ import os
 import re
 import logging
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger("manager_tool.database")
@@ -291,19 +291,33 @@ def _exec_returning_id(conn, sql, params=None):
         return cur.lastrowid
 
 
+def _normalize_row(row) -> dict:
+    """Convert psycopg2's datetime/date values to ISO strings so callers see
+    the same string-typed shape they get from SQLite. Without this, code
+    that does `row["created_at"][:10]` or `row["expires_at"] <= some_iso`
+    works on SQLite and silently breaks on Postgres."""
+    out = dict(row)
+    for k, v in out.items():
+        if isinstance(v, datetime):
+            out[k] = v.isoformat()
+        elif isinstance(v, date):
+            out[k] = v.isoformat()
+    return out
+
+
 def _fetchone(conn, sql, params=None):
     """Fetch one row as dict."""
     cur = _exec(conn, sql, params)
     row = cur.fetchone()
     if row is None:
         return None
-    return dict(row)
+    return _normalize_row(row)
 
 
 def _fetchall(conn, sql, params=None):
     """Fetch all rows as list of dicts."""
     cur = _exec(conn, sql, params)
-    return [dict(r) for r in cur.fetchall()]
+    return [_normalize_row(r) for r in cur.fetchall()]
 
 
 def _commit(conn):
