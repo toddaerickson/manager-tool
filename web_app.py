@@ -363,12 +363,14 @@ def confirm_complete_event(event_id, title):
     notes = st.text_area("Meeting notes (optional)")
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Complete", type="primary", use_container_width=True):
+        if st.button("Complete", type="primary", use_container_width=True,
+                     key=f"confirm_evt_complete_{event_id}"):
             db.complete_event(int(event_id), manager_id=_mid(), notes=notes or None)
             st.toast(f"Event #{event_id} completed.", icon="\u2705")
             st.rerun()
     with c2:
-        if st.button("Cancel", use_container_width=True):
+        if st.button("Cancel", use_container_width=True,
+                     key=f"confirm_evt_cancel_{event_id}"):
             st.rerun()
 
 
@@ -378,12 +380,14 @@ def confirm_complete_action(action_id, description):
     st.caption(description)
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Complete", type="primary", use_container_width=True):
+        if st.button("Complete", type="primary", use_container_width=True,
+                     key=f"confirm_action_complete_{action_id}"):
             db.complete_action_item(int(action_id), manager_id=_mid())
             st.toast(f"Action #{action_id} completed.", icon="\u2705")
             st.rerun()
     with c2:
-        if st.button("Cancel", use_container_width=True):
+        if st.button("Cancel", use_container_width=True,
+                     key=f"confirm_action_cancel_{action_id}"):
             st.rerun()
 
 

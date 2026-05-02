@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 import os
+import re
 import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -31,7 +32,14 @@ class EncryptionUnavailableError(RuntimeError):
 
 def _get_fernet():
     """Get a Fernet instance for encrypting/decrypting sensitive config.
-    Returns None only if `cryptography` is not installed."""
+    Returns None only if `cryptography` is not installed.
+
+    Production policy (AUDIT M9 / P5): when MANAGER_TOOL_ENV=prod the
+    CONFIG_ENCRYPTION_KEY env var is REQUIRED. Auto-generating a key into
+    a file next to database.py is convenient for dev laptops but disastrous
+    in prod (a tarball of the deploy contains both the key and the
+    encrypted DB rows). Outside prod we still auto-generate, but we
+    chmod 600 the file immediately so it's not world-readable."""
     try:
         from cryptography.fernet import Fernet
     except ImportError:
@@ -42,14 +50,30 @@ def _get_fernet():
 
     key = os.environ.get("CONFIG_ENCRYPTION_KEY")
     if not key:
+        if _is_production():
+            raise EncryptionUnavailableError(
+                "MANAGER_TOOL_ENV=prod requires CONFIG_ENCRYPTION_KEY to be "
+                "set as an environment variable. Refusing to auto-generate "
+                "a key file in production."
+            )
         key_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".encryption_key")
         if os.path.exists(key_path):
             with open(key_path, "r") as f:
                 key = f.read().strip()
+            # Tighten perms even if the file pre-dates this fix — a tar of
+            # the source tree shouldn't expose the key.
+            try:
+                os.chmod(key_path, 0o600)
+            except OSError as e:
+                logger.warning("Could not chmod %s to 0600: %s", key_path, e)
         else:
             key = Fernet.generate_key().decode()
             with open(key_path, "w") as f:
                 f.write(key)
+            try:
+                os.chmod(key_path, 0o600)
+            except OSError as e:
+                logger.warning("Could not chmod %s to 0600: %s", key_path, e)
     return Fernet(key.encode() if isinstance(key, str) else key)
 
 
@@ -91,6 +115,21 @@ def _decrypt_value(value):
 # ---------------------------------------------------------------------------
 
 _USE_PG = None
+
+
+_DB_URL_CRED_RE = re.compile(
+    r"(postgres(?:ql)?://)[^/@\s]*@",
+    re.IGNORECASE,
+)
+
+
+def _redact_db_credentials(text: str) -> str:
+    """Scrub user:password@ from any postgres URL embedded in `text`.
+    psycopg2 sometimes echoes the full DSN in its exception messages,
+    which would leak the credential into our UI banner (AUDIT M8)."""
+    if not text:
+        return text
+    return _DB_URL_CRED_RE.sub(r"\1***@", text)
 
 
 def _read_streamlit_secret(key: str, default: str = "") -> str:
@@ -182,7 +221,9 @@ def get_connection():
             return conn
         except Exception as e:
             _PG_FAILED = True
-            _PG_ERROR = str(e)
+            # Scrub any user:password@ embedded in psycopg2's error message
+            # before we store it for UI display (AUDIT M8).
+            _PG_ERROR = _redact_db_credentials(str(e))
             if _is_production():
                 # Fail loud: routing writes to SQLite in prod silently
                 # corrupts the deployment (subsequent restarts revert to
@@ -193,7 +234,8 @@ def get_connection():
                 raise DatabaseUnavailableError(
                     "PostgreSQL is unreachable and the SQLite fallback is "
                     "disabled in production. Investigate the database "
-                    f"connectivity issue before continuing. Original error: {e}"
+                    "connectivity issue before continuing. "
+                    f"Original error: {_PG_ERROR}"
                 ) from e
             logger.warning(
                 "PostgreSQL connection failed, falling back to SQLite "
