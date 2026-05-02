@@ -4,6 +4,7 @@ Generates iCalendar (.ics) files and sends them via SMTP email
 so recipients can accept and add events to Google Calendar.
 """
 
+import re
 import smtplib
 import uuid
 import os
@@ -11,9 +12,58 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
+from email.header import Header
+from email.utils import formataddr, parseaddr
 from email import encoders
 
 from database import get_config
+
+
+# ---------------------------------------------------------------------------
+# Header- and ICS-injection guards (P3.3 / AUDIT M3)
+# ---------------------------------------------------------------------------
+
+# Any control character (CR, LF, NUL, vertical tab, etc.) in a header or
+# ICS field is suspect — those are the injection vectors. Strip them all.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _strip_control_chars(text):
+    """Remove every C0 control character plus DEL. ICS injection (extra
+    VEVENT lines) and email-header injection (extra Bcc/Subject) both
+    rely on slipping CR/LF into a value."""
+    if text is None:
+        return ""
+    return _CONTROL_CHARS_RE.sub("", str(text))
+
+
+def _safe_header_text(text, max_len=200):
+    """Sanitize a string for use as the *value* of an email header.
+    Strips control characters and caps length."""
+    return _strip_control_chars(text)[:max_len]
+
+
+def _ics_cn_value(name):
+    """Sanitize a name for use inside a quoted ICS CN parameter (e.g.
+    `ORGANIZER;CN="Boss":mailto:boss@x.com`). Must not contain CR, LF,
+    other control chars, or a literal double quote — any of which would
+    let an attacker break out of the quoted value and forge new ICS
+    properties (AUDIT M3)."""
+    if not name:
+        return ""
+    return _strip_control_chars(name).replace('"', "")
+
+
+def _safe_address_pair(name, address):
+    """Build an RFC 5322 address. parseaddr re-parses to drop any embedded
+    headers (`name <foo>\\nBcc: x@y`); formataddr quotes the name correctly.
+    Falls back to bare-address if name is empty after sanitization."""
+    clean_name = _strip_control_chars(name or "")
+    # parseaddr ignores anything after a CR/LF, but we strip them already.
+    _, clean_addr = parseaddr(_strip_control_chars(address or ""))
+    if not clean_addr:
+        return ""
+    return formataddr((clean_name, clean_addr)) if clean_name else clean_addr
 
 
 def generate_ics(event, organizer_name=None, organizer_email=None,
@@ -62,14 +112,20 @@ def generate_ics(event, organizer_name=None, organizer_email=None,
     if description:
         lines.append(f"DESCRIPTION:{description}")
     if organizer_email:
-        org_cn = f';CN="{organizer_name}"' if organizer_name else ""
-        lines.append(f"ORGANIZER{org_cn}:mailto:{organizer_email}")
+        clean_org_email = _strip_control_chars(organizer_email)
+        clean_org_name = _ics_cn_value(organizer_name)
+        org_cn = f';CN="{clean_org_name}"' if clean_org_name else ""
+        lines.append(f"ORGANIZER{org_cn}:mailto:{clean_org_email}")
     if attendee_email:
-        att_cn = f';CN="{attendee_name}"' if attendee_name else ""
-        lines.append(f"ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE{att_cn}:mailto:{attendee_email}")
+        clean_att_email = _strip_control_chars(attendee_email)
+        clean_att_name = _ics_cn_value(attendee_name)
+        att_cn = f';CN="{clean_att_name}"' if clean_att_name else ""
+        lines.append(f"ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE{att_cn}:mailto:{clean_att_email}")
     if organizer_email:
-        org_cn2 = f';CN="{organizer_name}"' if organizer_name else ""
-        lines.append(f"ATTENDEE;PARTSTAT=ACCEPTED{org_cn2}:mailto:{organizer_email}")
+        clean_org_email = _strip_control_chars(organizer_email)
+        clean_org_name = _ics_cn_value(organizer_name)
+        org_cn2 = f';CN="{clean_org_name}"' if clean_org_name else ""
+        lines.append(f"ATTENDEE;PARTSTAT=ACCEPTED{org_cn2}:mailto:{clean_org_email}")
     lines += [
         "STATUS:CONFIRMED", "SEQUENCE:0",
         "BEGIN:VALARM", "TRIGGER:-PT15M", "ACTION:DISPLAY",
@@ -115,9 +171,15 @@ def send_calendar_invite(event, recipient_email, recipient_name=None, manager_id
     save_ics_file(ics_content, f"{safe_title}_{event['scheduled_date']}.ics")
 
     msg = MIMEMultipart("mixed")
-    msg["From"] = f"{manager_name} <{manager_email}>"
-    msg["To"] = f"{recipient_name} <{recipient_email}>" if recipient_name else recipient_email
-    msg["Subject"] = f"Calendar Invite: {event.get('title', 'Meeting')}"
+    # Build address headers via formataddr after stripping control chars —
+    # raw f-strings allowed CRLF injection forging extra Bcc/Subject lines
+    # (AUDIT M3).
+    msg["From"] = _safe_address_pair(manager_name, manager_email)
+    msg["To"] = _safe_address_pair(recipient_name, recipient_email)
+    msg["Subject"] = Header(
+        _safe_header_text(f"Calendar Invite: {event.get('title', 'Meeting')}"),
+        "utf-8",
+    )
 
     event_type_labels = {
         "check_in": "Weekly Check-In", "coaching": "Coaching Session",
@@ -170,9 +232,29 @@ def send_invite_to_self(event, manager_id=None):
 
 
 def _ics_escape(text):
+    """RFC 5545 TEXT escape, with control-char stripping.
+
+    The previous implementation escaped \\, ;, , and \\n but left \\r and
+    other control characters intact, allowing CRLF injection that forges
+    new VEVENT lines or alters ATTENDEE/ORGANIZER properties (AUDIT M3).
+
+    Order matters: backslash first (so we don't double-escape later),
+    then the structural separators, then convert real newlines to \\n
+    *before* stripping control chars (otherwise legitimate multi-line
+    agendas would lose all their line breaks). Finally, every other
+    control character (incl. \\r, NUL, vertical tab) is stripped — none of
+    them have legitimate use in an ICS TEXT value.
+    """
     if not text:
         return ""
-    return text.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+    s = str(text)
+    s = s.replace("\\", "\\\\")
+    s = s.replace(";", "\\;")
+    s = s.replace(",", "\\,")
+    s = s.replace("\n", "\\n")
+    # Strip every remaining control character. \n is gone (escaped above);
+    # \r and friends are dangerous — drop them.
+    return _CONTROL_CHARS_RE.sub("", s)
 
 
 # ---------------------------------------------------------------------------
@@ -268,9 +350,9 @@ def send_weekly_digest(manager_id):
     subject, html_body = generate_weekly_digest(manager_id)
 
     msg = MIMEMultipart("alternative")
-    msg["From"] = f"{manager_name} <{manager_email}>"
-    msg["To"] = manager_email
-    msg["Subject"] = subject
+    msg["From"] = _safe_address_pair(manager_name, manager_email)
+    msg["To"] = _safe_address_pair("", manager_email)
+    msg["Subject"] = Header(_safe_header_text(subject), "utf-8")
 
     # Plain text fallback
     import re
