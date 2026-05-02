@@ -1,5 +1,7 @@
 """Tests for database.py — CRUD operations, multi-tenancy, and helpers."""
 
+from datetime import datetime
+
 import database as db
 
 
@@ -851,6 +853,117 @@ class TestCrossManagerScoping:
         m1, m2, t1 = self._two_managers()
         assert db.get_pre_meeting_prep(t1, manager_id=m1) is not None
         assert db.get_pre_meeting_prep(t1, manager_id=m2) is None
+
+
+class TestServerSideSessions:
+    """Regression for AUDIT H3 / P2.3 — sessions are server-side, expire,
+    and can be revoked."""
+
+    def test_create_validate_revoke_roundtrip(self):
+        mid = db.create_manager("sess_user", "Sess", "pass1234")
+        token = db.create_session(mid)
+        assert isinstance(token, str) and len(token) > 20
+
+        assert db.validate_session(token) == mid
+        # Validate refreshes last_seen (no exception, still returns mid).
+        assert db.validate_session(token) == mid
+
+        db.revoke_session(token)
+        assert db.validate_session(token) is None
+
+    def test_unknown_token_returns_none(self):
+        assert db.validate_session("definitely-not-a-real-token") is None
+        assert db.validate_session("") is None
+
+    def test_expired_session_rejected_and_cleaned_up(self):
+        mid = db.create_manager("exp_user", "Exp", "pass1234")
+        token = db.create_session(mid, ttl_seconds=-1)  # already expired
+        assert db.validate_session(token) is None
+        # After validate_session, the expired row should be deleted.
+        with db._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM sessions WHERE id = ?", (token,)).fetchone()
+        assert row is None, "validate_session must drop expired rows"
+
+    def test_user_agent_binding(self):
+        mid = db.create_manager("ua_user", "UA", "pass1234")
+        ua_a = db.hash_user_agent("Mozilla/5.0 (Browser A)")
+        ua_b = db.hash_user_agent("Mozilla/5.0 (Browser B)")
+        token = db.create_session(mid, user_agent_hash=ua_a)
+        # Same UA succeeds; different UA rejected.
+        assert db.validate_session(token, ua_a) == mid
+        assert db.validate_session(token, ua_b) is None
+
+    def test_revoke_idempotent(self):
+        mid = db.create_manager("rev_user", "Rev", "pass1234")
+        token = db.create_session(mid)
+        db.revoke_session(token)
+        db.revoke_session(token)  # second call must not raise
+        db.revoke_session("never-existed")
+
+    def test_cleanup_expired(self):
+        mid = db.create_manager("cleanup_user", "C", "pass1234")
+        live = db.create_session(mid, ttl_seconds=3600)
+        dead = db.create_session(mid, ttl_seconds=-1)
+        db.cleanup_expired_sessions()
+        assert db.validate_session(live) == mid
+        with db._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM sessions WHERE id = ?", (dead,)).fetchone()
+        assert row is None
+
+
+class TestPersistentRateLimit:
+    """Regression for AUDIT H2 / P2.3 — failed logins persist across tabs and
+    enforce exponential-backoff lockout."""
+
+    def test_first_few_failures_no_lockout(self):
+        for _ in range(db.LOGIN_FAIL_THRESHOLD - 1):
+            db.record_failed_login("ratelimit1")
+        assert db.get_lockout_until("ratelimit1") is None
+
+    def test_threshold_triggers_lockout(self):
+        for _ in range(db.LOGIN_FAIL_THRESHOLD):
+            db.record_failed_login("ratelimit2")
+        locked_until = db.get_lockout_until("ratelimit2")
+        assert locked_until is not None
+        assert locked_until > datetime.now()
+
+    def test_lockout_grows_exponentially(self):
+        for _ in range(db.LOGIN_FAIL_THRESHOLD):
+            db.record_failed_login("ratelimit3")
+        first = db.get_lockout_until("ratelimit3")
+        assert first is not None
+        first_window = (first - datetime.now()).total_seconds()
+
+        # Two more failures → 4x the base lockout (2^2).
+        db.record_failed_login("ratelimit3")
+        db.record_failed_login("ratelimit3")
+        second = db.get_lockout_until("ratelimit3")
+        assert second is not None
+        second_window = (second - datetime.now()).total_seconds()
+        assert second_window > first_window * 2
+
+    def test_clear_on_success(self):
+        for _ in range(db.LOGIN_FAIL_THRESHOLD):
+            db.record_failed_login("ratelimit4")
+        assert db.get_lockout_until("ratelimit4") is not None
+        db.clear_failed_logins("ratelimit4")
+        assert db.get_lockout_until("ratelimit4") is None
+
+    def test_username_normalised_for_lockout(self):
+        """Lockout key is case-insensitive — can't bypass by changing case."""
+        for _ in range(db.LOGIN_FAIL_THRESHOLD):
+            db.record_failed_login("MixedCase")
+        assert db.get_lockout_until("mixedcase") is not None
+        assert db.get_lockout_until("MIXEDCASE") is not None
+
+    def test_lockout_persists_across_invocations(self):
+        """Mimics the H2 attack — multiple processes/tabs see the same counter."""
+        for _ in range(db.LOGIN_FAIL_THRESHOLD):
+            db.record_failed_login("ratelimit5")
+        # Simulate "new tab": just call again.
+        assert db.get_lockout_until("ratelimit5") is not None
 
 
 class TestConnectionLifecycle:

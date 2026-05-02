@@ -393,11 +393,54 @@ def _migration_sole_manager_backfill(conn) -> None:
     _commit(conn)
 
 
+def _migration_sessions_and_login_attempts(conn) -> None:
+    """P2.3: add server-side sessions + persistent login_attempts tables for
+    deployments that pre-date schema_postgres.sql carrying these tables."""
+    # sessions
+    if _detect_pg():
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS sessions ("
+            "  id TEXT PRIMARY KEY,"
+            "  manager_id INTEGER NOT NULL REFERENCES managers(id),"
+            "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+            "  last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+            "  expires_at TIMESTAMP NOT NULL,"
+            "  user_agent_hash TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS login_attempts ("
+            "  username TEXT PRIMARY KEY,"
+            "  failed_count INTEGER NOT NULL DEFAULT 0,"
+            "  last_attempt_at TIMESTAMP NOT NULL,"
+            "  locked_until TIMESTAMP)"
+        )
+    else:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS sessions ("
+            "  id TEXT PRIMARY KEY,"
+            "  manager_id INTEGER NOT NULL,"
+            "  created_at TEXT DEFAULT (datetime('now')),"
+            "  last_seen TEXT DEFAULT (datetime('now')),"
+            "  expires_at TEXT NOT NULL,"
+            "  user_agent_hash TEXT,"
+            "  FOREIGN KEY (manager_id) REFERENCES managers(id))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS login_attempts ("
+            "  username TEXT PRIMARY KEY,"
+            "  failed_count INTEGER NOT NULL DEFAULT 0,"
+            "  last_attempt_at TEXT NOT NULL,"
+            "  locked_until TEXT)"
+        )
+    _commit(conn)
+
+
 _MIGRATIONS: list[tuple[str, Any]] = [
     ("0001_journal_coaching_response", _migration_journal_coaching_response),
     ("0002_orphan_table_manager_id", _migration_orphan_table_manager_id),
     ("0003_partition_config_table", _migration_partition_config_table),
     ("0004_sole_manager_backfill", _migration_sole_manager_backfill),
+    ("0005_sessions_and_login_attempts", _migration_sessions_and_login_attempts),
 ]
 
 
@@ -486,6 +529,23 @@ def init_db():
         CREATE TABLE IF NOT EXISTS schema_migrations (
             id TEXT PRIMARY KEY,
             applied_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            manager_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            last_seen TEXT DEFAULT (datetime('now')),
+            expires_at TEXT NOT NULL,
+            user_agent_hash TEXT,
+            FOREIGN KEY (manager_id) REFERENCES managers(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            username TEXT PRIMARY KEY,
+            failed_count INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at TEXT NOT NULL,
+            locked_until TEXT
         );
 
         CREATE TABLE IF NOT EXISTS team_members (
@@ -850,6 +910,151 @@ def manager_exists(username: str) -> bool:
         row = _fetchone(conn, "SELECT id FROM managers WHERE username = ?",
                         (username.lower().strip(),))
     return row is not None
+
+
+# ---------------------------------------------------------------------------
+# Sessions & rate-limiting (P2.3 / AUDIT H2 + H3)
+# ---------------------------------------------------------------------------
+
+import secrets
+import hashlib
+
+SESSION_DEFAULT_TTL_SECONDS = 12 * 3600  # 12 hours
+LOGIN_FAIL_THRESHOLD = 5
+LOGIN_LOCKOUT_BASE_SECONDS = 60  # First lockout window after threshold
+LOGIN_LOCKOUT_MAX_SECONDS = 24 * 3600  # Cap lockout at 24 hours
+
+
+def hash_user_agent(user_agent: str | None) -> str | None:
+    """Stable hash for binding sessions to the originating User-Agent string."""
+    if not user_agent:
+        return None
+    return hashlib.sha256(user_agent.encode("utf-8")).hexdigest()
+
+
+def create_session(manager_id: int, ttl_seconds: int = SESSION_DEFAULT_TTL_SECONDS,
+                   user_agent_hash: str | None = None) -> str:
+    """Create a server-side session and return the opaque token to store
+    client-side. Token is 32 bytes of cryptographic randomness, URL-safe."""
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now() + timedelta(seconds=ttl_seconds)).isoformat()
+    with _connect() as conn:
+        _exec(conn,
+              "INSERT INTO sessions (id, manager_id, expires_at, user_agent_hash) "
+              "VALUES (?, ?, ?, ?)",
+              (token, manager_id, expires_at, user_agent_hash))
+        _commit(conn)
+    return token
+
+
+def validate_session(token: str, user_agent_hash: str | None = None) -> int | None:
+    """Validate a session token and refresh last_seen. Returns manager_id, or
+    None if the token is missing, expired, or its UA hash mismatches."""
+    if not token:
+        return None
+    now_iso = datetime.now().isoformat()
+    with _connect() as conn:
+        row = _fetchone(conn,
+                        "SELECT manager_id, expires_at, user_agent_hash "
+                        "FROM sessions WHERE id = ?",
+                        (token,))
+        if not row:
+            return None
+        if row["expires_at"] <= now_iso:
+            # Expired: clean up and reject.
+            _exec(conn, "DELETE FROM sessions WHERE id = ?", (token,))
+            _commit(conn)
+            return None
+        if row["user_agent_hash"] is not None and user_agent_hash is not None \
+                and row["user_agent_hash"] != user_agent_hash:
+            return None
+        _exec(conn,
+              "UPDATE sessions SET last_seen = ? WHERE id = ?",
+              (now_iso, token))
+        _commit(conn)
+        return row["manager_id"]
+
+
+def revoke_session(token: str) -> None:
+    """Delete a session row. Idempotent — silently no-ops on unknown token."""
+    if not token:
+        return
+    with _connect() as conn:
+        _exec(conn, "DELETE FROM sessions WHERE id = ?", (token,))
+        _commit(conn)
+
+
+def cleanup_expired_sessions() -> int:
+    """Delete all expired sessions. Returns count removed."""
+    now_iso = datetime.now().isoformat()
+    with _connect() as conn:
+        cur = _exec(conn,
+                    "DELETE FROM sessions WHERE expires_at <= ?",
+                    (now_iso,))
+        _commit(conn)
+        return cur.rowcount if hasattr(cur, "rowcount") else 0
+
+
+def _lockout_seconds_for(failed_count: int) -> int:
+    """Exponential backoff: no lockout below threshold; otherwise
+    `BASE * 2^(over_threshold)` seconds, capped at MAX."""
+    over = failed_count - LOGIN_FAIL_THRESHOLD
+    if over < 0:
+        return 0
+    return min(LOGIN_LOCKOUT_BASE_SECONDS * (2 ** over), LOGIN_LOCKOUT_MAX_SECONDS)
+
+
+def get_lockout_until(username: str) -> datetime | None:
+    """If the username is currently locked out, return the unlock time.
+    Otherwise return None."""
+    if not username:
+        return None
+    uname = username.lower().strip()
+    with _connect() as conn:
+        row = _fetchone(conn,
+                        "SELECT locked_until FROM login_attempts WHERE username = ?",
+                        (uname,))
+    if not row or not row["locked_until"]:
+        return None
+    locked_until = datetime.fromisoformat(row["locked_until"])
+    return locked_until if locked_until > datetime.now() else None
+
+
+def record_failed_login(username: str) -> int:
+    """Increment the failed-login counter for username and (re)compute the
+    lockout window. Returns the updated failed_count."""
+    if not username:
+        return 0
+    uname = username.lower().strip()
+    now = datetime.now()
+    with _connect() as conn:
+        row = _fetchone(conn,
+                        "SELECT failed_count FROM login_attempts WHERE username = ?",
+                        (uname,))
+        new_count = (row["failed_count"] if row else 0) + 1
+        lockout_secs = _lockout_seconds_for(new_count)
+        locked_until_iso = (now + timedelta(seconds=lockout_secs)).isoformat() \
+            if lockout_secs else None
+        _exec(conn,
+              "INSERT INTO login_attempts (username, failed_count, last_attempt_at, locked_until) "
+              "VALUES (?, ?, ?, ?) "
+              "ON CONFLICT(username) DO UPDATE SET "
+              "  failed_count = excluded.failed_count, "
+              "  last_attempt_at = excluded.last_attempt_at, "
+              "  locked_until = excluded.locked_until",
+              (uname, new_count, now.isoformat(), locked_until_iso))
+        _commit(conn)
+    return new_count
+
+
+def clear_failed_logins(username: str) -> None:
+    """Reset the failed-login counter on successful authentication."""
+    if not username:
+        return
+    uname = username.lower().strip()
+    with _connect() as conn:
+        _exec(conn, "DELETE FROM login_attempts WHERE username = ?", (uname,))
+        _commit(conn)
 
 
 # ---------------------------------------------------------------------------
