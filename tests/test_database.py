@@ -490,3 +490,114 @@ class TestSchemaMigrationSafety:
         rows = conn.execute("SELECT COUNT(*) FROM journal_entries").fetchone()
         conn.close()
         assert rows[0] == 1, "Existing rows must be preserved"
+
+
+class TestOrphanTableManagerId:
+    """Regression for AUDIT C2 / P1.1 — orphan child tables now carry a
+    manager_id column populated either explicitly or by parent fallback."""
+
+    ORPHAN_TABLES = (
+        "feedback", "goals", "career_conversations",
+        "skills", "development_plans", "milestones",
+    )
+
+    def test_all_orphan_tables_have_manager_id(self):
+        conn = db.get_connection()
+        for table in self.ORPHAN_TABLES:
+            cols = [c[1] for c in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            assert "manager_id" in cols, f"{table} is missing manager_id column"
+        conn.close()
+
+    def _seed_member(self, username="m_orphan"):
+        mid = db.create_manager(username, "Orphan Mgr", "pass1234")
+        tid = db.add_team_member("Tessa", manager_id=mid)
+        return mid, tid
+
+    def test_feedback_inherits_manager_id_from_member(self):
+        mid, tid = self._seed_member()
+        fid = db.add_feedback(tid, "positive", situation="Great work")
+        conn = db.get_connection()
+        row = conn.execute("SELECT manager_id FROM feedback WHERE id = ?", (fid,)).fetchone()
+        conn.close()
+        assert row["manager_id"] == mid
+
+    def test_goal_inherits_manager_id_from_member(self):
+        mid, tid = self._seed_member("m_goal")
+        gid = db.add_goal(tid, "Q1", "Ship feature X")
+        conn = db.get_connection()
+        row = conn.execute("SELECT manager_id FROM goals WHERE id = ?", (gid,)).fetchone()
+        conn.close()
+        assert row["manager_id"] == mid
+
+    def test_skill_inherits_manager_id_from_member(self):
+        mid, tid = self._seed_member("m_skill")
+        sid = db.add_skill(tid, "Python")
+        conn = db.get_connection()
+        row = conn.execute("SELECT manager_id FROM skills WHERE id = ?", (sid,)).fetchone()
+        conn.close()
+        assert row["manager_id"] == mid
+
+    def test_career_conversation_inherits_manager_id_from_member(self):
+        mid, tid = self._seed_member("m_career")
+        cid = db.add_career_conversation(tid, "2026-01-15", topic="Promotion path")
+        conn = db.get_connection()
+        row = conn.execute(
+            "SELECT manager_id FROM career_conversations WHERE id = ?", (cid,)
+        ).fetchone()
+        conn.close()
+        assert row["manager_id"] == mid
+
+    def test_development_plan_inherits_manager_id_from_member(self):
+        mid, tid = self._seed_member("m_devplan")
+        pid = db.add_development_plan(tid, "Senior IC track")
+        conn = db.get_connection()
+        row = conn.execute(
+            "SELECT manager_id FROM development_plans WHERE id = ?", (pid,)
+        ).fetchone()
+        conn.close()
+        assert row["manager_id"] == mid
+
+    def test_milestone_inherits_manager_id_from_plan(self):
+        mid, tid = self._seed_member("m_milestone")
+        pid = db.add_development_plan(tid, "Plan")
+        ms_id = db.add_milestone(pid, "First step")
+        conn = db.get_connection()
+        row = conn.execute(
+            "SELECT manager_id FROM milestones WHERE id = ?", (ms_id,)
+        ).fetchone()
+        conn.close()
+        assert row["manager_id"] == mid
+
+    def test_explicit_manager_id_is_honored(self):
+        """Explicit manager_id should take precedence over the parent fallback."""
+        mid_owner, tid = self._seed_member("m_explicit_owner")
+        mid_other = db.create_manager("m_explicit_other", "Other", "pass1234")
+        # Pass a DIFFERENT manager_id explicitly — the helper should trust the caller.
+        fid = db.add_feedback(tid, "positive", manager_id=mid_other)
+        conn = db.get_connection()
+        row = conn.execute("SELECT manager_id FROM feedback WHERE id = ?", (fid,)).fetchone()
+        conn.close()
+        assert row["manager_id"] == mid_other
+
+    def test_backfill_populates_existing_null_rows(self):
+        """An existing row with NULL manager_id should be backfilled by the
+        next init_db() call. Simulates an upgrade path."""
+        mid, tid = self._seed_member("m_backfill")
+        # Insert a row with NULL manager_id directly (simulates pre-migration data)
+        conn = db.get_connection()
+        conn.execute(
+            "INSERT INTO feedback (manager_id, team_member_id, feedback_type, situation) "
+            "VALUES (NULL, ?, 'positive', 'old row')",
+            (tid,))
+        conn.commit()
+        conn.close()
+
+        db.init_db()  # Should backfill
+
+        conn = db.get_connection()
+        rows = conn.execute(
+            "SELECT manager_id FROM feedback WHERE situation = 'old row'"
+        ).fetchall()
+        conn.close()
+        assert len(rows) == 1
+        assert rows[0]["manager_id"] == mid, "Backfill must populate NULL manager_id from team_member"

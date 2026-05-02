@@ -360,6 +360,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS feedback (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             team_member_id INTEGER NOT NULL,
             event_id INTEGER,
             feedback_type TEXT NOT NULL CHECK(feedback_type IN
@@ -368,12 +369,14 @@ def init_db():
             behavior TEXT,
             impact TEXT,
             created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id),
             FOREIGN KEY (event_id) REFERENCES events(id)
         );
 
         CREATE TABLE IF NOT EXISTS goals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             team_member_id INTEGER NOT NULL,
             quarter TEXT NOT NULL,
             description TEXT NOT NULL,
@@ -383,6 +386,7 @@ def init_db():
                  'partially_met', 'not_met')),
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id)
         );
 
@@ -420,17 +424,20 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS career_conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             team_member_id INTEGER NOT NULL,
             conversation_date TEXT NOT NULL,
             topic TEXT,
             notes TEXT,
             next_steps TEXT,
             created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id)
         );
 
         CREATE TABLE IF NOT EXISTS skills (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             team_member_id INTEGER NOT NULL,
             skill_name TEXT NOT NULL,
             proficiency TEXT DEFAULT 'developing'
@@ -440,11 +447,13 @@ def init_db():
             notes TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id)
         );
 
         CREATE TABLE IF NOT EXISTS development_plans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             team_member_id INTEGER NOT NULL,
             title TEXT NOT NULL,
             description TEXT,
@@ -453,16 +462,19 @@ def init_db():
                 CHECK(status IN ('active', 'completed', 'paused')),
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id)
         );
 
         CREATE TABLE IF NOT EXISTS milestones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             plan_id INTEGER NOT NULL,
             description TEXT NOT NULL,
             target_date TEXT,
             completed INTEGER DEFAULT 0,
             completed_at TEXT,
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (plan_id) REFERENCES development_plans(id)
         );
 
@@ -544,8 +556,44 @@ def init_db():
         if "coaching_response" not in cols:
             conn.execute("ALTER TABLE journal_entries ADD COLUMN coaching_response TEXT")
             conn.commit()
-    except Exception as e:
-        logger.debug("Column migration skipped: %s", e)
+    except sqlite3.Error as e:
+        logger.warning("Column migration (coaching_response) failed: %s", e)
+
+    # Migration P1.1: add manager_id to orphan tables that previously scoped
+    # only via team_member_id / plan_id. Idempotent: only ALTER if missing.
+    for table in ("feedback", "goals", "career_conversations", "skills",
+                  "development_plans", "milestones"):
+        try:
+            cols = [c[1] for c in conn.execute(
+                f"PRAGMA table_info({table})").fetchall()]
+            if "manager_id" not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN manager_id INTEGER")
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.warning("manager_id ALTER on %s failed: %s", table, e)
+
+    # Backfill manager_id for the orphan tables. Runs every startup but is a
+    # cheap no-op once all rows are populated.
+    try:
+        # Tables with team_member_id parent
+        for table in ("feedback", "goals", "career_conversations", "skills",
+                      "development_plans"):
+            conn.execute(
+                f"UPDATE {table} SET manager_id = ("
+                "SELECT manager_id FROM team_members WHERE team_members.id = "
+                f"{table}.team_member_id"
+                ") WHERE manager_id IS NULL"
+            )
+        # milestones piggyback on development_plans (must run after development_plans)
+        conn.execute(
+            "UPDATE milestones SET manager_id = ("
+            "SELECT manager_id FROM development_plans "
+            "WHERE development_plans.id = milestones.plan_id"
+            ") WHERE manager_id IS NULL"
+        )
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.warning("manager_id backfill on orphan tables failed: %s", e)
 
     # One-time backfill: assign orphaned data to the sole manager
     try:
@@ -565,8 +613,8 @@ def init_db():
             conn.execute(
                 "INSERT INTO config (key, value) VALUES ('_migration_backfill_done', '1')")
             conn.commit()
-    except Exception as e:
-        logger.debug("Backfill migration skipped: %s", e)
+    except sqlite3.Error as e:
+        logger.warning("Sole-manager backfill skipped: %s", e)
 
     conn.close()
 
@@ -1058,15 +1106,29 @@ def update_action_item(item_id, **kwargs):
 # Feedback
 # ---------------------------------------------------------------------------
 
+def _resolve_manager_id_from_member(conn, team_member_id):
+    """Look up manager_id from a team_member id. Used to populate manager_id
+    on inserts into child tables when the caller does not supply it."""
+    if team_member_id is None:
+        return None
+    row = _fetchone(conn,
+                    "SELECT manager_id FROM team_members WHERE id = ?",
+                    (team_member_id,))
+    return row["manager_id"] if row else None
+
+
 def add_feedback(team_member_id: int, feedback_type: str, situation: str | None = None,
                  behavior: str | None = None, impact: str | None = None,
-                 event_id: int | None = None) -> int | None:
+                 event_id: int | None = None,
+                 manager_id: int | None = None) -> int | None:
     conn = get_connection()
+    if manager_id is None:
+        manager_id = _resolve_manager_id_from_member(conn, team_member_id)
     feedback_id = _exec_returning_id(
         conn,
-        "INSERT INTO feedback (team_member_id, event_id, feedback_type, "
-        "situation, behavior, impact) VALUES (?, ?, ?, ?, ?, ?)",
-        (team_member_id, event_id, feedback_type, situation, behavior, impact),
+        "INSERT INTO feedback (manager_id, team_member_id, event_id, feedback_type, "
+        "situation, behavior, impact) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, event_id, feedback_type, situation, behavior, impact),
     )
     _commit(conn)
     conn.close()
@@ -1121,13 +1183,16 @@ def delete_feedback(feedback_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 def add_goal(team_member_id: int, quarter: str, description: str,
-             key_results: str | None = None) -> int | None:
+             key_results: str | None = None,
+             manager_id: int | None = None) -> int | None:
     conn = get_connection()
+    if manager_id is None:
+        manager_id = _resolve_manager_id_from_member(conn, team_member_id)
     goal_id = _exec_returning_id(
         conn,
-        "INSERT INTO goals (team_member_id, quarter, description, key_results) "
-        "VALUES (?, ?, ?, ?)",
-        (team_member_id, quarter, description, key_results),
+        "INSERT INTO goals (manager_id, team_member_id, quarter, description, key_results) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, quarter, description, key_results),
     )
     _commit(conn)
     conn.close()
@@ -1777,14 +1842,17 @@ def get_pre_meeting_prep(member_id):
 # ---------------------------------------------------------------------------
 
 def add_career_conversation(team_member_id, conversation_date,
-                            topic=None, notes=None, next_steps=None):
+                            topic=None, notes=None, next_steps=None,
+                            manager_id=None):
     conn = get_connection()
+    if manager_id is None:
+        manager_id = _resolve_manager_id_from_member(conn, team_member_id)
     cid = _exec_returning_id(
         conn,
         "INSERT INTO career_conversations "
-        "(team_member_id, conversation_date, topic, notes, next_steps) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (team_member_id, conversation_date, topic, notes, next_steps),
+        "(manager_id, team_member_id, conversation_date, topic, notes, next_steps) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, conversation_date, topic, notes, next_steps),
     )
     _commit(conn)
     conn.close()
@@ -1802,14 +1870,17 @@ def list_career_conversations(team_member_id, limit=20):
 
 
 def add_skill(team_member_id, skill_name, proficiency="developing",
-              is_strength=0, is_growth_area=0, notes=None):
+              is_strength=0, is_growth_area=0, notes=None,
+              manager_id=None):
     conn = get_connection()
+    if manager_id is None:
+        manager_id = _resolve_manager_id_from_member(conn, team_member_id)
     sid = _exec_returning_id(
         conn,
         "INSERT INTO skills "
-        "(team_member_id, skill_name, proficiency, is_strength, is_growth_area, notes) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (team_member_id, skill_name, proficiency, is_strength, is_growth_area, notes),
+        "(manager_id, team_member_id, skill_name, proficiency, is_strength, is_growth_area, notes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, skill_name, proficiency, is_strength, is_growth_area, notes),
     )
     _commit(conn)
     conn.close()
@@ -1847,13 +1918,17 @@ def delete_skill(skill_id):
     conn.close()
 
 
-def add_development_plan(team_member_id, title, description=None, target_date=None):
+def add_development_plan(team_member_id, title, description=None, target_date=None,
+                         manager_id=None):
     conn = get_connection()
+    if manager_id is None:
+        manager_id = _resolve_manager_id_from_member(conn, team_member_id)
     pid = _exec_returning_id(
         conn,
         "INSERT INTO development_plans "
-        "(team_member_id, title, description, target_date) VALUES (?, ?, ?, ?)",
-        (team_member_id, title, description, target_date),
+        "(manager_id, team_member_id, title, description, target_date) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, title, description, target_date),
     )
     _commit(conn)
     conn.close()
@@ -1889,12 +1964,18 @@ def list_development_plans(team_member_id, status=None):
     return rows
 
 
-def add_milestone(plan_id, description, target_date=None):
+def add_milestone(plan_id, description, target_date=None, manager_id=None):
     conn = get_connection()
+    if manager_id is None and plan_id is not None:
+        row = _fetchone(conn,
+                        "SELECT manager_id FROM development_plans WHERE id = ?",
+                        (plan_id,))
+        manager_id = row["manager_id"] if row else None
     mid = _exec_returning_id(
         conn,
-        "INSERT INTO milestones (plan_id, description, target_date) VALUES (?, ?, ?)",
-        (plan_id, description, target_date),
+        "INSERT INTO milestones (manager_id, plan_id, description, target_date) "
+        "VALUES (?, ?, ?, ?)",
+        (manager_id, plan_id, description, target_date),
     )
     _commit(conn)
     conn.close()
