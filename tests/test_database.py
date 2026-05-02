@@ -855,6 +855,81 @@ class TestCrossManagerScoping:
         assert db.get_pre_meeting_prep(t1, manager_id=m2) is None
 
 
+class TestProductionFallbackGate:
+    """Regression for AUDIT H5 / P2.5 — SQLite fallback is disabled when
+    MANAGER_TOOL_ENV=prod; outside production the fallback behaves as before."""
+
+    def _force_pg_failure(self, monkeypatch):
+        """Pretend Postgres is configured and raises on connect.
+
+        We deliberately do NOT monkeypatch _detect_pg — the real implementation
+        consults _USE_PG, which the fallback path flips to False, so the next
+        get_connection() call naturally takes the SQLite branch."""
+        monkeypatch.setattr(db, "_USE_PG", True)
+        monkeypatch.setattr(db, "_get_pg_url", lambda: "postgres://x/y")
+
+        class _BoomPsycopg2:
+            class extras:
+                class RealDictCursor:
+                    pass
+
+            @staticmethod
+            def connect(*_a, **_kw):
+                raise RuntimeError("synthetic Postgres outage")
+
+        import sys
+        monkeypatch.setitem(sys.modules, "psycopg2", _BoomPsycopg2)
+        monkeypatch.setitem(sys.modules, "psycopg2.extras", _BoomPsycopg2.extras)
+
+    def test_is_production_reads_env_var(self, monkeypatch):
+        monkeypatch.setenv("MANAGER_TOOL_ENV", "prod")
+        assert db._is_production() is True
+        monkeypatch.setenv("MANAGER_TOOL_ENV", "dev")
+        assert db._is_production() is False
+        monkeypatch.delenv("MANAGER_TOOL_ENV", raising=False)
+        assert db._is_production() is False
+
+    def test_prod_fails_loud_on_pg_outage(self, monkeypatch):
+        """In prod, a Postgres outage must raise — never fall through to
+        SQLite (which would silently route writes to ephemeral storage)."""
+        monkeypatch.setenv("MANAGER_TOOL_ENV", "prod")
+        self._force_pg_failure(monkeypatch)
+        try:
+            db.get_connection()
+        except db.DatabaseUnavailableError:
+            return
+        raise AssertionError(
+            "get_connection must raise DatabaseUnavailableError in prod "
+            "when Postgres is unreachable; SQLite fallback is disallowed"
+        )
+
+    def test_non_prod_falls_back_to_sqlite(self, monkeypatch):
+        """Outside prod, the fallback still kicks in so dev laptops and CI
+        keep working when Postgres isn't configured."""
+        monkeypatch.delenv("MANAGER_TOOL_ENV", raising=False)
+        self._force_pg_failure(monkeypatch)
+        # Should NOT raise — should fall through to SQLite.
+        conn = db.get_connection()
+        try:
+            row = conn.execute("SELECT 1").fetchone()
+            assert row is not None
+        finally:
+            conn.close()
+
+    def test_pg_failed_flags_set_after_outage(self, monkeypatch):
+        """The status flags consumed by the UI are set in both prod and dev
+        outage paths — operators see the failure either way."""
+        monkeypatch.delenv("MANAGER_TOOL_ENV", raising=False)
+        self._force_pg_failure(monkeypatch)
+        try:
+            db.get_connection()
+        except Exception:
+            pass
+        failed, msg = db.pg_connection_failed()
+        assert failed is True
+        assert "synthetic Postgres outage" in msg
+
+
 class TestServerSideSessions:
     """Regression for AUDIT H3 / P2.3 — sessions are server-side, expire,
     and can be revoked."""

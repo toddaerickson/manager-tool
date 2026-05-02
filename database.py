@@ -137,12 +137,31 @@ def pg_connection_failed() -> tuple[bool, str]:
     return _PG_FAILED, _PG_ERROR
 
 
+class DatabaseUnavailableError(RuntimeError):
+    """Raised in production when PostgreSQL is unreachable. The SQLite
+    fallback is intentionally disabled in prod so writes do not silently
+    land in ephemeral storage that subsequent restarts ignore."""
+
+
+def _is_production() -> bool:
+    """A deploy is production when MANAGER_TOOL_ENV is set to 'prod'.
+
+    Anywhere else (dev laptops, CI, ephemeral preview deploys) we keep the
+    SQLite fallback so the app stays runnable when Postgres isn't configured.
+    """
+    return os.environ.get("MANAGER_TOOL_ENV", "").strip().lower() == "prod"
+
+
 def get_connection():
     """Get a database connection (PostgreSQL direct or SQLite fallback).
 
     Uses direct psycopg2 connections rather than a pool because Neon's
     serverless proxy handles connection pooling and scales compute to zero
     after idle periods — app-side pools would hold stale connections.
+
+    In production (MANAGER_TOOL_ENV=prod), a PostgreSQL connection failure
+    raises DatabaseUnavailableError. Outside production we fall back to
+    SQLite so dev laptops and CI don't hard-fail when Postgres is absent.
     """
     global _PG_FAILED, _PG_ERROR
     if _detect_pg():
@@ -155,12 +174,25 @@ def get_connection():
             _PG_ERROR = ""
             return conn
         except Exception as e:
-            # Fall back to SQLite if PostgreSQL connection fails
-            logger.warning("PostgreSQL connection failed, falling back to SQLite: %s", e)
-            global _USE_PG
-            _USE_PG = False
             _PG_FAILED = True
             _PG_ERROR = str(e)
+            if _is_production():
+                # Fail loud: routing writes to SQLite in prod silently
+                # corrupts the deployment (subsequent restarts revert to
+                # Postgres and the SQLite writes are orphaned).
+                logger.exception(
+                    "PostgreSQL connection failed in production "
+                    "(MANAGER_TOOL_ENV=prod); refusing SQLite fallback")
+                raise DatabaseUnavailableError(
+                    "PostgreSQL is unreachable and the SQLite fallback is "
+                    "disabled in production. Investigate the database "
+                    f"connectivity issue before continuing. Original error: {e}"
+                ) from e
+            logger.warning(
+                "PostgreSQL connection failed, falling back to SQLite "
+                "(non-production): %s", e)
+            global _USE_PG
+            _USE_PG = False
             # Initialize SQLite tables since init_db() may have been
             # skipped when PostgreSQL was expected to be available
             init_db()
