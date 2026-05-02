@@ -419,7 +419,7 @@ class ManagerGUI(tk.Tk):
             def complete_event():
                 eid = complete_var.get()
                 if eid and eid.isdigit():
-                    db.complete_event(int(eid))
+                    db.complete_event(int(eid), manager_id=1)
                     messagebox.showinfo("Done", f"Event #{eid} marked completed.")
                     self._show_panel("upcoming")
 
@@ -457,7 +457,7 @@ class ManagerGUI(tk.Tk):
             def show_detail():
                 mid = detail_var.get()
                 if mid and mid.isdigit():
-                    summary = db.get_member_summary(int(mid))
+                    summary = db.get_member_summary(int(mid), manager_id=1)
                     if not summary:
                         messagebox.showerror("Error", f"Member #{mid} not found.")
                         return
@@ -569,7 +569,7 @@ class ManagerGUI(tk.Tk):
             def complete():
                 aid = complete_var.get()
                 if aid and aid.isdigit():
-                    db.complete_action_item(int(aid))
+                    db.complete_action_item(int(aid), manager_id=1)
                     messagebox.showinfo("Done", f"Action #{aid} completed.")
                     self._show_panel("actions")
 
@@ -653,7 +653,7 @@ class ManagerGUI(tk.Tk):
     def _panel_goals(self):
         frame = self._scrollable_frame(self.content)
         self._heading(frame, "Quarterly Goals")
-        goals = db.list_goals()
+        goals = db.list_goals(manager_id=1)
         self._build_table(frame,
                           ["id", "member_name", "quarter", "description", "status"],
                           goals,
@@ -669,7 +669,7 @@ class ManagerGUI(tk.Tk):
             def update():
                 gid = goal_id_var.get()
                 if gid and gid.isdigit():
-                    db.update_goal(int(gid), status=status_var.get())
+                    db.update_goal(int(gid), manager_id=1, status=status_var.get())
                     messagebox.showinfo("Done", f"Goal #{gid} updated.")
                     self._show_panel("goals")
 

@@ -55,7 +55,7 @@ class TestRuleBasedSuggestion:
         old_date = (datetime.now().date() - timedelta(days=25)).strftime("%Y-%m-%d")
         eid = db.create_event("Old meeting", "one_on_one", old_date, "10:00",
                               team_member_id=tid, manager_id=mid)
-        db.complete_event(eid)
+        db.complete_event(eid, manager_id=mid)
         suggestion, page = coaching.generate_rule_based_suggestion(mid)
         assert suggestion is not None
         # Should mention the person or scheduling

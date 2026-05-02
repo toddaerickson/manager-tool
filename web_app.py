@@ -268,7 +268,7 @@ def render_coaching_pane(notes_text, context_type="journal", member_name=None,
                 st.session_state[state_key] = response
                 # Persist coaching response to journal entry if available
                 if journal_entry_id and response:
-                    db.update_journal_entry(journal_entry_id,
+                    db.update_journal_entry(journal_entry_id, manager_id=_mid(),
                                             coaching_response=response)
         else:
             st.session_state[state_key] = (
@@ -312,7 +312,7 @@ def confirm_complete_event(event_id, title):
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Complete", type="primary", use_container_width=True):
-            db.complete_event(int(event_id), notes=notes or None)
+            db.complete_event(int(event_id), manager_id=_mid(), notes=notes or None)
             st.toast(f"Event #{event_id} completed.", icon="\u2705")
             st.rerun()
     with c2:
@@ -327,7 +327,7 @@ def confirm_complete_action(action_id, description):
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Complete", type="primary", use_container_width=True):
-            db.complete_action_item(int(action_id))
+            db.complete_action_item(int(action_id), manager_id=_mid())
             st.toast(f"Action #{action_id} completed.", icon="\u2705")
             st.rerun()
     with c2:
@@ -468,7 +468,7 @@ def page_dashboard():
     # -- Onboarding checklist (endowed progress) — only for new users --
     members = db.list_team_members(manager_id=_mid())
     all_events = db.list_events(limit=5, manager_id=_mid())
-    all_feedback = db.list_feedback()
+    all_feedback = db.list_feedback(manager_id=_mid())
     journal_entries = db.list_journal_entries(limit=1, manager_id=_mid())
     if len(members) < 2 and len(all_events) < 3:
         st.divider()
@@ -552,9 +552,9 @@ def page_upcoming_events():
                 notes = st.text_area("Meeting notes", height=150,
                     placeholder="What happened? What did you observe? What do you need to follow up on?")
                 if st.form_submit_button("Mark Complete"):
-                    event = db.get_event(int(eid))
+                    event = db.get_event(int(eid), manager_id=_mid())
                     if event:
-                        db.complete_event(int(eid), notes=notes or None)
+                        db.complete_event(int(eid), manager_id=_mid(), notes=notes or None)
                         set_toast("success", f"Event #{eid} marked completed.")
                     else:
                         set_toast("error", f"Event #{eid} not found.")
@@ -712,7 +712,7 @@ def page_team_roster():
         st.session_state["detail_member_id"] = mid
 
     if "detail_member_id" in st.session_state:
-        summary = db.get_member_summary(st.session_state["detail_member_id"])
+        summary = db.get_member_summary(st.session_state["detail_member_id"], manager_id=_mid())
         if summary:
             _render_member_detail(summary)
 
@@ -757,7 +757,7 @@ def _render_member_detail(summary):
                 )
             with del_col:
                 if st.button("Delete", key=f"del_fb_{fb['id']}"):
-                    db.delete_feedback(fb["id"])
+                    db.delete_feedback(fb["id"], manager_id=_mid())
                     set_toast("success", f"Feedback #{fb['id']} deleted.")
                     st.rerun()
 
@@ -832,7 +832,7 @@ def page_action_items():
         del_id = st.number_input("Action item ID to delete", min_value=1, step=1,
                                  key="del_action_id")
         if st.button("Delete Action Item", key="del_action_btn"):
-            db.delete_action_item(int(del_id))
+            db.delete_action_item(int(del_id), manager_id=_mid())
             set_toast("success", f"Action item #{del_id} deleted.")
             st.rerun()
 
@@ -938,7 +938,7 @@ def page_quarterly_goals():
             gid = st.number_input("Goal ID to update", min_value=1, step=1)
             new_status = st.selectbox("New Status", statuses)
             if st.form_submit_button("Update Status", use_container_width=True):
-                db.update_goal(int(gid), status=new_status)
+                db.update_goal(int(gid), manager_id=_mid(), status=new_status)
                 st.toast(f"Goal #{gid} updated to '{new_status}'.", icon="\u2705")
                 st.rerun()
     with uc2:
@@ -946,7 +946,7 @@ def page_quarterly_goals():
             del_gid = st.number_input("Goal ID to delete", min_value=1, step=1,
                                        key="del_goal_id")
             if st.form_submit_button("Delete Goal", use_container_width=True):
-                db.delete_goal(int(del_gid))
+                db.delete_goal(int(del_gid), manager_id=_mid())
                 st.toast(f"Goal #{del_gid} deleted.", icon="\u2705")
                 st.rerun()
 
@@ -1162,7 +1162,8 @@ def page_journal():
 
             if submitted:
                 if existing:
-                    db.update_journal_entry(existing["id"], content=content, mood=mood,
+                    db.update_journal_entry(existing["id"], manager_id=_mid(),
+                        content=content, mood=mood,
                         energy=energy, private_notes=private, tags=tags)
                 else:
                     db.add_journal_entry(today_str, "daily", content, mood, energy, private, tags,
@@ -1209,7 +1210,7 @@ def page_journal():
 
         if submitted_w:
             if existing_w:
-                db.update_journal_entry(existing_w["id"], content=reflection)
+                db.update_journal_entry(existing_w["id"], manager_id=_mid(), content=reflection)
             else:
                 db.add_journal_entry(monday, "weekly", reflection, manager_id=_mid())
             db.save_self_assessment(monday, scores, manager_id=_mid())
@@ -1258,7 +1259,7 @@ def page_member_timeline():
     member_id = mapping[selected]
 
     # -- Pre-meeting prep panel --
-    prep = db.get_pre_meeting_prep(member_id)
+    prep = db.get_pre_meeting_prep(member_id, manager_id=_mid())
     if prep:
         st.subheader(f"Before your 1-on-1 with {selected}:")
         mc1, mc2, mc3, mc4 = st.columns(4)
@@ -1321,7 +1322,7 @@ def page_member_timeline():
 
     # -- Timeline feed --
     st.subheader("Activity Timeline")
-    timeline = db.get_member_timeline(member_id)
+    timeline = db.get_member_timeline(member_id, manager_id=_mid())
     if not timeline:
         st.caption("No activity recorded for this member yet.")
     type_icons = {
@@ -1443,7 +1444,7 @@ def page_analytics():
                 pd.DataFrame(events).to_csv(index=False),
                 "meetings_export.csv", "text/csv", key="export_meetings")
     with exp2:
-        feedback = db.list_feedback()
+        feedback = db.list_feedback(manager_id=_mid())
         if feedback:
             st.download_button("Export Feedback (CSV)",
                 pd.DataFrame(feedback).to_csv(index=False),
@@ -1472,9 +1473,9 @@ def page_career_development():
     ])
 
     with tab_overview:
-        skills = db.list_skills(member_id)
-        plans = db.list_development_plans(member_id, status="active")
-        convos = db.list_career_conversations(member_id, limit=1)
+        skills = db.list_skills(member_id, manager_id=_mid())
+        plans = db.list_development_plans(member_id, manager_id=_mid(), status="active")
+        convos = db.list_career_conversations(member_id, manager_id=_mid(), limit=1)
         strengths = [s["skill_name"] for s in skills if s.get("is_strength")]
         growth = [s["skill_name"] for s in skills if s.get("is_growth_area")]
         oc1, oc2, oc3 = st.columns(3)
@@ -1491,7 +1492,7 @@ def page_career_development():
             st.metric("Last career conversation", last_convo)
 
     with tab_convos:
-        convos = db.list_career_conversations(member_id)
+        convos = db.list_career_conversations(member_id, manager_id=_mid())
         for c in convos:
             with st.expander(f"{c['conversation_date']} — {c.get('topic', 'Career conversation')}"):
                 if c.get("notes"):
@@ -1513,7 +1514,7 @@ def page_career_development():
                 st.rerun()
 
     with tab_skills:
-        skills = db.list_skills(member_id)
+        skills = db.list_skills(member_id, manager_id=_mid())
         if skills:
             st.dataframe(df_from(skills, ["skill_name", "proficiency", "is_strength", "is_growth_area"]))
         else:
@@ -1535,20 +1536,20 @@ def page_career_development():
                     st.rerun()
 
     with tab_plans:
-        plans = db.list_development_plans(member_id)
+        plans = db.list_development_plans(member_id, manager_id=_mid())
         for plan in plans:
             with st.expander(f"{plan['title']} [{plan['status']}]"):
                 if plan.get("description"):
                     st.markdown(plan["description"])
                 if plan.get("target_date"):
                     st.caption(f"Target: {plan['target_date']}")
-                milestones = db.list_milestones(plan["id"])
+                milestones = db.list_milestones(plan["id"], manager_id=_mid())
                 for ms in milestones:
                     done = "\u2705" if ms["completed"] else "\u2B1C"
                     st.markdown(f"{done} {ms['description']}")
                     if not ms["completed"]:
                         if st.button(f"Complete", key=f"ms_{ms['id']}"):
-                            db.complete_milestone(ms["id"])
+                            db.complete_milestone(ms["id"], manager_id=_mid())
                             st.rerun()
                 with st.form(f"add_ms_{plan['id']}"):
                     ms_desc = st.text_input("New milestone", key=f"msd_{plan['id']}")
@@ -1692,17 +1693,17 @@ def page_delegations():
                 dc1, dc2, dc3 = st.columns(3)
                 with dc1:
                     if st.button("Complete", key=f"del_done_{d['id']}"):
-                        db.update_delegation(d["id"], status="completed")
+                        db.update_delegation(d["id"], manager_id=_mid(), status="completed")
                         set_toast("success", f"Delegation '{d['task'][:30]}' completed.")
                         st.rerun()
                 with dc2:
                     if st.button("Stalled", key=f"del_stall_{d['id']}"):
-                        db.update_delegation(d["id"], status="stalled")
+                        db.update_delegation(d["id"], manager_id=_mid(), status="stalled")
                         set_toast("warning", f"Delegation marked as stalled.")
                         st.rerun()
                 with dc3:
                     if st.button("Delete", key=f"del_rm_{d['id']}"):
-                        db.delete_delegation(d["id"])
+                        db.delete_delegation(d["id"], manager_id=_mid())
                         set_toast("success", "Delegation deleted.")
                         st.rerun()
     else:
@@ -1814,7 +1815,7 @@ def page_running_notes():
                 )
             with col_del:
                 if st.button("X", key=f"del_rn_{n['id']}"):
-                    db.delete_running_note(n["id"])
+                    db.delete_running_note(n["id"], manager_id=_mid())
                     st.rerun()
             st.markdown("---")
     else:
@@ -1918,11 +1919,11 @@ def page_decision_log():
                         updates = {"status": new_status}
                         if actual:
                             updates["actual_outcome"] = actual
-                        db.update_decision(d["id"], **updates)
+                        db.update_decision(d["id"], manager_id=_mid(), **updates)
                         set_toast("success", f"Decision updated.")
                         st.rerun()
             if st.button("Delete", key=f"del_dec_{d['id']}"):
-                db.delete_decision(d["id"])
+                db.delete_decision(d["id"], manager_id=_mid())
                 set_toast("success", "Decision deleted.")
                 st.rerun()
 

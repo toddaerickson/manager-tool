@@ -915,7 +915,7 @@ def create_event(title: str, event_type: str, scheduled_date: str, scheduled_tim
     return event_id
 
 
-def update_event(event_id, **kwargs):
+def update_event(event_id: int, manager_id: int, **kwargs) -> None:
     conn = get_connection()
     allowed = {
         "title", "event_type", "team_member_id", "scheduled_date",
@@ -927,30 +927,31 @@ def update_event(event_id, **kwargs):
         conn.close()
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
-    values = list(fields.values()) + [datetime.now().isoformat(), event_id]
+    values = list(fields.values()) + [datetime.now().isoformat(), event_id, manager_id]
     _exec(conn,
-          f"UPDATE events SET {sets}, updated_at = ? WHERE id = ?", values)
+          f"UPDATE events SET {sets}, updated_at = ? WHERE id = ? AND manager_id = ?",
+          values)
     _commit(conn)
     conn.close()
 
 
-def complete_event(event_id: int, notes: str | None = None) -> None:
-    update_event(event_id, status="completed", notes=notes)
+def complete_event(event_id: int, manager_id: int, notes: str | None = None) -> None:
+    update_event(event_id, manager_id, status="completed", notes=notes)
 
 
-def cancel_event(event_id: int) -> None:
-    update_event(event_id, status="cancelled")
+def cancel_event(event_id: int, manager_id: int) -> None:
+    update_event(event_id, manager_id, status="cancelled")
 
 
-def get_event(event_id: int) -> dict[str, Any] | None:
+def get_event(event_id: int, manager_id: int) -> dict[str, Any] | None:
     conn = get_connection()
     row = _fetchone(
         conn,
         "SELECT e.*, tm.name AS participant_name, tm.email AS participant_email "
         "FROM events e "
         "LEFT JOIN team_members tm ON e.team_member_id = tm.id "
-        "WHERE e.id = ?",
-        (event_id,),
+        "WHERE e.id = ? AND e.manager_id = ?",
+        (event_id, manager_id),
     )
     conn.close()
     return row
@@ -1027,21 +1028,23 @@ def add_action_item(description: str, event_id: int | None = None,
     return item_id
 
 
-def complete_action_item(item_id: int) -> None:
+def complete_action_item(item_id: int, manager_id: int) -> None:
     conn = get_connection()
     _exec(conn,
-          "UPDATE action_items SET status = 'completed', completed_at = ? WHERE id = ?",
-          (datetime.now().isoformat(), item_id))
+          "UPDATE action_items SET status = 'completed', completed_at = ? "
+          "WHERE id = ? AND manager_id = ?",
+          (datetime.now().isoformat(), item_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def update_action_item_status(item_id, status):
+def update_action_item_status(item_id: int, status: str, manager_id: int) -> None:
     conn = get_connection()
     completed_at = datetime.now().isoformat() if status == "completed" else None
     _exec(conn,
-          "UPDATE action_items SET status = ?, completed_at = ? WHERE id = ?",
-          (status, completed_at, item_id))
+          "UPDATE action_items SET status = ?, completed_at = ? "
+          "WHERE id = ? AND manager_id = ?",
+          (status, completed_at, item_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1078,16 +1081,17 @@ def get_pending_action_items(manager_id: int | None = None) -> list[dict[str, An
             list_action_items(status="in_progress", manager_id=manager_id))
 
 
-def delete_action_item(item_id: int) -> None:
-    """Delete an action item."""
+def delete_action_item(item_id: int, manager_id: int) -> None:
+    """Delete an action item owned by manager_id."""
     conn = get_connection()
-    _exec(conn, "DELETE FROM action_items WHERE id = ?", (item_id,))
+    _exec(conn, "DELETE FROM action_items WHERE id = ? AND manager_id = ?",
+          (item_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def update_action_item(item_id, **kwargs):
-    """Update action item fields."""
+def update_action_item(item_id: int, manager_id: int, **kwargs) -> None:
+    """Update action item fields owned by manager_id."""
     allowed = {"description", "assignee", "due_date", "status"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -1096,8 +1100,8 @@ def update_action_item(item_id, **kwargs):
         fields["completed_at"] = datetime.now().isoformat()
     sets = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    _exec(conn, f"UPDATE action_items SET {sets} WHERE id = ?",
-          (*fields.values(), item_id))
+    _exec(conn, f"UPDATE action_items SET {sets} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), item_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1135,14 +1139,16 @@ def add_feedback(team_member_id: int, feedback_type: str, situation: str | None 
     return feedback_id
 
 
-def list_feedback(team_member_id: int | None = None, feedback_type: str | None = None) -> list[dict[str, Any]]:
+def list_feedback(manager_id: int, team_member_id: int | None = None,
+                  feedback_type: str | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
     query = (
         "SELECT f.*, tm.name AS member_name "
         "FROM feedback f "
-        "JOIN team_members tm ON f.team_member_id = tm.id WHERE 1=1"
+        "JOIN team_members tm ON f.team_member_id = tm.id "
+        "WHERE f.manager_id = ?"
     )
-    params = []
+    params = [manager_id]
     if team_member_id:
         query += " AND f.team_member_id = ?"
         params.append(team_member_id)
@@ -1156,24 +1162,25 @@ def list_feedback(team_member_id: int | None = None, feedback_type: str | None =
     return rows
 
 
-def update_feedback(feedback_id, **kwargs):
-    """Update feedback fields."""
+def update_feedback(feedback_id: int, manager_id: int, **kwargs) -> None:
+    """Update feedback fields owned by manager_id."""
     allowed = {"feedback_type", "situation", "behavior", "impact"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    _exec(conn, f"UPDATE feedback SET {sets} WHERE id = ?",
-          (*fields.values(), feedback_id))
+    _exec(conn, f"UPDATE feedback SET {sets} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), feedback_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def delete_feedback(feedback_id: int) -> None:
-    """Delete a feedback record."""
+def delete_feedback(feedback_id: int, manager_id: int) -> None:
+    """Delete a feedback record owned by manager_id."""
     conn = get_connection()
-    _exec(conn, "DELETE FROM feedback WHERE id = ?", (feedback_id,))
+    _exec(conn, "DELETE FROM feedback WHERE id = ? AND manager_id = ?",
+          (feedback_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1199,7 +1206,7 @@ def add_goal(team_member_id: int, quarter: str, description: str,
     return goal_id
 
 
-def update_goal(goal_id, **kwargs):
+def update_goal(goal_id: int, manager_id: int, **kwargs) -> None:
     conn = get_connection()
     allowed = {"description", "key_results", "status", "quarter"}
     fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
@@ -1207,20 +1214,24 @@ def update_goal(goal_id, **kwargs):
         conn.close()
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
-    values = list(fields.values()) + [datetime.now().isoformat(), goal_id]
-    _exec(conn, f"UPDATE goals SET {sets}, updated_at = ? WHERE id = ?", values)
+    values = list(fields.values()) + [datetime.now().isoformat(), goal_id, manager_id]
+    _exec(conn,
+          f"UPDATE goals SET {sets}, updated_at = ? WHERE id = ? AND manager_id = ?",
+          values)
     _commit(conn)
     conn.close()
 
 
-def list_goals(team_member_id=None, quarter=None, status=None):
+def list_goals(manager_id: int, team_member_id: int | None = None,
+               quarter: str | None = None, status: str | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
     query = (
         "SELECT g.*, tm.name AS member_name "
         "FROM goals g "
-        "JOIN team_members tm ON g.team_member_id = tm.id WHERE 1=1"
+        "JOIN team_members tm ON g.team_member_id = tm.id "
+        "WHERE g.manager_id = ?"
     )
-    params = []
+    params = [manager_id]
     if team_member_id:
         query += " AND g.team_member_id = ?"
         params.append(team_member_id)
@@ -1237,10 +1248,11 @@ def list_goals(team_member_id=None, quarter=None, status=None):
     return rows
 
 
-def delete_goal(goal_id: int) -> None:
-    """Delete a goal record."""
+def delete_goal(goal_id: int, manager_id: int) -> None:
+    """Delete a goal record owned by manager_id."""
     conn = get_connection()
-    _exec(conn, "DELETE FROM goals WHERE id = ?", (goal_id,))
+    _exec(conn, "DELETE FROM goals WHERE id = ? AND manager_id = ?",
+          (goal_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1282,27 +1294,28 @@ def get_weekly_summary(manager_id: int | None = None) -> dict[str, list]:
     return summary
 
 
-def get_member_summary(team_member_id):
-    """Get a full activity summary for a single team member."""
+def get_member_summary(team_member_id: int, manager_id: int) -> dict | None:
+    """Get a full activity summary for a team member owned by manager_id."""
     member = get_team_member(team_member_id)
-    if not member:
+    if not member or member.get("manager_id") != manager_id:
         return None
 
     conn = get_connection()
     summary = {"member": member}
 
     summary["recent_events"] = list_events(
-        team_member_id=team_member_id, limit=10
+        team_member_id=team_member_id, limit=10, manager_id=manager_id,
     )
-    summary["feedback"] = list_feedback(team_member_id=team_member_id)
-    summary["goals"] = list_goals(team_member_id=team_member_id)
+    summary["feedback"] = list_feedback(manager_id=manager_id, team_member_id=team_member_id)
+    summary["goals"] = list_goals(manager_id=manager_id, team_member_id=team_member_id)
 
     actions = _fetchall(
         conn,
         "SELECT ai.* FROM action_items ai "
         "JOIN events e ON ai.event_id = e.id "
-        "WHERE e.team_member_id = ? ORDER BY ai.created_at DESC LIMIT 20",
-        (team_member_id,),
+        "WHERE e.team_member_id = ? AND ai.manager_id = ? "
+        "ORDER BY ai.created_at DESC LIMIT 20",
+        (team_member_id, manager_id),
     )
     summary["action_items"] = actions
 
@@ -1331,7 +1344,7 @@ def add_journal_entry(entry_date: str, entry_type: str = "daily", content: str |
     return entry_id
 
 
-def update_journal_entry(entry_id, **kwargs):
+def update_journal_entry(entry_id: int, manager_id: int, **kwargs) -> None:
     allowed = {"content", "mood", "energy", "private_notes", "tags", "entry_type",
                 "coaching_response"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
@@ -1341,8 +1354,8 @@ def update_journal_entry(entry_id, **kwargs):
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
     _exec(conn,
-          f"UPDATE journal_entries SET {set_clause} WHERE id = ?",
-          (*fields.values(), entry_id))
+          f"UPDATE journal_entries SET {set_clause} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), entry_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1726,40 +1739,43 @@ def get_manager_activity_trends(weeks=12, manager_id=None):
 # Member Timeline & Pre-Meeting Prep
 # ---------------------------------------------------------------------------
 
-def get_member_timeline(member_id, limit=50):
+def get_member_timeline(member_id: int, manager_id: int, limit: int = 50) -> list[dict[str, Any]]:
     conn = get_connection()
     left10 = _sql_left("created_at", 10)
     rows = _fetchall(conn, f"""
         SELECT date, type, summary, detail, source_id FROM (
             SELECT scheduled_date AS date, 'event' AS type,
                    title AS summary, notes AS detail, id AS source_id
-            FROM events WHERE team_member_id = ?
+            FROM events WHERE team_member_id = ? AND manager_id = ?
             UNION ALL
             SELECT {left10} AS date,
                    feedback_type || '_feedback' AS type,
                    COALESCE(situation, '') AS summary,
                    COALESCE(behavior, '') || ' → ' || COALESCE(impact, '') AS detail,
                    id AS source_id
-            FROM feedback WHERE team_member_id = ?
+            FROM feedback WHERE team_member_id = ? AND manager_id = ?
             UNION ALL
             SELECT {left10} AS date, 'goal' AS type,
                    description AS summary, status AS detail, id AS source_id
-            FROM goals WHERE team_member_id = ?
+            FROM goals WHERE team_member_id = ? AND manager_id = ?
             UNION ALL
             SELECT conversation_date AS date, 'career' AS type,
                    COALESCE(topic, 'Career conversation') AS summary,
                    notes AS detail, id AS source_id
-            FROM career_conversations WHERE team_member_id = ?
+            FROM career_conversations WHERE team_member_id = ? AND manager_id = ?
         ) timeline
         ORDER BY date DESC LIMIT ?
-    """, (member_id, member_id, member_id, member_id, limit))
+    """, (member_id, manager_id, member_id, manager_id,
+          member_id, manager_id, member_id, manager_id, limit))
     conn.close()
     return rows
 
 
-def get_pre_meeting_prep(member_id):
+def get_pre_meeting_prep(member_id: int, manager_id: int) -> dict | None:
     conn = get_connection()
-    member = _fetchone(conn, "SELECT * FROM team_members WHERE id = ?", (member_id,))
+    member = _fetchone(conn,
+                       "SELECT * FROM team_members WHERE id = ? AND manager_id = ?",
+                       (member_id, manager_id))
     if not member:
         conn.close()
         return None
@@ -1769,9 +1785,9 @@ def get_pre_meeting_prep(member_id):
     # Last meeting
     last_evt = _fetchone(conn,
         "SELECT scheduled_date FROM events "
-        "WHERE team_member_id = ? AND status = 'completed' "
+        "WHERE team_member_id = ? AND manager_id = ? AND status = 'completed' "
         "ORDER BY scheduled_date DESC LIMIT 1",
-        (member_id,))
+        (member_id, manager_id))
     if last_evt:
         prep["last_meeting_date"] = last_evt["scheduled_date"]
         prep["days_since_meeting"] = (
@@ -1783,9 +1799,10 @@ def get_pre_meeting_prep(member_id):
 
     # Last feedback
     last_fb = _fetchone(conn,
-        "SELECT created_at FROM feedback WHERE team_member_id = ? "
+        "SELECT created_at FROM feedback "
+        "WHERE team_member_id = ? AND manager_id = ? "
         "ORDER BY created_at DESC LIMIT 1",
-        (member_id,))
+        (member_id, manager_id))
     if last_fb:
         prep["last_feedback_date"] = last_fb["created_at"][:10]
         prep["days_since_feedback"] = (
@@ -1798,8 +1815,8 @@ def get_pre_meeting_prep(member_id):
     # Feedback ratio
     ratios = _fetchall(conn,
         "SELECT feedback_type, COUNT(*) AS cnt FROM feedback "
-        "WHERE team_member_id = ? GROUP BY feedback_type",
-        (member_id,))
+        "WHERE team_member_id = ? AND manager_id = ? GROUP BY feedback_type",
+        (member_id, manager_id))
     prep["positive_count"] = 0
     prep["constructive_count"] = 0
     for r in ratios:
@@ -1812,26 +1829,28 @@ def get_pre_meeting_prep(member_id):
     name = member["name"]
     pending_row = _fetchone(conn,
         "SELECT COUNT(*) AS cnt FROM action_items "
-        "WHERE status != 'completed' AND ("
+        "WHERE manager_id = ? AND status != 'completed' AND ("
         "  LOWER(assignee) = LOWER(?) "
-        "  OR event_id IN (SELECT id FROM events WHERE team_member_id = ?)"
+        "  OR event_id IN (SELECT id FROM events "
+        "                  WHERE team_member_id = ? AND manager_id = ?)"
         ")",
-        (name, member_id))
+        (manager_id, name, member_id, manager_id))
     prep["pending_actions"] = pending_row["cnt"] if pending_row else 0
 
     # Active goals
     prep["active_goals"] = _fetchall(conn,
         "SELECT quarter, description, status FROM goals "
-        "WHERE team_member_id = ? AND status IN ('not_started', 'in_progress') "
+        "WHERE team_member_id = ? AND manager_id = ? "
+        "AND status IN ('not_started', 'in_progress') "
         "ORDER BY quarter DESC",
-        (member_id,))
+        (member_id, manager_id))
 
     # Recent feedback
     prep["recent_feedback"] = _fetchall(conn,
         "SELECT feedback_type, situation, behavior, impact, created_at "
-        "FROM feedback WHERE team_member_id = ? "
+        "FROM feedback WHERE team_member_id = ? AND manager_id = ? "
         "ORDER BY created_at DESC LIMIT 3",
-        (member_id,))
+        (member_id, manager_id))
 
     conn.close()
     return prep
@@ -1859,12 +1878,14 @@ def add_career_conversation(team_member_id, conversation_date,
     return cid
 
 
-def list_career_conversations(team_member_id, limit=20):
+def list_career_conversations(team_member_id: int, manager_id: int,
+                              limit: int = 20) -> list[dict[str, Any]]:
     conn = get_connection()
     rows = _fetchall(conn,
-        "SELECT * FROM career_conversations WHERE team_member_id = ? "
+        "SELECT * FROM career_conversations "
+        "WHERE team_member_id = ? AND manager_id = ? "
         "ORDER BY conversation_date DESC LIMIT ?",
-        (team_member_id, limit))
+        (team_member_id, manager_id, limit))
     conn.close()
     return rows
 
@@ -1887,7 +1908,7 @@ def add_skill(team_member_id, skill_name, proficiency="developing",
     return sid
 
 
-def update_skill(skill_id, **kwargs):
+def update_skill(skill_id: int, manager_id: int, **kwargs) -> None:
     allowed = {"skill_name", "proficiency", "is_strength", "is_growth_area", "notes"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -1896,24 +1917,26 @@ def update_skill(skill_id, **kwargs):
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
     _exec(conn,
-          f"UPDATE skills SET {set_clause} WHERE id = ?",
-          (*fields.values(), skill_id))
+          f"UPDATE skills SET {set_clause} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), skill_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def list_skills(team_member_id):
+def list_skills(team_member_id: int, manager_id: int) -> list[dict[str, Any]]:
     conn = get_connection()
     rows = _fetchall(conn,
-        "SELECT * FROM skills WHERE team_member_id = ? ORDER BY skill_name",
-        (team_member_id,))
+        "SELECT * FROM skills WHERE team_member_id = ? AND manager_id = ? "
+        "ORDER BY skill_name",
+        (team_member_id, manager_id))
     conn.close()
     return rows
 
 
-def delete_skill(skill_id):
+def delete_skill(skill_id: int, manager_id: int) -> None:
     conn = get_connection()
-    _exec(conn, "DELETE FROM skills WHERE id = ?", (skill_id,))
+    _exec(conn, "DELETE FROM skills WHERE id = ? AND manager_id = ?",
+          (skill_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1935,7 +1958,7 @@ def add_development_plan(team_member_id, title, description=None, target_date=No
     return pid
 
 
-def update_development_plan(plan_id, **kwargs):
+def update_development_plan(plan_id: int, manager_id: int, **kwargs) -> None:
     allowed = {"title", "description", "target_date", "status"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -1944,16 +1967,17 @@ def update_development_plan(plan_id, **kwargs):
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
     _exec(conn,
-          f"UPDATE development_plans SET {set_clause} WHERE id = ?",
-          (*fields.values(), plan_id))
+          f"UPDATE development_plans SET {set_clause} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), plan_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def list_development_plans(team_member_id, status=None):
+def list_development_plans(team_member_id: int, manager_id: int,
+                           status: str | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
-    query = "SELECT * FROM development_plans WHERE team_member_id = ?"
-    params = [team_member_id]
+    query = "SELECT * FROM development_plans WHERE team_member_id = ? AND manager_id = ?"
+    params = [team_member_id, manager_id]
     if status:
         query += " AND status = ?"
         params.append(status)
@@ -1982,20 +2006,21 @@ def add_milestone(plan_id, description, target_date=None, manager_id=None):
     return mid
 
 
-def complete_milestone(milestone_id):
+def complete_milestone(milestone_id: int, manager_id: int) -> None:
     conn = get_connection()
     _exec(conn,
-          "UPDATE milestones SET completed = 1, completed_at = ? WHERE id = ?",
-          (datetime.now().isoformat(), milestone_id))
+          "UPDATE milestones SET completed = 1, completed_at = ? "
+          "WHERE id = ? AND manager_id = ?",
+          (datetime.now().isoformat(), milestone_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def list_milestones(plan_id):
+def list_milestones(plan_id: int, manager_id: int) -> list[dict[str, Any]]:
     conn = get_connection()
     rows = _fetchall(conn,
-        "SELECT * FROM milestones WHERE plan_id = ? ORDER BY id",
-        (plan_id,))
+        "SELECT * FROM milestones WHERE plan_id = ? AND manager_id = ? ORDER BY id",
+        (plan_id, manager_id))
     conn.close()
     return rows
 
@@ -2052,8 +2077,8 @@ def list_delegations(manager_id: int | None = None,
     return rows
 
 
-def update_delegation(delegation_id: int, **kwargs: Any) -> None:
-    """Update delegation fields."""
+def update_delegation(delegation_id: int, manager_id: int, **kwargs: Any) -> None:
+    """Update delegation fields owned by manager_id."""
     allowed = {"task", "outcome_expected", "autonomy_level", "check_in_date",
                "notes", "status"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
@@ -2063,15 +2088,16 @@ def update_delegation(delegation_id: int, **kwargs: Any) -> None:
         fields["completed_at"] = datetime.now().isoformat()
     sets = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    _exec(conn, f"UPDATE delegations SET {sets} WHERE id = ?",
-          (*fields.values(), delegation_id))
+    _exec(conn, f"UPDATE delegations SET {sets} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), delegation_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def delete_delegation(delegation_id: int) -> None:
+def delete_delegation(delegation_id: int, manager_id: int) -> None:
     conn = get_connection()
-    _exec(conn, "DELETE FROM delegations WHERE id = ?", (delegation_id,))
+    _exec(conn, "DELETE FROM delegations WHERE id = ? AND manager_id = ?",
+          (delegation_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -2149,9 +2175,10 @@ def list_running_notes(team_member_id: int,
     return rows
 
 
-def delete_running_note(note_id: int) -> None:
+def delete_running_note(note_id: int, manager_id: int) -> None:
     conn = get_connection()
-    _exec(conn, "DELETE FROM running_notes WHERE id = ?", (note_id,))
+    _exec(conn, "DELETE FROM running_notes WHERE id = ? AND manager_id = ?",
+          (note_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -2202,8 +2229,8 @@ def list_decisions(manager_id: int | None = None,
     return rows
 
 
-def update_decision(decision_id: int, **kwargs: Any) -> None:
-    """Update a decision (e.g., add actual_outcome, change status)."""
+def update_decision(decision_id: int, manager_id: int, **kwargs: Any) -> None:
+    """Update a decision owned by manager_id."""
     allowed = {"title", "context", "alternatives", "rationale",
                "expected_outcome", "review_date", "status", "actual_outcome"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
@@ -2212,15 +2239,16 @@ def update_decision(decision_id: int, **kwargs: Any) -> None:
     fields["updated_at"] = datetime.now().isoformat()
     sets = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    _exec(conn, f"UPDATE decisions SET {sets} WHERE id = ?",
-          (*fields.values(), decision_id))
+    _exec(conn, f"UPDATE decisions SET {sets} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), decision_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def delete_decision(decision_id: int) -> None:
+def delete_decision(decision_id: int, manager_id: int) -> None:
     conn = get_connection()
-    _exec(conn, "DELETE FROM decisions WHERE id = ?", (decision_id,))
+    _exec(conn, "DELETE FROM decisions WHERE id = ? AND manager_id = ?",
+          (decision_id, manager_id))
     _commit(conn)
     conn.close()
 
