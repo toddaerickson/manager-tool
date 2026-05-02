@@ -391,8 +391,10 @@ def init_db():
         );
 
         CREATE TABLE IF NOT EXISTS config (
-            key TEXT PRIMARY KEY,
-            value TEXT
+            manager_id INTEGER NOT NULL DEFAULT 0,
+            key TEXT NOT NULL,
+            value TEXT,
+            PRIMARY KEY (manager_id, key)
         );
 
         CREATE TABLE IF NOT EXISTS journal_entries (
@@ -595,10 +597,49 @@ def init_db():
     except sqlite3.Error as e:
         logger.warning("manager_id backfill on orphan tables failed: %s", e)
 
+    # Migration P1.3: partition the config table by manager_id. The legacy
+    # schema had a single (key) PK, so all tenants shared one set of secrets.
+    # Detect the legacy schema and rebuild with composite (manager_id, key) PK.
+    try:
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(config)").fetchall()]
+        if "manager_id" not in cols:
+            managers = conn.execute("SELECT id FROM managers").fetchall()
+            sole_mid = (managers[0]["id"] if isinstance(managers[0], dict) else managers[0][0]) \
+                if len(managers) == 1 else SYSTEM_MANAGER_ID
+            conn.execute(
+                "CREATE TABLE config_new ("
+                "  manager_id INTEGER NOT NULL DEFAULT 0,"
+                "  key TEXT NOT NULL,"
+                "  value TEXT,"
+                "  PRIMARY KEY (manager_id, key))"
+            )
+            old_rows = conn.execute("SELECT key, value FROM config").fetchall()
+            for r in old_rows:
+                k = r["key"] if isinstance(r, dict) else r[0]
+                v = r["value"] if isinstance(r, dict) else r[1]
+                target_mid = SYSTEM_MANAGER_ID if _is_system_key(k) else sole_mid
+                conn.execute(
+                    "INSERT INTO config_new (manager_id, key, value) VALUES (?, ?, ?)",
+                    (target_mid, k, v))
+            conn.execute("DROP TABLE config")
+            conn.execute("ALTER TABLE config_new RENAME TO config")
+            conn.execute(
+                "INSERT OR IGNORE INTO config (manager_id, key, value) "
+                "VALUES (?, '_migration_config_partitioned', '1')",
+                (SYSTEM_MANAGER_ID,))
+            conn.commit()
+            logger.info("Config table partitioned by manager_id "
+                        "(%d rows reassigned; sole_mid=%s)",
+                        len(old_rows), sole_mid)
+    except sqlite3.Error as e:
+        logger.warning("Config partition migration skipped: %s", e)
+
     # One-time backfill: assign orphaned data to the sole manager
     try:
         row = conn.execute(
-            "SELECT value FROM config WHERE key = '_migration_backfill_done'"
+            "SELECT value FROM config "
+            "WHERE manager_id = ? AND key = '_migration_backfill_done'",
+            (SYSTEM_MANAGER_ID,),
         ).fetchone()
         if not row:
             managers = conn.execute("SELECT id FROM managers").fetchall()
@@ -611,7 +652,8 @@ def init_db():
                         (mid,))
                 conn.commit()
             conn.execute(
-                "INSERT INTO config (key, value) VALUES ('_migration_backfill_done', '1')")
+                "INSERT INTO config (manager_id, key, value) VALUES (?, ?, ?)",
+                (SYSTEM_MANAGER_ID, "_migration_backfill_done", "1"))
             conn.commit()
     except sqlite3.Error as e:
         logger.warning("Sole-manager backfill skipped: %s", e)
@@ -750,20 +792,48 @@ def manager_exists(username: str) -> bool:
 # Configuration
 # ---------------------------------------------------------------------------
 
-def set_config(key: str, value: str) -> None:
+# Sentinel manager_id for system-wide / non-tenant config (OAuth provider
+# settings, allowlists, internal migration markers).
+SYSTEM_MANAGER_ID = 0
+
+# Keys that are intrinsically system-wide (the deployment owns them, not any
+# individual tenant). Anything else is tenant-scoped.
+_SYSTEM_KEYS = {
+    "google_client_id",
+    "google_client_secret",
+    "oauth_redirect_uri",
+    "allowed_emails",
+    "allowed_domain",
+    "_migration_backfill_done",
+    "_migration_config_partitioned",
+}
+
+
+def _is_system_key(key: str) -> bool:
+    """A key is system-wide if it's in _SYSTEM_KEYS or starts with an underscore."""
+    return key in _SYSTEM_KEYS or key.startswith("_")
+
+
+def set_config(key: str, value: str, manager_id: int) -> None:
+    """Store a config value scoped to manager_id. Pass SYSTEM_MANAGER_ID for
+    deployment-wide config."""
     stored = _encrypt_value(value) if key in _SENSITIVE_KEYS else value
     conn = get_connection()
     _exec(conn,
-          "INSERT INTO config (key, value) VALUES (?, ?) "
-          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-          (key, stored))
+          "INSERT INTO config (manager_id, key, value) VALUES (?, ?, ?) "
+          "ON CONFLICT(manager_id, key) DO UPDATE SET value = excluded.value",
+          (manager_id, key, stored))
     _commit(conn)
     conn.close()
 
 
-def get_config(key: str, default: str | None = None) -> str | None:
+def get_config(key: str, manager_id: int, default: str | None = None) -> str | None:
+    """Read a config value scoped to manager_id. Pass SYSTEM_MANAGER_ID for
+    deployment-wide config."""
     conn = get_connection()
-    row = _fetchone(conn, "SELECT value FROM config WHERE key = ?", (key,))
+    row = _fetchone(conn,
+                    "SELECT value FROM config WHERE manager_id = ? AND key = ?",
+                    (manager_id, key))
     conn.close()
     if not row:
         return default
@@ -800,9 +870,13 @@ def list_users():
     return rows
 
 
-def get_all_config() -> dict[str, str]:
+def get_all_config(manager_id: int) -> dict[str, str]:
+    """Return all config rows scoped to manager_id. Pass SYSTEM_MANAGER_ID for
+    deployment-wide rows."""
     conn = get_connection()
-    rows = _fetchall(conn, "SELECT key, value FROM config ORDER BY key")
+    rows = _fetchall(conn,
+                     "SELECT key, value FROM config WHERE manager_id = ? ORDER BY key",
+                     (manager_id,))
     conn.close()
     return {r["key"]: r["value"] for r in rows}
 

@@ -92,13 +92,15 @@ def save_ics_file(ics_content, filename=None):
     return filepath
 
 
-def send_calendar_invite(event, recipient_email, recipient_name=None):
-    smtp_server = get_config("smtp_server")
-    smtp_port = get_config("smtp_port", "587")
-    smtp_user = get_config("smtp_user")
-    smtp_password = get_config("smtp_password")
-    manager_name = get_config("manager_name", "Manager")
-    manager_email = get_config("manager_email")
+def send_calendar_invite(event, recipient_email, recipient_name=None, manager_id=None):
+    if manager_id is None:
+        manager_id = event.get("manager_id") if isinstance(event, dict) else None
+    smtp_server = get_config("smtp_server", manager_id=manager_id)
+    smtp_port = get_config("smtp_port", manager_id=manager_id, default="587")
+    smtp_user = get_config("smtp_user", manager_id=manager_id)
+    smtp_password = get_config("smtp_password", manager_id=manager_id)
+    manager_name = get_config("manager_name", manager_id=manager_id, default="Manager")
+    manager_email = get_config("manager_email", manager_id=manager_id)
 
     if not all([smtp_server, smtp_user, smtp_password, manager_email]):
         return (False, "SMTP not configured. Run: python manager_tool.py config setup")
@@ -157,12 +159,14 @@ def send_calendar_invite(event, recipient_email, recipient_name=None):
         return (False, f"Failed to send email: {e}")
 
 
-def send_invite_to_self(event):
-    manager_email = get_config("manager_email")
-    manager_name = get_config("manager_name", "Manager")
+def send_invite_to_self(event, manager_id=None):
+    if manager_id is None:
+        manager_id = event.get("manager_id") if isinstance(event, dict) else None
+    manager_email = get_config("manager_email", manager_id=manager_id)
+    manager_name = get_config("manager_name", manager_id=manager_id, default="Manager")
     if not manager_email:
         return (False, "Manager email not configured. Run: python manager_tool.py config setup")
-    return send_calendar_invite(event, manager_email, manager_name)
+    return send_calendar_invite(event, manager_email, manager_name, manager_id=manager_id)
 
 
 def _ics_escape(text):
@@ -248,15 +252,15 @@ def generate_weekly_digest(manager_id=None):
     return subject, html_body
 
 
-def send_weekly_digest(manager_id=None):
+def send_weekly_digest(manager_id):
     """Send the weekly digest email to the configured manager email.
     Returns (success: bool, message: str)."""
-    smtp_server = get_config("smtp_server")
-    smtp_port = get_config("smtp_port", "587")
-    smtp_user = get_config("smtp_user")
-    smtp_password = get_config("smtp_password")
-    manager_email = get_config("manager_email")
-    manager_name = get_config("manager_name", "Manager")
+    smtp_server = get_config("smtp_server", manager_id=manager_id)
+    smtp_port = get_config("smtp_port", manager_id=manager_id, default="587")
+    smtp_user = get_config("smtp_user", manager_id=manager_id)
+    smtp_password = get_config("smtp_password", manager_id=manager_id)
+    manager_email = get_config("manager_email", manager_id=manager_id)
+    manager_name = get_config("manager_name", manager_id=manager_id, default="Manager")
 
     if not all([smtp_server, smtp_user, smtp_password, manager_email]):
         return (False, "SMTP not configured. Set up email in Settings > Configuration.")

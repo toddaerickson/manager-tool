@@ -86,8 +86,10 @@ CREATE TABLE IF NOT EXISTS goals (
 );
 
 CREATE TABLE IF NOT EXISTS config (
-    key TEXT PRIMARY KEY,
-    value TEXT
+    manager_id INTEGER NOT NULL DEFAULT 0,
+    key TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (manager_id, key)
 );
 
 CREATE TABLE IF NOT EXISTS journal_entries (

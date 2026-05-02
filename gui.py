@@ -787,25 +787,25 @@ class ManagerGUI(tk.Tk):
         self._label(card, "", fg=FG_DIM)
 
         name_var = self._entry(card, "Your Name:",
-                               db.get_config("manager_name", ""))
+                               db.get_config("manager_name", manager_id=1, default=""))
         email_var = self._entry(card, "Email:",
-                                db.get_config("manager_email", ""))
+                                db.get_config("manager_email", manager_id=1, default=""))
         smtp_server_var = self._entry(card, "SMTP Server:",
-                                      db.get_config("smtp_server", "smtp.gmail.com"))
+                                      db.get_config("smtp_server", manager_id=1, default="smtp.gmail.com"))
         smtp_port_var = self._entry(card, "SMTP Port:",
-                                    db.get_config("smtp_port", "587"))
+                                    db.get_config("smtp_port", manager_id=1, default="587"))
         smtp_user_var = self._entry(card, "SMTP Username:",
-                                    db.get_config("smtp_user", ""))
+                                    db.get_config("smtp_user", manager_id=1, default=""))
         smtp_pass_var = self._entry(card, "SMTP Password:")
 
         def save():
-            db.set_config("manager_name", name_var.get())
-            db.set_config("manager_email", email_var.get())
-            db.set_config("smtp_server", smtp_server_var.get())
-            db.set_config("smtp_port", smtp_port_var.get())
-            db.set_config("smtp_user", smtp_user_var.get())
+            db.set_config("manager_name", name_var.get(), manager_id=1)
+            db.set_config("manager_email", email_var.get(), manager_id=1)
+            db.set_config("smtp_server", smtp_server_var.get(), manager_id=1)
+            db.set_config("smtp_port", smtp_port_var.get(), manager_id=1)
+            db.set_config("smtp_user", smtp_user_var.get(), manager_id=1)
             if smtp_pass_var.get():
-                db.set_config("smtp_password", smtp_pass_var.get())
+                db.set_config("smtp_password", smtp_pass_var.get(), manager_id=1)
             messagebox.showinfo("Saved", "Configuration saved successfully.")
 
         self._button(card, "Save Configuration", save, FG_GREEN)
@@ -813,7 +813,7 @@ class ManagerGUI(tk.Tk):
         # Show current config
         self._label(frame, "Current Configuration", font=FONT_SUBHEADING,
                     fg=FG_ACCENT, padx=20, pady=(16, 4))
-        config = db.get_all_config()
+        config = db.get_all_config(manager_id=1)
         if config:
             cfg_card = self._card(frame)
             for key, value in config.items():

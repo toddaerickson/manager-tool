@@ -216,21 +216,21 @@ def cmd_config_setup(args=None):
     2. Generate an App Password for "Mail"
     3. Use that 16-character password below (not your regular password)
 """)
-    name = prompt("Your name", db.get_config("manager_name"))
-    email = prompt("Your email address", db.get_config("manager_email"))
-    smtp_server = prompt("SMTP server", db.get_config("smtp_server", "smtp.gmail.com"))
-    smtp_port = prompt("SMTP port", db.get_config("smtp_port", "587"))
-    smtp_user = prompt("SMTP username (usually your email)", db.get_config("smtp_user", email))
+    name = prompt("Your name", db.get_config("manager_name", manager_id=1))
+    email = prompt("Your email address", db.get_config("manager_email", manager_id=1))
+    smtp_server = prompt("SMTP server", db.get_config("smtp_server", manager_id=1, default="smtp.gmail.com"))
+    smtp_port = prompt("SMTP port", db.get_config("smtp_port", manager_id=1, default="587"))
+    smtp_user = prompt("SMTP username (usually your email)", db.get_config("smtp_user", manager_id=1, default=email))
     smtp_password = prompt("SMTP password / App Password")
 
     if confirm("Save this configuration?"):
-        db.set_config("manager_name", name)
-        db.set_config("manager_email", email)
-        db.set_config("smtp_server", smtp_server)
-        db.set_config("smtp_port", smtp_port)
-        db.set_config("smtp_user", smtp_user)
+        db.set_config("manager_name", name, manager_id=1)
+        db.set_config("manager_email", email, manager_id=1)
+        db.set_config("smtp_server", smtp_server, manager_id=1)
+        db.set_config("smtp_port", smtp_port, manager_id=1)
+        db.set_config("smtp_user", smtp_user, manager_id=1)
         if smtp_password:
-            db.set_config("smtp_password", smtp_password)
+            db.set_config("smtp_password", smtp_password, manager_id=1)
         success("Configuration saved.")
     else:
         warn("Configuration not saved.")
@@ -238,7 +238,7 @@ def cmd_config_setup(args=None):
 
 def cmd_config_show(args=None):
     header("Current Configuration")
-    config = db.get_all_config()
+    config = db.get_all_config(manager_id=1)
     if not config:
         warn("No configuration set. Run: python manager_tool.py config setup")
         return
@@ -546,8 +546,8 @@ def _send_invite_for_event(event):
             error(msg)
     if not send_to_self and not send_to_participant:
         if confirm("Save .ics file locally instead?"):
-            manager_name = db.get_config("manager_name", "Manager")
-            manager_email = db.get_config("manager_email", "")
+            manager_name = db.get_config("manager_name", manager_id=1, default="Manager")
+            manager_email = db.get_config("manager_email", manager_id=1, default="")
             ics = cal.generate_ics(event, organizer_name=manager_name, organizer_email=manager_email,
                                    attendee_name=event.get("participant_name"), attendee_email=event.get("participant_email"))
             filepath = cal.save_ics_file(ics)

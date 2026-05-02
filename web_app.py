@@ -264,7 +264,7 @@ def render_coaching_pane(notes_text, context_type="journal", member_name=None,
         if notes_text and notes_text.strip():
             with st.spinner("Thinking..."):
                 response = coaching.get_coaching_response(
-                    notes_text, context_type, member_name, event_type, prep_data)
+                    notes_text, _mid(), context_type, member_name, event_type, prep_data)
                 st.session_state[state_key] = response
                 # Persist coaching response to journal entry if available
                 if journal_entry_id and response:
@@ -1018,10 +1018,10 @@ def page_configuration():
         )
         if st.form_submit_button("Save API Key"):
             if api_key:
-                db.set_config("anthropic_api_key", api_key)
+                db.set_config("anthropic_api_key", api_key, manager_id=_mid())
                 set_toast("success", "API key saved. AI coaching is now active.")
                 st.rerun()
-    has_key = db.get_config("anthropic_api_key")
+    has_key = db.get_config("anthropic_api_key", manager_id=_mid())
     if has_key:
         st.success("AI coaching: **Active** (API key configured)")
     else:
@@ -1037,33 +1037,36 @@ def page_configuration():
     # Single-column form (#7)
     with st.form("config_form"):
         name = st.text_input("Your Name",
-                             value=db.get_config("manager_name", ""))
+                             value=db.get_config("manager_name", manager_id=_mid(), default=""))
         email = st.text_input("Email Address",
-                              value=db.get_config("manager_email", ""))
+                              value=db.get_config("manager_email", manager_id=_mid(), default=""))
         smtp_server = st.text_input(
-            "SMTP Server", value=db.get_config("smtp_server", "smtp.gmail.com"))
+            "SMTP Server",
+            value=db.get_config("smtp_server", manager_id=_mid(), default="smtp.gmail.com"))
         smtp_port = st.text_input(
-            "SMTP Port", value=db.get_config("smtp_port", "587"))
+            "SMTP Port",
+            value=db.get_config("smtp_port", manager_id=_mid(), default="587"))
         smtp_user = st.text_input(
-            "SMTP Username", value=db.get_config("smtp_user", ""))
+            "SMTP Username",
+            value=db.get_config("smtp_user", manager_id=_mid(), default=""))
         smtp_password = st.text_input(
             "SMTP Password / App Password", type="password")
         submitted = st.form_submit_button("Save Configuration",
                                           use_container_width=True)
 
     if submitted:
-        db.set_config("manager_name", name)
-        db.set_config("manager_email", email)
-        db.set_config("smtp_server", smtp_server)
-        db.set_config("smtp_port", smtp_port)
-        db.set_config("smtp_user", smtp_user)
+        db.set_config("manager_name", name, manager_id=_mid())
+        db.set_config("manager_email", email, manager_id=_mid())
+        db.set_config("smtp_server", smtp_server, manager_id=_mid())
+        db.set_config("smtp_port", smtp_port, manager_id=_mid())
+        db.set_config("smtp_user", smtp_user, manager_id=_mid())
         if smtp_password:
-            db.set_config("smtp_password", smtp_password)
+            db.set_config("smtp_password", smtp_password, manager_id=_mid())
         st.toast("Configuration saved.", icon="\u2705")
         st.rerun()
 
     st.subheader("Current Configuration")
-    config = db.get_all_config()
+    config = db.get_all_config(manager_id=_mid())
     if config:
         for key, value in config.items():
             display = "********" if key in db._SENSITIVE_KEYS else value

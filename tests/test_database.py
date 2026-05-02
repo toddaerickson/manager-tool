@@ -193,17 +193,62 @@ class TestEvents:
 
 class TestConfig:
     def test_set_and_get(self):
-        db.set_config("test_key", "test_value")
-        assert db.get_config("test_key") == "test_value"
+        mid = db.create_manager("cfg_basic", "Cfg", "pass1234")
+        db.set_config("test_key", "test_value", manager_id=mid)
+        assert db.get_config("test_key", manager_id=mid) == "test_value"
 
     def test_default_value(self):
-        assert db.get_config("nonexistent", default="fallback") == "fallback"
+        mid = db.create_manager("cfg_default", "Cfg", "pass1234")
+        assert db.get_config("nonexistent", manager_id=mid, default="fallback") == "fallback"
 
     def test_upsert(self):
-        db.set_config("changing", "v1")
-        assert db.get_config("changing") == "v1"
-        db.set_config("changing", "v2")
-        assert db.get_config("changing") == "v2"
+        mid = db.create_manager("cfg_upsert", "Cfg", "pass1234")
+        db.set_config("changing", "v1", manager_id=mid)
+        assert db.get_config("changing", manager_id=mid) == "v1"
+        db.set_config("changing", "v2", manager_id=mid)
+        assert db.get_config("changing", manager_id=mid) == "v2"
+
+
+class TestPerTenantConfig:
+    """Regression for AUDIT C3 / P1.3 — config rows must be scoped per
+    manager_id; system keys live under SYSTEM_MANAGER_ID."""
+
+    def test_per_tenant_isolation(self):
+        m1 = db.create_manager("ptc_m1", "M1", "pass1234")
+        m2 = db.create_manager("ptc_m2", "M2", "pass1234")
+        db.set_config("anthropic_api_key", "M1 key", manager_id=m1)
+        db.set_config("anthropic_api_key", "M2 key", manager_id=m2)
+
+        assert db.get_config("anthropic_api_key", manager_id=m1) == "M1 key"
+        assert db.get_config("anthropic_api_key", manager_id=m2) == "M2 key"
+
+    def test_get_all_config_scoped(self):
+        m1 = db.create_manager("ptc_all_m1", "M1", "pass1234")
+        m2 = db.create_manager("ptc_all_m2", "M2", "pass1234")
+        db.set_config("manager_name", "Alice", manager_id=m1)
+        db.set_config("manager_name", "Bob", manager_id=m2)
+
+        m1_cfg = db.get_all_config(manager_id=m1)
+        m2_cfg = db.get_all_config(manager_id=m2)
+        assert m1_cfg.get("manager_name") == "Alice"
+        assert m2_cfg.get("manager_name") == "Bob"
+        # No cross-leakage
+        assert "manager_name" in m1_cfg
+        assert m1_cfg["manager_name"] != "Bob"
+
+    def test_system_config_separate_from_tenant(self):
+        m1 = db.create_manager("ptc_sys_m1", "M1", "pass1234")
+        db.set_config("google_client_id", "system-cid", manager_id=db.SYSTEM_MANAGER_ID)
+        # Manager m1's config does NOT include the system row
+        assert db.get_config("google_client_id", manager_id=m1) is None
+        assert db.get_config("google_client_id", manager_id=db.SYSTEM_MANAGER_ID) == "system-cid"
+
+    def test_is_system_key(self):
+        assert db._is_system_key("google_client_id") is True
+        assert db._is_system_key("oauth_redirect_uri") is True
+        assert db._is_system_key("_migration_backfill_done") is True
+        assert db._is_system_key("anthropic_api_key") is False
+        assert db._is_system_key("manager_name") is False
 
 
 class TestSensitiveConfigEncryption:
@@ -211,23 +256,26 @@ class TestSensitiveConfigEncryption:
     fail loud when encryption is unavailable."""
 
     def test_sensitive_config_roundtrip(self):
+        mid = db.create_manager("enc_round", "E", "pass1234")
         secret = "sk-test-1234567890abcdef"
-        db.set_config("anthropic_api_key", secret)
+        db.set_config("anthropic_api_key", secret, manager_id=mid)
 
-        assert db.get_config("anthropic_api_key") == secret
+        assert db.get_config("anthropic_api_key", manager_id=mid) == secret
 
-        raw = db.get_all_config()["anthropic_api_key"]
+        raw = db.get_all_config(manager_id=mid)["anthropic_api_key"]
         assert raw.startswith(db._ENC_PREFIX), "Sensitive value must be encrypted at rest"
         assert secret not in raw, "Plaintext secret must not appear in stored value"
 
     def test_non_sensitive_config_not_encrypted(self):
-        db.set_config("manager_name", "Alice")
-        assert db.get_all_config()["manager_name"] == "Alice"
+        mid = db.create_manager("enc_plain", "E", "pass1234")
+        db.set_config("manager_name", "Alice", manager_id=mid)
+        assert db.get_all_config(manager_id=mid)["manager_name"] == "Alice"
 
     def test_encryption_unavailable_fails_loud_on_write(self, monkeypatch):
+        mid = db.create_manager("enc_failwrite", "E", "pass1234")
         monkeypatch.setattr(db, "_get_fernet", lambda: None)
         try:
-            db.set_config("smtp_password", "hunter2")
+            db.set_config("smtp_password", "hunter2", manager_id=mid)
         except db.EncryptionUnavailableError:
             return
         raise AssertionError(
@@ -236,12 +284,13 @@ class TestSensitiveConfigEncryption:
         )
 
     def test_decryption_failure_raises(self, monkeypatch):
+        mid = db.create_manager("enc_failread", "E", "pass1234")
         secret = "sk-original"
-        db.set_config("anthropic_api_key", secret)
+        db.set_config("anthropic_api_key", secret, manager_id=mid)
 
         monkeypatch.setattr(db, "_get_fernet", lambda: None)
         try:
-            db.get_config("anthropic_api_key")
+            db.get_config("anthropic_api_key", manager_id=mid)
         except db.EncryptionUnavailableError:
             return
         raise AssertionError(

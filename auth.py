@@ -30,9 +30,14 @@ import database as db
 # ---------------------------------------------------------------------------
 
 def _get_oauth_config():
-    """Return (client_id, client_secret) from env vars or database config."""
-    client_id = os.environ.get("GOOGLE_CLIENT_ID") or db.get_config("google_client_id")
-    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or db.get_config("google_client_secret")
+    """Return (client_id, client_secret) from env vars or database config.
+
+    OAuth provider credentials are deployment-wide system config, not
+    per-tenant — read with manager_id=db.SYSTEM_MANAGER_ID."""
+    client_id = (os.environ.get("GOOGLE_CLIENT_ID")
+                 or db.get_config("google_client_id", manager_id=db.SYSTEM_MANAGER_ID))
+    client_secret = (os.environ.get("GOOGLE_CLIENT_SECRET")
+                     or db.get_config("google_client_secret", manager_id=db.SYSTEM_MANAGER_ID))
     return client_id, client_secret
 
 
@@ -45,7 +50,8 @@ def _get_redirect_uri():
         3. Auto-detect from Streamlit request headers (convenience fallback)
     """
     # Explicit configuration takes priority
-    explicit = os.environ.get("OAUTH_REDIRECT_URI") or db.get_config("oauth_redirect_uri")
+    explicit = (os.environ.get("OAUTH_REDIRECT_URI")
+                or db.get_config("oauth_redirect_uri", manager_id=db.SYSTEM_MANAGER_ID))
     if explicit:
         return explicit
 
@@ -65,13 +71,15 @@ def _get_redirect_uri():
 
 def _is_email_allowed(email):
     """Check if the email is allowed to access the app."""
-    allowed_emails = os.environ.get("ALLOWED_EMAILS") or db.get_config("allowed_emails")
+    allowed_emails = (os.environ.get("ALLOWED_EMAILS")
+                      or db.get_config("allowed_emails", manager_id=db.SYSTEM_MANAGER_ID))
     if allowed_emails:
         emails = [e.strip().lower() for e in allowed_emails.split(",")]
         if email.lower() in emails:
             return True
 
-    allowed_domain = os.environ.get("ALLOWED_DOMAIN") or db.get_config("allowed_domain")
+    allowed_domain = (os.environ.get("ALLOWED_DOMAIN")
+                      or db.get_config("allowed_domain", manager_id=db.SYSTEM_MANAGER_ID))
     if allowed_domain:
         domain = email.lower().split("@")[-1]
         if domain == allowed_domain.lower().strip():
@@ -216,13 +224,14 @@ def _render_login_page():
                     )
                     if st.form_submit_button("Save"):
                         if cid and csec:
-                            db.set_config("google_client_id", cid)
-                            db.set_config("google_client_secret", csec)
-                            db.set_config("oauth_redirect_uri", redirect)
+                            sys_mid = db.SYSTEM_MANAGER_ID
+                            db.set_config("google_client_id", cid, manager_id=sys_mid)
+                            db.set_config("google_client_secret", csec, manager_id=sys_mid)
+                            db.set_config("oauth_redirect_uri", redirect, manager_id=sys_mid)
                             if allowed:
-                                db.set_config("allowed_emails", allowed)
+                                db.set_config("allowed_emails", allowed, manager_id=sys_mid)
                             if domain:
-                                db.set_config("allowed_domain", domain)
+                                db.set_config("allowed_domain", domain, manager_id=sys_mid)
                             st.success("Saved! Refresh the page to sign in.")
                             st.rerun()
                         else:
