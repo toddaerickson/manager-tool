@@ -853,6 +853,51 @@ class TestCrossManagerScoping:
         assert db.get_pre_meeting_prep(t1, manager_id=m2) is None
 
 
+class TestConnectionLifecycle:
+    """Regression for AUDIT H1 / P2.2 — connections must close on exception
+    paths, not just happy paths."""
+
+    def test_connect_closes_on_exception(self):
+        """The _connect() context manager must close the connection even when
+        the body raises."""
+        closed = []
+        real_get_conn = db.get_connection
+
+        class _Tracker:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def close(self):
+                closed.append(True)
+                return self._conn.close()
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        try:
+            db.get_connection = lambda: _Tracker(real_get_conn())
+            try:
+                with db._connect() as conn:
+                    raise RuntimeError("synthetic")
+            except RuntimeError:
+                pass
+        finally:
+            db.get_connection = real_get_conn
+
+        assert closed == [True], "_connect must close the connection on exception"
+
+    def test_create_manager_closes_on_failure(self):
+        """create_manager wraps INSERT in _connect; even on duplicate username
+        (IntegrityError) the connection must be released."""
+        db.create_manager("dup_user", "First", "pass1234")
+        # Second create with same username should return None and not leak.
+        result = db.create_manager("dup_user", "Second", "pass1234")
+        assert result is None
+        # If we leaked, subsequent operations could hang or fail; do another op
+        # to confirm the database is still usable.
+        assert db.manager_exists("dup_user") is True
+
+
 class TestMigrationRunner:
     """Regression for AUDIT C5 / P2.1 — schema_migrations ledger + sequenced
     migrations applied automatically at startup."""
