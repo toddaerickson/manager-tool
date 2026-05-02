@@ -41,11 +41,34 @@ class TestManagerAuth:
         assert db.manager_exists("dave") is True
         assert db.manager_exists("nonexistent") is False
 
-    def test_update_password(self):
+    def test_update_password_with_correct_old_password(self):
         mid = db.create_manager("eve", "Eve E", "oldpass99")
-        db.update_manager_password(mid, "newpass99")
+        db.update_manager_password(mid, "oldpass99", "newpass99")
         assert db.authenticate_manager("eve", "newpass99") is not None
         assert db.authenticate_manager("eve", "oldpass99") is None
+
+    def test_update_password_rejects_wrong_old_password(self):
+        """Regression for AUDIT H4 — must verify current password before update."""
+        mid = db.create_manager("frank", "Frank F", "realpass99")
+        try:
+            db.update_manager_password(mid, "wrongpass", "newpass99")
+        except db.IncorrectPasswordError:
+            pass
+        else:
+            raise AssertionError(
+                "update_manager_password must reject an incorrect old password"
+            )
+        assert db.authenticate_manager("frank", "realpass99") is not None
+        assert db.authenticate_manager("frank", "newpass99") is None
+
+    def test_update_password_rejects_unknown_manager_id(self):
+        try:
+            db.update_manager_password(999999, "anything", "newpass99")
+        except db.IncorrectPasswordError:
+            return
+        raise AssertionError(
+            "update_manager_password must reject an unknown manager_id"
+        )
 
 
 class TestMultiTenancy:

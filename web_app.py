@@ -1634,18 +1634,24 @@ def page_my_profile():
 
     with st.expander("Change Password"):
         with st.form("change_pw"):
+            current_pw = st.text_input("Current password", type="password")
             new_pw = st.text_input("New password", type="password")
             new_pw2 = st.text_input("Confirm new password", type="password")
             if st.form_submit_button("Update Password"):
-                if not new_pw:
+                if not current_pw:
+                    st.warning("Enter your current password.")
+                elif not new_pw:
                     st.warning("Enter a new password.")
                 elif len(new_pw) < 8:
                     st.error("Password must be at least 8 characters.")
                 elif new_pw != new_pw2:
                     st.error("Passwords don't match.")
                 else:
-                    db.update_manager_password(mid, new_pw)
-                    st.success("Password updated.")
+                    try:
+                        db.update_manager_password(mid, current_pw, new_pw)
+                        st.success("Password updated.")
+                    except db.IncorrectPasswordError:
+                        st.error("Current password is incorrect.")
 
 
 # ---------------------------------------------------------------------------

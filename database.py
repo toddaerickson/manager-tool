@@ -666,10 +666,23 @@ def update_manager(manager_id: int, **kwargs: Any) -> None:
     conn.close()
 
 
-def update_manager_password(manager_id: int, new_password: str) -> None:
-    """Change manager password."""
-    pw_hash = _hash_password(new_password)
+class IncorrectPasswordError(ValueError):
+    """Raised when a password change is attempted with the wrong current password."""
+
+
+def update_manager_password(manager_id: int, old_password: str, new_password: str) -> None:
+    """Change manager password after verifying the current one.
+
+    Raises IncorrectPasswordError if old_password does not match, or if the
+    manager does not exist. This guard prevents account takeover from any code
+    path that exposes update_manager_password with a caller-supplied manager_id.
+    """
     conn = get_connection()
+    row = _fetchone(conn, "SELECT password_hash FROM managers WHERE id = ?", (manager_id,))
+    if not row or not _verify_password(old_password, row["password_hash"]):
+        conn.close()
+        raise IncorrectPasswordError("Current password is incorrect")
+    pw_hash = _hash_password(new_password)
     _exec(conn, "UPDATE managers SET password_hash = ?, updated_at = ? WHERE id = ?",
           (pw_hash, datetime.now().isoformat(), manager_id))
     _commit(conn)
