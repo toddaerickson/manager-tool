@@ -16,12 +16,15 @@ Setup:
     via the ALLOWED_EMAILS or ALLOWED_DOMAIN environment variables.
 """
 
+import logging
 import os
 import secrets
 from urllib.parse import urlencode
 
 import streamlit as st
 import requests
+
+logger = logging.getLogger("manager_tool.auth")
 
 import database as db
 
@@ -55,15 +58,20 @@ def _get_redirect_uri():
     if explicit:
         return explicit
 
-    # Auto-detect from request headers (works behind proxies / cloud hosts)
+    # Auto-detect from request headers (works behind proxies / cloud hosts).
+    # st.context isn't available outside a Streamlit script context, so we
+    # log the failure rather than swallow silently — operators get a clear
+    # signal when the redirect URI falls back to localhost (P5 / AUDIT M6).
     try:
         headers = st.context.headers
         host = headers.get("X-Forwarded-Host") or headers.get("Host") or ""
         proto = headers.get("X-Forwarded-Proto") or "https"
         if host:
             return f"{proto}://{host}/"
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(
+            "Could not infer OAuth redirect URI from Streamlit headers (%s); "
+            "falling back to localhost", e)
 
     # Last resort — local dev
     return "http://localhost:8501/"
