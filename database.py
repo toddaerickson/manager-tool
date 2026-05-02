@@ -392,7 +392,7 @@ def _migration_journal_coaching_response(conn) -> None:
     cols = _table_columns(conn, "journal_entries")
     if "coaching_response" in cols:
         return
-    conn.execute("ALTER TABLE journal_entries ADD COLUMN coaching_response TEXT")
+    _exec(conn, "ALTER TABLE journal_entries ADD COLUMN coaching_response TEXT")
     _commit(conn)
 
 
@@ -403,23 +403,23 @@ def _migration_orphan_table_manager_id(conn) -> None:
                   "development_plans", "milestones"):
         cols = _table_columns(conn, table)
         if "manager_id" not in cols:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN manager_id INTEGER")
+            _exec(conn, f"ALTER TABLE {table} ADD COLUMN manager_id INTEGER")
             _commit(conn)
     # Backfill (idempotent; cheap once all rows are populated)
     for table in ("feedback", "goals", "career_conversations", "skills",
                   "development_plans"):
-        conn.execute(_q(
+        _exec(conn,
             f"UPDATE {table} SET manager_id = ("
             "SELECT manager_id FROM team_members WHERE team_members.id = "
             f"{table}.team_member_id"
             ") WHERE manager_id IS NULL"
-        ))
-    conn.execute(_q(
+        )
+    _exec(conn,
         "UPDATE milestones SET manager_id = ("
         "SELECT manager_id FROM development_plans "
         "WHERE development_plans.id = milestones.plan_id"
         ") WHERE manager_id IS NULL"
-    ))
+    )
     _commit(conn)
 
 
@@ -431,7 +431,7 @@ def _migration_partition_config_table(conn) -> None:
     if "manager_id" in cols:
         return
 
-    cur = conn.execute(_q("SELECT id FROM managers"))
+    cur = _exec(conn, "SELECT id FROM managers")
     rows = cur.fetchall()
     if len(rows) == 1:
         first = rows[0]
@@ -439,24 +439,24 @@ def _migration_partition_config_table(conn) -> None:
     else:
         sole_mid = SYSTEM_MANAGER_ID
 
-    conn.execute(
+    _exec(conn,
         "CREATE TABLE config_new ("
         "  manager_id INTEGER NOT NULL DEFAULT 0,"
         "  key TEXT NOT NULL,"
         "  value TEXT,"
         "  PRIMARY KEY (manager_id, key))"
     )
-    cur = conn.execute(_q("SELECT key, value FROM config"))
+    cur = _exec(conn, "SELECT key, value FROM config")
     old_rows = cur.fetchall()
     for r in old_rows:
         k = r["key"] if isinstance(r, dict) else r[0]
         v = r["value"] if isinstance(r, dict) else r[1]
         target_mid = SYSTEM_MANAGER_ID if _is_system_key(k) else sole_mid
-        conn.execute(_q(
-            "INSERT INTO config_new (manager_id, key, value) VALUES (?, ?, ?)"
-        ), (target_mid, k, v))
-    conn.execute("DROP TABLE config")
-    conn.execute("ALTER TABLE config_new RENAME TO config")
+        _exec(conn,
+            "INSERT INTO config_new (manager_id, key, value) VALUES (?, ?, ?)",
+            (target_mid, k, v))
+    _exec(conn, "DROP TABLE config")
+    _exec(conn, "ALTER TABLE config_new RENAME TO config")
     _commit(conn)
     logger.info("config table partitioned by manager_id "
                 "(%d rows reassigned; sole_mid=%s)", len(old_rows), sole_mid)
@@ -465,7 +465,7 @@ def _migration_partition_config_table(conn) -> None:
 def _migration_sole_manager_backfill(conn) -> None:
     """One-shot backfill: assign orphaned rows in scoped tables to the sole
     manager. Only runs when exactly one manager exists; otherwise no-op."""
-    cur = conn.execute(_q("SELECT id FROM managers"))
+    cur = _exec(conn, "SELECT id FROM managers")
     rows = cur.fetchall()
     if len(rows) != 1:
         return
@@ -473,9 +473,9 @@ def _migration_sole_manager_backfill(conn) -> None:
     mid = first["id"] if isinstance(first, dict) else first[0]
     for table in ("team_members", "events", "action_items",
                   "journal_entries", "self_assessments"):
-        conn.execute(_q(
-            f"UPDATE {table} SET manager_id = ? WHERE manager_id IS NULL"
-        ), (mid,))
+        _exec(conn,
+            f"UPDATE {table} SET manager_id = ? WHERE manager_id IS NULL",
+            (mid,))
     _commit(conn)
 
 
@@ -487,26 +487,26 @@ def _migration_save_uniqueness_constraints(conn) -> None:
     Dedup pre-existing duplicates first (keep the highest-id row per group),
     otherwise the unique index creation fails."""
     # coach_suggestions: one row per (manager_id, suggestion_date, tier)
-    conn.execute(_q(
+    _exec(conn,
         "DELETE FROM coach_suggestions "
         "WHERE id NOT IN ("
         "  SELECT MAX(id) FROM coach_suggestions "
         "  GROUP BY manager_id, suggestion_date, tier"
         ")"
-    ))
-    conn.execute(
+    )
+    _exec(conn,
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_suggestions_mid_date_tier "
         "ON coach_suggestions (manager_id, suggestion_date, tier)"
     )
     # self_assessments: one row per (manager_id, week_date, dimension)
-    conn.execute(_q(
+    _exec(conn,
         "DELETE FROM self_assessments "
         "WHERE id NOT IN ("
         "  SELECT MAX(id) FROM self_assessments "
         "  GROUP BY manager_id, week_date, dimension"
         ")"
-    ))
-    conn.execute(
+    )
+    _exec(conn,
         "CREATE UNIQUE INDEX IF NOT EXISTS ux_self_assessments_mid_week_dim "
         "ON self_assessments (manager_id, week_date, dimension)"
     )
@@ -518,7 +518,7 @@ def _migration_sessions_and_login_attempts(conn) -> None:
     deployments that pre-date schema_postgres.sql carrying these tables."""
     # sessions
     if _detect_pg():
-        conn.execute(
+        _exec(conn,
             "CREATE TABLE IF NOT EXISTS sessions ("
             "  id TEXT PRIMARY KEY,"
             "  manager_id INTEGER NOT NULL REFERENCES managers(id),"
@@ -527,7 +527,7 @@ def _migration_sessions_and_login_attempts(conn) -> None:
             "  expires_at TIMESTAMP NOT NULL,"
             "  user_agent_hash TEXT)"
         )
-        conn.execute(
+        _exec(conn,
             "CREATE TABLE IF NOT EXISTS login_attempts ("
             "  username TEXT PRIMARY KEY,"
             "  failed_count INTEGER NOT NULL DEFAULT 0,"
@@ -535,7 +535,7 @@ def _migration_sessions_and_login_attempts(conn) -> None:
             "  locked_until TIMESTAMP)"
         )
     else:
-        conn.execute(
+        _exec(conn,
             "CREATE TABLE IF NOT EXISTS sessions ("
             "  id TEXT PRIMARY KEY,"
             "  manager_id INTEGER NOT NULL,"
@@ -545,7 +545,7 @@ def _migration_sessions_and_login_attempts(conn) -> None:
             "  user_agent_hash TEXT,"
             "  FOREIGN KEY (manager_id) REFERENCES managers(id))"
         )
-        conn.execute(
+        _exec(conn,
             "CREATE TABLE IF NOT EXISTS login_attempts ("
             "  username TEXT PRIMARY KEY,"
             "  failed_count INTEGER NOT NULL DEFAULT 0,"
@@ -586,7 +586,7 @@ def _migration_hot_path_indexes(conn) -> None:
         "ON coach_suggestions (manager_id, suggestion_date)",
     ]
     for sql in statements:
-        conn.execute(sql)
+        _exec(conn, sql)
     _commit(conn)
 
 
@@ -606,13 +606,13 @@ def _ensure_schema_migrations_table(conn) -> None:
     schema_postgres.sql; this handles older deploys that haven't run it
     against the latest schema yet)."""
     if _detect_pg():
-        conn.execute(
+        _exec(conn,
             "CREATE TABLE IF NOT EXISTS schema_migrations ("
             "  id TEXT PRIMARY KEY,"
             "  applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
         )
     else:
-        conn.execute(
+        _exec(conn,
             "CREATE TABLE IF NOT EXISTS schema_migrations ("
             "  id TEXT PRIMARY KEY,"
             "  applied_at TEXT DEFAULT (datetime('now')))"
@@ -624,7 +624,7 @@ def _run_migrations(conn) -> list[str]:
     """Apply any migrations not yet recorded in schema_migrations.
     Returns the list of migration ids applied this run."""
     _ensure_schema_migrations_table(conn)
-    cur = conn.execute(_q("SELECT id FROM schema_migrations"))
+    cur = _exec(conn, "SELECT id FROM schema_migrations")
     applied = {r["id"] if isinstance(r, dict) else r[0] for r in cur.fetchall()}
 
     newly_applied: list[str] = []
@@ -636,8 +636,8 @@ def _run_migrations(conn) -> list[str]:
         except Exception as e:
             logger.exception("Migration %s failed: %s", mid, e)
             raise
-        conn.execute(
-            _q("INSERT INTO schema_migrations (id) VALUES (?)"), (mid,))
+        _exec(conn,
+            "INSERT INTO schema_migrations (id) VALUES (?)", (mid,))
         _commit(conn)
         newly_applied.append(mid)
         logger.info("Applied migration %s", mid)
