@@ -259,3 +259,7 @@ CREATE TABLE IF NOT EXISTS coach_suggestions (
     dismissed INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ux_coach_suggestions_mid_date_tier
+    ON coach_suggestions (manager_id, suggestion_date, tier);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_self_assessments_mid_week_dim
+    ON self_assessments (manager_id, week_date, dimension);

@@ -855,6 +855,116 @@ class TestCrossManagerScoping:
         assert db.get_pre_meeting_prep(t1, manager_id=m2) is None
 
 
+class TestRaceConditionFreeUpserts:
+    """Regression for AUDIT H6 / P2.6 — save_self_assessment and
+    save_coach_suggestion must use atomic UPSERT under a unique index, not
+    delete-then-insert (race-prone under autocommit)."""
+
+    def test_unique_index_on_coach_suggestions(self):
+        """The (manager_id, suggestion_date, tier) unique index must exist —
+        without it, INSERT ... ON CONFLICT degrades silently."""
+        with db._connect() as conn:
+            cur = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='index' AND name='ux_coach_suggestions_mid_date_tier'"
+            )
+            row = cur.fetchone()
+        assert row is not None
+
+    def test_unique_index_on_self_assessments(self):
+        with db._connect() as conn:
+            cur = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='index' AND name='ux_self_assessments_mid_week_dim'"
+            )
+            row = cur.fetchone()
+        assert row is not None
+
+    def test_save_coach_suggestion_idempotent_no_duplicate(self):
+        """Repeated saves for the same (mid, date, tier) leave exactly one row."""
+        mid = db.create_manager("race_cs", "C", "pass1234")
+        for content in ("first", "second", "third"):
+            db.save_coach_suggestion(mid, content, tier="rule",
+                                     suggestion_date="2026-05-02")
+        with db._connect() as conn:
+            cur = conn.execute(
+                "SELECT COUNT(*) AS c, MAX(suggestion) AS s "
+                "FROM coach_suggestions "
+                "WHERE manager_id = ? AND suggestion_date = ? AND tier = ?",
+                (mid, "2026-05-02", "rule"))
+            row = cur.fetchone()
+        assert row["c"] == 1, "UPSERT must not create duplicate rows"
+        assert row["s"] == "third"
+
+    def test_save_self_assessment_idempotent_no_duplicate(self):
+        mid = db.create_manager("race_sa", "S", "pass1234")
+        # Save the same dimension twice with different scores; expect one row.
+        db.save_self_assessment("2026-W18", {"clarity": 3, "growth": 4}, manager_id=mid)
+        db.save_self_assessment("2026-W18", {"clarity": 5, "growth": 4, "feedback": 3},
+                                manager_id=mid)
+        with db._connect() as conn:
+            cur = conn.execute(
+                "SELECT dimension, score FROM self_assessments "
+                "WHERE manager_id = ? AND week_date = ? "
+                "ORDER BY dimension",
+                (mid, "2026-W18"))
+            rows = cur.fetchall()
+        scores = {r["dimension"]: r["score"] for r in rows}
+        assert scores == {"clarity": 5, "feedback": 3, "growth": 4}, scores
+
+    def test_save_coach_suggestion_resets_dismissed_on_update(self):
+        """When the suggestion is overwritten via UPSERT, the dismissed flag
+        resets so the user actually sees the new content."""
+        mid = db.create_manager("race_cs2", "C", "pass1234")
+        db.save_coach_suggestion(mid, "old", tier="rule", suggestion_date="2026-05-02")
+        # Manually mark dismissed
+        with db._connect() as conn:
+            conn.execute(
+                "UPDATE coach_suggestions SET dismissed = 1 "
+                "WHERE manager_id = ? AND suggestion_date = ? AND tier = ?",
+                (mid, "2026-05-02", "rule"))
+            conn.commit()
+        # Save again — UPSERT must reset dismissed to 0
+        db.save_coach_suggestion(mid, "new", tier="rule", suggestion_date="2026-05-02")
+        with db._connect() as conn:
+            row = conn.execute(
+                "SELECT suggestion, dismissed FROM coach_suggestions "
+                "WHERE manager_id = ? AND suggestion_date = ? AND tier = ?",
+                (mid, "2026-05-02", "rule")).fetchone()
+        assert row["suggestion"] == "new"
+        assert row["dismissed"] == 0
+
+    def test_concurrent_save_coach_suggestion_via_threads(self):
+        """Two threads racing the same (mid, date, tier) write must end with
+        exactly one row, no exceptions. Simulates the H6 race."""
+        import threading
+        mid = db.create_manager("race_cs3", "C", "pass1234")
+        errors = []
+
+        def worker(text):
+            try:
+                db.save_coach_suggestion(mid, text, tier="rule",
+                                         suggestion_date="2026-05-02")
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker, args=(f"t{i}",))
+                   for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"Concurrent saves must not raise: {errors}"
+        with db._connect() as conn:
+            cur = conn.execute(
+                "SELECT COUNT(*) AS c FROM coach_suggestions "
+                "WHERE manager_id = ? AND suggestion_date = ? AND tier = ?",
+                (mid, "2026-05-02", "rule"))
+            count = cur.fetchone()["c"]
+        assert count == 1, f"Expected exactly 1 row, got {count}"
+
+
 class TestProductionFallbackGate:
     """Regression for AUDIT H5 / P2.5 — SQLite fallback is disabled when
     MANAGER_TOOL_ENV=prod; outside production the fallback behaves as before."""
