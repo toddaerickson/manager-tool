@@ -360,6 +360,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS feedback (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             team_member_id INTEGER NOT NULL,
             event_id INTEGER,
             feedback_type TEXT NOT NULL CHECK(feedback_type IN
@@ -368,12 +369,14 @@ def init_db():
             behavior TEXT,
             impact TEXT,
             created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id),
             FOREIGN KEY (event_id) REFERENCES events(id)
         );
 
         CREATE TABLE IF NOT EXISTS goals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             team_member_id INTEGER NOT NULL,
             quarter TEXT NOT NULL,
             description TEXT NOT NULL,
@@ -383,12 +386,15 @@ def init_db():
                  'partially_met', 'not_met')),
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id)
         );
 
         CREATE TABLE IF NOT EXISTS config (
-            key TEXT PRIMARY KEY,
-            value TEXT
+            manager_id INTEGER NOT NULL DEFAULT 0,
+            key TEXT NOT NULL,
+            value TEXT,
+            PRIMARY KEY (manager_id, key)
         );
 
         CREATE TABLE IF NOT EXISTS journal_entries (
@@ -420,17 +426,20 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS career_conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             team_member_id INTEGER NOT NULL,
             conversation_date TEXT NOT NULL,
             topic TEXT,
             notes TEXT,
             next_steps TEXT,
             created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id)
         );
 
         CREATE TABLE IF NOT EXISTS skills (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             team_member_id INTEGER NOT NULL,
             skill_name TEXT NOT NULL,
             proficiency TEXT DEFAULT 'developing'
@@ -440,11 +449,13 @@ def init_db():
             notes TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id)
         );
 
         CREATE TABLE IF NOT EXISTS development_plans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             team_member_id INTEGER NOT NULL,
             title TEXT NOT NULL,
             description TEXT,
@@ -453,16 +464,19 @@ def init_db():
                 CHECK(status IN ('active', 'completed', 'paused')),
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id)
         );
 
         CREATE TABLE IF NOT EXISTS milestones (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER,
             plan_id INTEGER NOT NULL,
             description TEXT NOT NULL,
             target_date TEXT,
             completed INTEGER DEFAULT 0,
             completed_at TEXT,
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
             FOREIGN KEY (plan_id) REFERENCES development_plans(id)
         );
 
@@ -544,13 +558,88 @@ def init_db():
         if "coaching_response" not in cols:
             conn.execute("ALTER TABLE journal_entries ADD COLUMN coaching_response TEXT")
             conn.commit()
-    except Exception as e:
-        logger.debug("Column migration skipped: %s", e)
+    except sqlite3.Error as e:
+        logger.warning("Column migration (coaching_response) failed: %s", e)
+
+    # Migration P1.1: add manager_id to orphan tables that previously scoped
+    # only via team_member_id / plan_id. Idempotent: only ALTER if missing.
+    for table in ("feedback", "goals", "career_conversations", "skills",
+                  "development_plans", "milestones"):
+        try:
+            cols = [c[1] for c in conn.execute(
+                f"PRAGMA table_info({table})").fetchall()]
+            if "manager_id" not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN manager_id INTEGER")
+                conn.commit()
+        except sqlite3.Error as e:
+            logger.warning("manager_id ALTER on %s failed: %s", table, e)
+
+    # Backfill manager_id for the orphan tables. Runs every startup but is a
+    # cheap no-op once all rows are populated.
+    try:
+        # Tables with team_member_id parent
+        for table in ("feedback", "goals", "career_conversations", "skills",
+                      "development_plans"):
+            conn.execute(
+                f"UPDATE {table} SET manager_id = ("
+                "SELECT manager_id FROM team_members WHERE team_members.id = "
+                f"{table}.team_member_id"
+                ") WHERE manager_id IS NULL"
+            )
+        # milestones piggyback on development_plans (must run after development_plans)
+        conn.execute(
+            "UPDATE milestones SET manager_id = ("
+            "SELECT manager_id FROM development_plans "
+            "WHERE development_plans.id = milestones.plan_id"
+            ") WHERE manager_id IS NULL"
+        )
+        conn.commit()
+    except sqlite3.Error as e:
+        logger.warning("manager_id backfill on orphan tables failed: %s", e)
+
+    # Migration P1.3: partition the config table by manager_id. The legacy
+    # schema had a single (key) PK, so all tenants shared one set of secrets.
+    # Detect the legacy schema and rebuild with composite (manager_id, key) PK.
+    try:
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(config)").fetchall()]
+        if "manager_id" not in cols:
+            managers = conn.execute("SELECT id FROM managers").fetchall()
+            sole_mid = (managers[0]["id"] if isinstance(managers[0], dict) else managers[0][0]) \
+                if len(managers) == 1 else SYSTEM_MANAGER_ID
+            conn.execute(
+                "CREATE TABLE config_new ("
+                "  manager_id INTEGER NOT NULL DEFAULT 0,"
+                "  key TEXT NOT NULL,"
+                "  value TEXT,"
+                "  PRIMARY KEY (manager_id, key))"
+            )
+            old_rows = conn.execute("SELECT key, value FROM config").fetchall()
+            for r in old_rows:
+                k = r["key"] if isinstance(r, dict) else r[0]
+                v = r["value"] if isinstance(r, dict) else r[1]
+                target_mid = SYSTEM_MANAGER_ID if _is_system_key(k) else sole_mid
+                conn.execute(
+                    "INSERT INTO config_new (manager_id, key, value) VALUES (?, ?, ?)",
+                    (target_mid, k, v))
+            conn.execute("DROP TABLE config")
+            conn.execute("ALTER TABLE config_new RENAME TO config")
+            conn.execute(
+                "INSERT OR IGNORE INTO config (manager_id, key, value) "
+                "VALUES (?, '_migration_config_partitioned', '1')",
+                (SYSTEM_MANAGER_ID,))
+            conn.commit()
+            logger.info("Config table partitioned by manager_id "
+                        "(%d rows reassigned; sole_mid=%s)",
+                        len(old_rows), sole_mid)
+    except sqlite3.Error as e:
+        logger.warning("Config partition migration skipped: %s", e)
 
     # One-time backfill: assign orphaned data to the sole manager
     try:
         row = conn.execute(
-            "SELECT value FROM config WHERE key = '_migration_backfill_done'"
+            "SELECT value FROM config "
+            "WHERE manager_id = ? AND key = '_migration_backfill_done'",
+            (SYSTEM_MANAGER_ID,),
         ).fetchone()
         if not row:
             managers = conn.execute("SELECT id FROM managers").fetchall()
@@ -563,10 +652,11 @@ def init_db():
                         (mid,))
                 conn.commit()
             conn.execute(
-                "INSERT INTO config (key, value) VALUES ('_migration_backfill_done', '1')")
+                "INSERT INTO config (manager_id, key, value) VALUES (?, ?, ?)",
+                (SYSTEM_MANAGER_ID, "_migration_backfill_done", "1"))
             conn.commit()
-    except Exception as e:
-        logger.debug("Backfill migration skipped: %s", e)
+    except sqlite3.Error as e:
+        logger.warning("Sole-manager backfill skipped: %s", e)
 
     conn.close()
 
@@ -702,20 +792,48 @@ def manager_exists(username: str) -> bool:
 # Configuration
 # ---------------------------------------------------------------------------
 
-def set_config(key: str, value: str) -> None:
+# Sentinel manager_id for system-wide / non-tenant config (OAuth provider
+# settings, allowlists, internal migration markers).
+SYSTEM_MANAGER_ID = 0
+
+# Keys that are intrinsically system-wide (the deployment owns them, not any
+# individual tenant). Anything else is tenant-scoped.
+_SYSTEM_KEYS = {
+    "google_client_id",
+    "google_client_secret",
+    "oauth_redirect_uri",
+    "allowed_emails",
+    "allowed_domain",
+    "_migration_backfill_done",
+    "_migration_config_partitioned",
+}
+
+
+def _is_system_key(key: str) -> bool:
+    """A key is system-wide if it's in _SYSTEM_KEYS or starts with an underscore."""
+    return key in _SYSTEM_KEYS or key.startswith("_")
+
+
+def set_config(key: str, value: str, manager_id: int) -> None:
+    """Store a config value scoped to manager_id. Pass SYSTEM_MANAGER_ID for
+    deployment-wide config."""
     stored = _encrypt_value(value) if key in _SENSITIVE_KEYS else value
     conn = get_connection()
     _exec(conn,
-          "INSERT INTO config (key, value) VALUES (?, ?) "
-          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-          (key, stored))
+          "INSERT INTO config (manager_id, key, value) VALUES (?, ?, ?) "
+          "ON CONFLICT(manager_id, key) DO UPDATE SET value = excluded.value",
+          (manager_id, key, stored))
     _commit(conn)
     conn.close()
 
 
-def get_config(key: str, default: str | None = None) -> str | None:
+def get_config(key: str, manager_id: int, default: str | None = None) -> str | None:
+    """Read a config value scoped to manager_id. Pass SYSTEM_MANAGER_ID for
+    deployment-wide config."""
     conn = get_connection()
-    row = _fetchone(conn, "SELECT value FROM config WHERE key = ?", (key,))
+    row = _fetchone(conn,
+                    "SELECT value FROM config WHERE manager_id = ? AND key = ?",
+                    (manager_id, key))
     conn.close()
     if not row:
         return default
@@ -752,9 +870,13 @@ def list_users():
     return rows
 
 
-def get_all_config() -> dict[str, str]:
+def get_all_config(manager_id: int) -> dict[str, str]:
+    """Return all config rows scoped to manager_id. Pass SYSTEM_MANAGER_ID for
+    deployment-wide rows."""
     conn = get_connection()
-    rows = _fetchall(conn, "SELECT key, value FROM config ORDER BY key")
+    rows = _fetchall(conn,
+                     "SELECT key, value FROM config WHERE manager_id = ? ORDER BY key",
+                     (manager_id,))
     conn.close()
     return {r["key"]: r["value"] for r in rows}
 
@@ -867,7 +989,7 @@ def create_event(title: str, event_type: str, scheduled_date: str, scheduled_tim
     return event_id
 
 
-def update_event(event_id, **kwargs):
+def update_event(event_id: int, manager_id: int, **kwargs) -> None:
     conn = get_connection()
     allowed = {
         "title", "event_type", "team_member_id", "scheduled_date",
@@ -879,30 +1001,31 @@ def update_event(event_id, **kwargs):
         conn.close()
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
-    values = list(fields.values()) + [datetime.now().isoformat(), event_id]
+    values = list(fields.values()) + [datetime.now().isoformat(), event_id, manager_id]
     _exec(conn,
-          f"UPDATE events SET {sets}, updated_at = ? WHERE id = ?", values)
+          f"UPDATE events SET {sets}, updated_at = ? WHERE id = ? AND manager_id = ?",
+          values)
     _commit(conn)
     conn.close()
 
 
-def complete_event(event_id: int, notes: str | None = None) -> None:
-    update_event(event_id, status="completed", notes=notes)
+def complete_event(event_id: int, manager_id: int, notes: str | None = None) -> None:
+    update_event(event_id, manager_id, status="completed", notes=notes)
 
 
-def cancel_event(event_id: int) -> None:
-    update_event(event_id, status="cancelled")
+def cancel_event(event_id: int, manager_id: int) -> None:
+    update_event(event_id, manager_id, status="cancelled")
 
 
-def get_event(event_id: int) -> dict[str, Any] | None:
+def get_event(event_id: int, manager_id: int) -> dict[str, Any] | None:
     conn = get_connection()
     row = _fetchone(
         conn,
         "SELECT e.*, tm.name AS participant_name, tm.email AS participant_email "
         "FROM events e "
         "LEFT JOIN team_members tm ON e.team_member_id = tm.id "
-        "WHERE e.id = ?",
-        (event_id,),
+        "WHERE e.id = ? AND e.manager_id = ?",
+        (event_id, manager_id),
     )
     conn.close()
     return row
@@ -979,21 +1102,23 @@ def add_action_item(description: str, event_id: int | None = None,
     return item_id
 
 
-def complete_action_item(item_id: int) -> None:
+def complete_action_item(item_id: int, manager_id: int) -> None:
     conn = get_connection()
     _exec(conn,
-          "UPDATE action_items SET status = 'completed', completed_at = ? WHERE id = ?",
-          (datetime.now().isoformat(), item_id))
+          "UPDATE action_items SET status = 'completed', completed_at = ? "
+          "WHERE id = ? AND manager_id = ?",
+          (datetime.now().isoformat(), item_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def update_action_item_status(item_id, status):
+def update_action_item_status(item_id: int, status: str, manager_id: int) -> None:
     conn = get_connection()
     completed_at = datetime.now().isoformat() if status == "completed" else None
     _exec(conn,
-          "UPDATE action_items SET status = ?, completed_at = ? WHERE id = ?",
-          (status, completed_at, item_id))
+          "UPDATE action_items SET status = ?, completed_at = ? "
+          "WHERE id = ? AND manager_id = ?",
+          (status, completed_at, item_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1030,16 +1155,17 @@ def get_pending_action_items(manager_id: int | None = None) -> list[dict[str, An
             list_action_items(status="in_progress", manager_id=manager_id))
 
 
-def delete_action_item(item_id: int) -> None:
-    """Delete an action item."""
+def delete_action_item(item_id: int, manager_id: int) -> None:
+    """Delete an action item owned by manager_id."""
     conn = get_connection()
-    _exec(conn, "DELETE FROM action_items WHERE id = ?", (item_id,))
+    _exec(conn, "DELETE FROM action_items WHERE id = ? AND manager_id = ?",
+          (item_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def update_action_item(item_id, **kwargs):
-    """Update action item fields."""
+def update_action_item(item_id: int, manager_id: int, **kwargs) -> None:
+    """Update action item fields owned by manager_id."""
     allowed = {"description", "assignee", "due_date", "status"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -1048,8 +1174,8 @@ def update_action_item(item_id, **kwargs):
         fields["completed_at"] = datetime.now().isoformat()
     sets = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    _exec(conn, f"UPDATE action_items SET {sets} WHERE id = ?",
-          (*fields.values(), item_id))
+    _exec(conn, f"UPDATE action_items SET {sets} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), item_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1058,29 +1184,45 @@ def update_action_item(item_id, **kwargs):
 # Feedback
 # ---------------------------------------------------------------------------
 
+def _resolve_manager_id_from_member(conn, team_member_id):
+    """Look up manager_id from a team_member id. Used to populate manager_id
+    on inserts into child tables when the caller does not supply it."""
+    if team_member_id is None:
+        return None
+    row = _fetchone(conn,
+                    "SELECT manager_id FROM team_members WHERE id = ?",
+                    (team_member_id,))
+    return row["manager_id"] if row else None
+
+
 def add_feedback(team_member_id: int, feedback_type: str, situation: str | None = None,
                  behavior: str | None = None, impact: str | None = None,
-                 event_id: int | None = None) -> int | None:
+                 event_id: int | None = None,
+                 manager_id: int | None = None) -> int | None:
     conn = get_connection()
+    if manager_id is None:
+        manager_id = _resolve_manager_id_from_member(conn, team_member_id)
     feedback_id = _exec_returning_id(
         conn,
-        "INSERT INTO feedback (team_member_id, event_id, feedback_type, "
-        "situation, behavior, impact) VALUES (?, ?, ?, ?, ?, ?)",
-        (team_member_id, event_id, feedback_type, situation, behavior, impact),
+        "INSERT INTO feedback (manager_id, team_member_id, event_id, feedback_type, "
+        "situation, behavior, impact) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, event_id, feedback_type, situation, behavior, impact),
     )
     _commit(conn)
     conn.close()
     return feedback_id
 
 
-def list_feedback(team_member_id: int | None = None, feedback_type: str | None = None) -> list[dict[str, Any]]:
+def list_feedback(manager_id: int, team_member_id: int | None = None,
+                  feedback_type: str | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
     query = (
         "SELECT f.*, tm.name AS member_name "
         "FROM feedback f "
-        "JOIN team_members tm ON f.team_member_id = tm.id WHERE 1=1"
+        "JOIN team_members tm ON f.team_member_id = tm.id "
+        "WHERE f.manager_id = ?"
     )
-    params = []
+    params = [manager_id]
     if team_member_id:
         query += " AND f.team_member_id = ?"
         params.append(team_member_id)
@@ -1094,24 +1236,25 @@ def list_feedback(team_member_id: int | None = None, feedback_type: str | None =
     return rows
 
 
-def update_feedback(feedback_id, **kwargs):
-    """Update feedback fields."""
+def update_feedback(feedback_id: int, manager_id: int, **kwargs) -> None:
+    """Update feedback fields owned by manager_id."""
     allowed = {"feedback_type", "situation", "behavior", "impact"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    _exec(conn, f"UPDATE feedback SET {sets} WHERE id = ?",
-          (*fields.values(), feedback_id))
+    _exec(conn, f"UPDATE feedback SET {sets} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), feedback_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def delete_feedback(feedback_id: int) -> None:
-    """Delete a feedback record."""
+def delete_feedback(feedback_id: int, manager_id: int) -> None:
+    """Delete a feedback record owned by manager_id."""
     conn = get_connection()
-    _exec(conn, "DELETE FROM feedback WHERE id = ?", (feedback_id,))
+    _exec(conn, "DELETE FROM feedback WHERE id = ? AND manager_id = ?",
+          (feedback_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1121,20 +1264,23 @@ def delete_feedback(feedback_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 def add_goal(team_member_id: int, quarter: str, description: str,
-             key_results: str | None = None) -> int | None:
+             key_results: str | None = None,
+             manager_id: int | None = None) -> int | None:
     conn = get_connection()
+    if manager_id is None:
+        manager_id = _resolve_manager_id_from_member(conn, team_member_id)
     goal_id = _exec_returning_id(
         conn,
-        "INSERT INTO goals (team_member_id, quarter, description, key_results) "
-        "VALUES (?, ?, ?, ?)",
-        (team_member_id, quarter, description, key_results),
+        "INSERT INTO goals (manager_id, team_member_id, quarter, description, key_results) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, quarter, description, key_results),
     )
     _commit(conn)
     conn.close()
     return goal_id
 
 
-def update_goal(goal_id, **kwargs):
+def update_goal(goal_id: int, manager_id: int, **kwargs) -> None:
     conn = get_connection()
     allowed = {"description", "key_results", "status", "quarter"}
     fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
@@ -1142,20 +1288,24 @@ def update_goal(goal_id, **kwargs):
         conn.close()
         return
     sets = ", ".join(f"{k} = ?" for k in fields)
-    values = list(fields.values()) + [datetime.now().isoformat(), goal_id]
-    _exec(conn, f"UPDATE goals SET {sets}, updated_at = ? WHERE id = ?", values)
+    values = list(fields.values()) + [datetime.now().isoformat(), goal_id, manager_id]
+    _exec(conn,
+          f"UPDATE goals SET {sets}, updated_at = ? WHERE id = ? AND manager_id = ?",
+          values)
     _commit(conn)
     conn.close()
 
 
-def list_goals(team_member_id=None, quarter=None, status=None):
+def list_goals(manager_id: int, team_member_id: int | None = None,
+               quarter: str | None = None, status: str | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
     query = (
         "SELECT g.*, tm.name AS member_name "
         "FROM goals g "
-        "JOIN team_members tm ON g.team_member_id = tm.id WHERE 1=1"
+        "JOIN team_members tm ON g.team_member_id = tm.id "
+        "WHERE g.manager_id = ?"
     )
-    params = []
+    params = [manager_id]
     if team_member_id:
         query += " AND g.team_member_id = ?"
         params.append(team_member_id)
@@ -1172,10 +1322,11 @@ def list_goals(team_member_id=None, quarter=None, status=None):
     return rows
 
 
-def delete_goal(goal_id: int) -> None:
-    """Delete a goal record."""
+def delete_goal(goal_id: int, manager_id: int) -> None:
+    """Delete a goal record owned by manager_id."""
     conn = get_connection()
-    _exec(conn, "DELETE FROM goals WHERE id = ?", (goal_id,))
+    _exec(conn, "DELETE FROM goals WHERE id = ? AND manager_id = ?",
+          (goal_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1217,27 +1368,28 @@ def get_weekly_summary(manager_id: int | None = None) -> dict[str, list]:
     return summary
 
 
-def get_member_summary(team_member_id):
-    """Get a full activity summary for a single team member."""
+def get_member_summary(team_member_id: int, manager_id: int) -> dict | None:
+    """Get a full activity summary for a team member owned by manager_id."""
     member = get_team_member(team_member_id)
-    if not member:
+    if not member or member.get("manager_id") != manager_id:
         return None
 
     conn = get_connection()
     summary = {"member": member}
 
     summary["recent_events"] = list_events(
-        team_member_id=team_member_id, limit=10
+        team_member_id=team_member_id, limit=10, manager_id=manager_id,
     )
-    summary["feedback"] = list_feedback(team_member_id=team_member_id)
-    summary["goals"] = list_goals(team_member_id=team_member_id)
+    summary["feedback"] = list_feedback(manager_id=manager_id, team_member_id=team_member_id)
+    summary["goals"] = list_goals(manager_id=manager_id, team_member_id=team_member_id)
 
     actions = _fetchall(
         conn,
         "SELECT ai.* FROM action_items ai "
         "JOIN events e ON ai.event_id = e.id "
-        "WHERE e.team_member_id = ? ORDER BY ai.created_at DESC LIMIT 20",
-        (team_member_id,),
+        "WHERE e.team_member_id = ? AND ai.manager_id = ? "
+        "ORDER BY ai.created_at DESC LIMIT 20",
+        (team_member_id, manager_id),
     )
     summary["action_items"] = actions
 
@@ -1266,7 +1418,7 @@ def add_journal_entry(entry_date: str, entry_type: str = "daily", content: str |
     return entry_id
 
 
-def update_journal_entry(entry_id, **kwargs):
+def update_journal_entry(entry_id: int, manager_id: int, **kwargs) -> None:
     allowed = {"content", "mood", "energy", "private_notes", "tags", "entry_type",
                 "coaching_response"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
@@ -1276,8 +1428,8 @@ def update_journal_entry(entry_id, **kwargs):
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
     _exec(conn,
-          f"UPDATE journal_entries SET {set_clause} WHERE id = ?",
-          (*fields.values(), entry_id))
+          f"UPDATE journal_entries SET {set_clause} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), entry_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -1661,40 +1813,43 @@ def get_manager_activity_trends(weeks=12, manager_id=None):
 # Member Timeline & Pre-Meeting Prep
 # ---------------------------------------------------------------------------
 
-def get_member_timeline(member_id, limit=50):
+def get_member_timeline(member_id: int, manager_id: int, limit: int = 50) -> list[dict[str, Any]]:
     conn = get_connection()
     left10 = _sql_left("created_at", 10)
     rows = _fetchall(conn, f"""
         SELECT date, type, summary, detail, source_id FROM (
             SELECT scheduled_date AS date, 'event' AS type,
                    title AS summary, notes AS detail, id AS source_id
-            FROM events WHERE team_member_id = ?
+            FROM events WHERE team_member_id = ? AND manager_id = ?
             UNION ALL
             SELECT {left10} AS date,
                    feedback_type || '_feedback' AS type,
                    COALESCE(situation, '') AS summary,
                    COALESCE(behavior, '') || ' → ' || COALESCE(impact, '') AS detail,
                    id AS source_id
-            FROM feedback WHERE team_member_id = ?
+            FROM feedback WHERE team_member_id = ? AND manager_id = ?
             UNION ALL
             SELECT {left10} AS date, 'goal' AS type,
                    description AS summary, status AS detail, id AS source_id
-            FROM goals WHERE team_member_id = ?
+            FROM goals WHERE team_member_id = ? AND manager_id = ?
             UNION ALL
             SELECT conversation_date AS date, 'career' AS type,
                    COALESCE(topic, 'Career conversation') AS summary,
                    notes AS detail, id AS source_id
-            FROM career_conversations WHERE team_member_id = ?
+            FROM career_conversations WHERE team_member_id = ? AND manager_id = ?
         ) timeline
         ORDER BY date DESC LIMIT ?
-    """, (member_id, member_id, member_id, member_id, limit))
+    """, (member_id, manager_id, member_id, manager_id,
+          member_id, manager_id, member_id, manager_id, limit))
     conn.close()
     return rows
 
 
-def get_pre_meeting_prep(member_id):
+def get_pre_meeting_prep(member_id: int, manager_id: int) -> dict | None:
     conn = get_connection()
-    member = _fetchone(conn, "SELECT * FROM team_members WHERE id = ?", (member_id,))
+    member = _fetchone(conn,
+                       "SELECT * FROM team_members WHERE id = ? AND manager_id = ?",
+                       (member_id, manager_id))
     if not member:
         conn.close()
         return None
@@ -1704,9 +1859,9 @@ def get_pre_meeting_prep(member_id):
     # Last meeting
     last_evt = _fetchone(conn,
         "SELECT scheduled_date FROM events "
-        "WHERE team_member_id = ? AND status = 'completed' "
+        "WHERE team_member_id = ? AND manager_id = ? AND status = 'completed' "
         "ORDER BY scheduled_date DESC LIMIT 1",
-        (member_id,))
+        (member_id, manager_id))
     if last_evt:
         prep["last_meeting_date"] = last_evt["scheduled_date"]
         prep["days_since_meeting"] = (
@@ -1718,9 +1873,10 @@ def get_pre_meeting_prep(member_id):
 
     # Last feedback
     last_fb = _fetchone(conn,
-        "SELECT created_at FROM feedback WHERE team_member_id = ? "
+        "SELECT created_at FROM feedback "
+        "WHERE team_member_id = ? AND manager_id = ? "
         "ORDER BY created_at DESC LIMIT 1",
-        (member_id,))
+        (member_id, manager_id))
     if last_fb:
         prep["last_feedback_date"] = last_fb["created_at"][:10]
         prep["days_since_feedback"] = (
@@ -1733,8 +1889,8 @@ def get_pre_meeting_prep(member_id):
     # Feedback ratio
     ratios = _fetchall(conn,
         "SELECT feedback_type, COUNT(*) AS cnt FROM feedback "
-        "WHERE team_member_id = ? GROUP BY feedback_type",
-        (member_id,))
+        "WHERE team_member_id = ? AND manager_id = ? GROUP BY feedback_type",
+        (member_id, manager_id))
     prep["positive_count"] = 0
     prep["constructive_count"] = 0
     for r in ratios:
@@ -1747,26 +1903,28 @@ def get_pre_meeting_prep(member_id):
     name = member["name"]
     pending_row = _fetchone(conn,
         "SELECT COUNT(*) AS cnt FROM action_items "
-        "WHERE status != 'completed' AND ("
+        "WHERE manager_id = ? AND status != 'completed' AND ("
         "  LOWER(assignee) = LOWER(?) "
-        "  OR event_id IN (SELECT id FROM events WHERE team_member_id = ?)"
+        "  OR event_id IN (SELECT id FROM events "
+        "                  WHERE team_member_id = ? AND manager_id = ?)"
         ")",
-        (name, member_id))
+        (manager_id, name, member_id, manager_id))
     prep["pending_actions"] = pending_row["cnt"] if pending_row else 0
 
     # Active goals
     prep["active_goals"] = _fetchall(conn,
         "SELECT quarter, description, status FROM goals "
-        "WHERE team_member_id = ? AND status IN ('not_started', 'in_progress') "
+        "WHERE team_member_id = ? AND manager_id = ? "
+        "AND status IN ('not_started', 'in_progress') "
         "ORDER BY quarter DESC",
-        (member_id,))
+        (member_id, manager_id))
 
     # Recent feedback
     prep["recent_feedback"] = _fetchall(conn,
         "SELECT feedback_type, situation, behavior, impact, created_at "
-        "FROM feedback WHERE team_member_id = ? "
+        "FROM feedback WHERE team_member_id = ? AND manager_id = ? "
         "ORDER BY created_at DESC LIMIT 3",
-        (member_id,))
+        (member_id, manager_id))
 
     conn.close()
     return prep
@@ -1777,46 +1935,54 @@ def get_pre_meeting_prep(member_id):
 # ---------------------------------------------------------------------------
 
 def add_career_conversation(team_member_id, conversation_date,
-                            topic=None, notes=None, next_steps=None):
+                            topic=None, notes=None, next_steps=None,
+                            manager_id=None):
     conn = get_connection()
+    if manager_id is None:
+        manager_id = _resolve_manager_id_from_member(conn, team_member_id)
     cid = _exec_returning_id(
         conn,
         "INSERT INTO career_conversations "
-        "(team_member_id, conversation_date, topic, notes, next_steps) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (team_member_id, conversation_date, topic, notes, next_steps),
+        "(manager_id, team_member_id, conversation_date, topic, notes, next_steps) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, conversation_date, topic, notes, next_steps),
     )
     _commit(conn)
     conn.close()
     return cid
 
 
-def list_career_conversations(team_member_id, limit=20):
+def list_career_conversations(team_member_id: int, manager_id: int,
+                              limit: int = 20) -> list[dict[str, Any]]:
     conn = get_connection()
     rows = _fetchall(conn,
-        "SELECT * FROM career_conversations WHERE team_member_id = ? "
+        "SELECT * FROM career_conversations "
+        "WHERE team_member_id = ? AND manager_id = ? "
         "ORDER BY conversation_date DESC LIMIT ?",
-        (team_member_id, limit))
+        (team_member_id, manager_id, limit))
     conn.close()
     return rows
 
 
 def add_skill(team_member_id, skill_name, proficiency="developing",
-              is_strength=0, is_growth_area=0, notes=None):
+              is_strength=0, is_growth_area=0, notes=None,
+              manager_id=None):
     conn = get_connection()
+    if manager_id is None:
+        manager_id = _resolve_manager_id_from_member(conn, team_member_id)
     sid = _exec_returning_id(
         conn,
         "INSERT INTO skills "
-        "(team_member_id, skill_name, proficiency, is_strength, is_growth_area, notes) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (team_member_id, skill_name, proficiency, is_strength, is_growth_area, notes),
+        "(manager_id, team_member_id, skill_name, proficiency, is_strength, is_growth_area, notes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, skill_name, proficiency, is_strength, is_growth_area, notes),
     )
     _commit(conn)
     conn.close()
     return sid
 
 
-def update_skill(skill_id, **kwargs):
+def update_skill(skill_id: int, manager_id: int, **kwargs) -> None:
     allowed = {"skill_name", "proficiency", "is_strength", "is_growth_area", "notes"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -1825,42 +1991,48 @@ def update_skill(skill_id, **kwargs):
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
     _exec(conn,
-          f"UPDATE skills SET {set_clause} WHERE id = ?",
-          (*fields.values(), skill_id))
+          f"UPDATE skills SET {set_clause} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), skill_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def list_skills(team_member_id):
+def list_skills(team_member_id: int, manager_id: int) -> list[dict[str, Any]]:
     conn = get_connection()
     rows = _fetchall(conn,
-        "SELECT * FROM skills WHERE team_member_id = ? ORDER BY skill_name",
-        (team_member_id,))
+        "SELECT * FROM skills WHERE team_member_id = ? AND manager_id = ? "
+        "ORDER BY skill_name",
+        (team_member_id, manager_id))
     conn.close()
     return rows
 
 
-def delete_skill(skill_id):
+def delete_skill(skill_id: int, manager_id: int) -> None:
     conn = get_connection()
-    _exec(conn, "DELETE FROM skills WHERE id = ?", (skill_id,))
+    _exec(conn, "DELETE FROM skills WHERE id = ? AND manager_id = ?",
+          (skill_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def add_development_plan(team_member_id, title, description=None, target_date=None):
+def add_development_plan(team_member_id, title, description=None, target_date=None,
+                         manager_id=None):
     conn = get_connection()
+    if manager_id is None:
+        manager_id = _resolve_manager_id_from_member(conn, team_member_id)
     pid = _exec_returning_id(
         conn,
         "INSERT INTO development_plans "
-        "(team_member_id, title, description, target_date) VALUES (?, ?, ?, ?)",
-        (team_member_id, title, description, target_date),
+        "(manager_id, team_member_id, title, description, target_date) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (manager_id, team_member_id, title, description, target_date),
     )
     _commit(conn)
     conn.close()
     return pid
 
 
-def update_development_plan(plan_id, **kwargs):
+def update_development_plan(plan_id: int, manager_id: int, **kwargs) -> None:
     allowed = {"title", "description", "target_date", "status"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -1869,16 +2041,17 @@ def update_development_plan(plan_id, **kwargs):
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
     _exec(conn,
-          f"UPDATE development_plans SET {set_clause} WHERE id = ?",
-          (*fields.values(), plan_id))
+          f"UPDATE development_plans SET {set_clause} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), plan_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def list_development_plans(team_member_id, status=None):
+def list_development_plans(team_member_id: int, manager_id: int,
+                           status: str | None = None) -> list[dict[str, Any]]:
     conn = get_connection()
-    query = "SELECT * FROM development_plans WHERE team_member_id = ?"
-    params = [team_member_id]
+    query = "SELECT * FROM development_plans WHERE team_member_id = ? AND manager_id = ?"
+    params = [team_member_id, manager_id]
     if status:
         query += " AND status = ?"
         params.append(status)
@@ -1889,32 +2062,39 @@ def list_development_plans(team_member_id, status=None):
     return rows
 
 
-def add_milestone(plan_id, description, target_date=None):
+def add_milestone(plan_id, description, target_date=None, manager_id=None):
     conn = get_connection()
+    if manager_id is None and plan_id is not None:
+        row = _fetchone(conn,
+                        "SELECT manager_id FROM development_plans WHERE id = ?",
+                        (plan_id,))
+        manager_id = row["manager_id"] if row else None
     mid = _exec_returning_id(
         conn,
-        "INSERT INTO milestones (plan_id, description, target_date) VALUES (?, ?, ?)",
-        (plan_id, description, target_date),
+        "INSERT INTO milestones (manager_id, plan_id, description, target_date) "
+        "VALUES (?, ?, ?, ?)",
+        (manager_id, plan_id, description, target_date),
     )
     _commit(conn)
     conn.close()
     return mid
 
 
-def complete_milestone(milestone_id):
+def complete_milestone(milestone_id: int, manager_id: int) -> None:
     conn = get_connection()
     _exec(conn,
-          "UPDATE milestones SET completed = 1, completed_at = ? WHERE id = ?",
-          (datetime.now().isoformat(), milestone_id))
+          "UPDATE milestones SET completed = 1, completed_at = ? "
+          "WHERE id = ? AND manager_id = ?",
+          (datetime.now().isoformat(), milestone_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def list_milestones(plan_id):
+def list_milestones(plan_id: int, manager_id: int) -> list[dict[str, Any]]:
     conn = get_connection()
     rows = _fetchall(conn,
-        "SELECT * FROM milestones WHERE plan_id = ? ORDER BY id",
-        (plan_id,))
+        "SELECT * FROM milestones WHERE plan_id = ? AND manager_id = ? ORDER BY id",
+        (plan_id, manager_id))
     conn.close()
     return rows
 
@@ -1971,8 +2151,8 @@ def list_delegations(manager_id: int | None = None,
     return rows
 
 
-def update_delegation(delegation_id: int, **kwargs: Any) -> None:
-    """Update delegation fields."""
+def update_delegation(delegation_id: int, manager_id: int, **kwargs: Any) -> None:
+    """Update delegation fields owned by manager_id."""
     allowed = {"task", "outcome_expected", "autonomy_level", "check_in_date",
                "notes", "status"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
@@ -1982,15 +2162,16 @@ def update_delegation(delegation_id: int, **kwargs: Any) -> None:
         fields["completed_at"] = datetime.now().isoformat()
     sets = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    _exec(conn, f"UPDATE delegations SET {sets} WHERE id = ?",
-          (*fields.values(), delegation_id))
+    _exec(conn, f"UPDATE delegations SET {sets} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), delegation_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def delete_delegation(delegation_id: int) -> None:
+def delete_delegation(delegation_id: int, manager_id: int) -> None:
     conn = get_connection()
-    _exec(conn, "DELETE FROM delegations WHERE id = ?", (delegation_id,))
+    _exec(conn, "DELETE FROM delegations WHERE id = ? AND manager_id = ?",
+          (delegation_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -2068,9 +2249,10 @@ def list_running_notes(team_member_id: int,
     return rows
 
 
-def delete_running_note(note_id: int) -> None:
+def delete_running_note(note_id: int, manager_id: int) -> None:
     conn = get_connection()
-    _exec(conn, "DELETE FROM running_notes WHERE id = ?", (note_id,))
+    _exec(conn, "DELETE FROM running_notes WHERE id = ? AND manager_id = ?",
+          (note_id, manager_id))
     _commit(conn)
     conn.close()
 
@@ -2121,8 +2303,8 @@ def list_decisions(manager_id: int | None = None,
     return rows
 
 
-def update_decision(decision_id: int, **kwargs: Any) -> None:
-    """Update a decision (e.g., add actual_outcome, change status)."""
+def update_decision(decision_id: int, manager_id: int, **kwargs: Any) -> None:
+    """Update a decision owned by manager_id."""
     allowed = {"title", "context", "alternatives", "rationale",
                "expected_outcome", "review_date", "status", "actual_outcome"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
@@ -2131,15 +2313,16 @@ def update_decision(decision_id: int, **kwargs: Any) -> None:
     fields["updated_at"] = datetime.now().isoformat()
     sets = ", ".join(f"{k} = ?" for k in fields)
     conn = get_connection()
-    _exec(conn, f"UPDATE decisions SET {sets} WHERE id = ?",
-          (*fields.values(), decision_id))
+    _exec(conn, f"UPDATE decisions SET {sets} WHERE id = ? AND manager_id = ?",
+          (*fields.values(), decision_id, manager_id))
     _commit(conn)
     conn.close()
 
 
-def delete_decision(decision_id: int) -> None:
+def delete_decision(decision_id: int, manager_id: int) -> None:
     conn = get_connection()
-    _exec(conn, "DELETE FROM decisions WHERE id = ?", (decision_id,))
+    _exec(conn, "DELETE FROM decisions WHERE id = ? AND manager_id = ?",
+          (decision_id, manager_id))
     _commit(conn)
     conn.close()
 

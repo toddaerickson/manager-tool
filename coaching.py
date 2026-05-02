@@ -118,11 +118,11 @@ RULES:
 """
 
 
-def _get_client():
-    """Get an Anthropic client using the stored API key."""
+def _get_client(manager_id):
+    """Get an Anthropic client using this manager's stored API key."""
     if Anthropic is None:
         return None
-    api_key = db.get_config("anthropic_api_key")
+    api_key = db.get_config("anthropic_api_key", manager_id=manager_id)
     if not api_key:
         return None
     return Anthropic(api_key=api_key)
@@ -166,7 +166,7 @@ def _build_context(notes, context_type="journal", member_name=None,
     return "\n".join(parts)
 
 
-def get_coaching_response(notes, context_type="journal", member_name=None,
+def get_coaching_response(notes, manager_id, context_type="journal", member_name=None,
                           event_type=None, prep_data=None):
     """Call Claude to generate coaching questions and provocations.
 
@@ -175,7 +175,7 @@ def get_coaching_response(notes, context_type="journal", member_name=None,
     if not notes or not notes.strip():
         return None
 
-    client = _get_client()
+    client = _get_client(manager_id)
     if client is None:
         # Fallback: use the local wisdom matcher instead of API
         return _local_fallback(notes, context_type, member_name)
@@ -435,7 +435,7 @@ def generate_rule_based_suggestion(manager_id):
 
 def generate_ai_suggestion(manager_id):
     """Tier 2: AI-enhanced suggestion using Claude. Returns suggestion text or None."""
-    client = _get_client()
+    client = _get_client(manager_id)
     if not client:
         return None
 

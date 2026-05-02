@@ -216,21 +216,21 @@ def cmd_config_setup(args=None):
     2. Generate an App Password for "Mail"
     3. Use that 16-character password below (not your regular password)
 """)
-    name = prompt("Your name", db.get_config("manager_name"))
-    email = prompt("Your email address", db.get_config("manager_email"))
-    smtp_server = prompt("SMTP server", db.get_config("smtp_server", "smtp.gmail.com"))
-    smtp_port = prompt("SMTP port", db.get_config("smtp_port", "587"))
-    smtp_user = prompt("SMTP username (usually your email)", db.get_config("smtp_user", email))
+    name = prompt("Your name", db.get_config("manager_name", manager_id=1))
+    email = prompt("Your email address", db.get_config("manager_email", manager_id=1))
+    smtp_server = prompt("SMTP server", db.get_config("smtp_server", manager_id=1, default="smtp.gmail.com"))
+    smtp_port = prompt("SMTP port", db.get_config("smtp_port", manager_id=1, default="587"))
+    smtp_user = prompt("SMTP username (usually your email)", db.get_config("smtp_user", manager_id=1, default=email))
     smtp_password = prompt("SMTP password / App Password")
 
     if confirm("Save this configuration?"):
-        db.set_config("manager_name", name)
-        db.set_config("manager_email", email)
-        db.set_config("smtp_server", smtp_server)
-        db.set_config("smtp_port", smtp_port)
-        db.set_config("smtp_user", smtp_user)
+        db.set_config("manager_name", name, manager_id=1)
+        db.set_config("manager_email", email, manager_id=1)
+        db.set_config("smtp_server", smtp_server, manager_id=1)
+        db.set_config("smtp_port", smtp_port, manager_id=1)
+        db.set_config("smtp_user", smtp_user, manager_id=1)
         if smtp_password:
-            db.set_config("smtp_password", smtp_password)
+            db.set_config("smtp_password", smtp_password, manager_id=1)
         success("Configuration saved.")
     else:
         warn("Configuration not saved.")
@@ -238,7 +238,7 @@ def cmd_config_setup(args=None):
 
 def cmd_config_show(args=None):
     header("Current Configuration")
-    config = db.get_all_config()
+    config = db.get_all_config(manager_id=1)
     if not config:
         warn("No configuration set. Run: python manager_tool.py config setup")
         return
@@ -308,7 +308,7 @@ def cmd_team_remove(args):
 
 
 def _show_member_summary(member_id):
-    summary = db.get_member_summary(member_id)
+    summary = db.get_member_summary(member_id, manager_id=1)
     if not summary:
         error(f"Member ID {member_id} not found.")
         return
@@ -390,7 +390,7 @@ def cmd_event_schedule(args=None):
     success(f"Event scheduled (ID: {event_id}): {title} on {scheduled_date} at {scheduled_time}")
 
     if confirm("Send a Google Calendar invitation for this event?"):
-        event = db.get_event(event_id)
+        event = db.get_event(event_id, manager_id=1)
         _send_invite_for_event(event)
 
 
@@ -421,7 +421,7 @@ def cmd_event_show(args):
     if not event_id:
         error("Please provide an event ID.")
         return
-    event = db.get_event(int(event_id))
+    event = db.get_event(int(event_id), manager_id=1)
     if not event:
         error(f"Event ID {event_id} not found.")
         return
@@ -465,13 +465,13 @@ def cmd_event_complete(args=None):
         event_id = prompt("\nEnter event ID to mark complete")
     if not event_id:
         return
-    event = db.get_event(int(event_id))
+    event = db.get_event(int(event_id), manager_id=1)
     if not event:
         error(f"Event ID {event_id} not found.")
         return
     print(f"\n  Completing: {BOLD}{event['title']}{RESET} ({event['scheduled_date']})")
     notes = prompt("Meeting notes (optional, press Enter to skip)")
-    db.complete_event(int(event_id), notes=notes)
+    db.complete_event(int(event_id), manager_id=1, notes=notes)
     success(f"Event #{event_id} marked as completed.")
     while confirm("Add an action item from this meeting?"):
         desc = prompt("  Action item description")
@@ -489,12 +489,12 @@ def cmd_event_cancel(args):
     if not event_id:
         error("Please provide an event ID.")
         return
-    event = db.get_event(int(event_id))
+    event = db.get_event(int(event_id), manager_id=1)
     if not event:
         error(f"Event ID {event_id} not found.")
         return
     if confirm(f"Cancel '{event['title']}' on {event['scheduled_date']}?"):
-        db.cancel_event(int(event_id))
+        db.cancel_event(int(event_id), manager_id=1)
         success(f"Event #{event_id} cancelled.")
 
 
@@ -507,7 +507,7 @@ def cmd_event_invite_interactive(args=None):
     print_table(events, ["id", "title", "scheduled_date", "scheduled_time", "participant_name"])
     event_id = prompt("\nEnter event ID to send invite for")
     if event_id and event_id.isdigit():
-        event = db.get_event(int(event_id))
+        event = db.get_event(int(event_id), manager_id=1)
         if event:
             _send_invite_for_event(event)
 
@@ -517,7 +517,7 @@ def cmd_event_invite(args):
     if not event_id:
         error("Please provide an event ID.")
         return
-    event = db.get_event(int(event_id))
+    event = db.get_event(int(event_id), manager_id=1)
     if not event:
         error(f"Event ID {event_id} not found.")
         return
@@ -535,7 +535,7 @@ def _send_invite_for_event(event):
         ok, msg = cal.send_invite_to_self(event)
         if ok:
             success(msg)
-            db.update_event(event["id"], calendar_invite_sent=1)
+            db.update_event(event["id"], manager_id=1, calendar_invite_sent=1)
         else:
             error(msg)
     if send_to_participant:
@@ -546,8 +546,8 @@ def _send_invite_for_event(event):
             error(msg)
     if not send_to_self and not send_to_participant:
         if confirm("Save .ics file locally instead?"):
-            manager_name = db.get_config("manager_name", "Manager")
-            manager_email = db.get_config("manager_email", "")
+            manager_name = db.get_config("manager_name", manager_id=1, default="Manager")
+            manager_email = db.get_config("manager_email", manager_id=1, default="")
             ics = cal.generate_ics(event, organizer_name=manager_name, organizer_email=manager_email,
                                    attendee_name=event.get("participant_name"), attendee_email=event.get("participant_email"))
             filepath = cal.save_ics_file(ics)
@@ -594,7 +594,7 @@ def cmd_action_complete(args=None):
         cmd_action_list_pending()
         item_id = prompt("\nEnter action item ID to complete")
     if item_id and str(item_id).isdigit():
-        db.complete_action_item(int(item_id))
+        db.complete_action_item(int(item_id), manager_id=1)
         success(f"Action item #{item_id} completed.")
 
 
@@ -626,7 +626,7 @@ def _record_feedback_for_member(team_member_id, event_id=None):
 
 def cmd_feedback_list(args=None):
     header("Feedback History")
-    feedback = db.list_feedback()
+    feedback = db.list_feedback(manager_id=1)
     if not feedback:
         info("No feedback recorded yet.")
         return
@@ -665,7 +665,7 @@ def cmd_goals_add(args=None):
 
 def cmd_goals_list(args=None):
     header("Quarterly Goals")
-    goals = db.list_goals()
+    goals = db.list_goals(manager_id=1)
     if not goals:
         info("No goals set yet.")
         return
@@ -683,7 +683,7 @@ def cmd_goals_update(args=None):
         return
     statuses = ["not_started", "in_progress", "met", "exceeded", "partially_met", "not_met"]
     idx = prompt_choice("New status:", statuses)
-    db.update_goal(int(goal_id), status=statuses[idx])
+    db.update_goal(int(goal_id), manager_id=1, status=statuses[idx])
     success(f"Goal #{goal_id} updated to '{statuses[idx]}'.")
 
 

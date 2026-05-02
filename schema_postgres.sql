@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS action_items (
 
 CREATE TABLE IF NOT EXISTS feedback (
     id SERIAL PRIMARY KEY,
+    manager_id INTEGER REFERENCES managers(id),
     team_member_id INTEGER NOT NULL REFERENCES team_members(id),
     event_id INTEGER REFERENCES events(id),
     feedback_type TEXT NOT NULL CHECK(feedback_type IN
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS feedback (
 
 CREATE TABLE IF NOT EXISTS goals (
     id SERIAL PRIMARY KEY,
+    manager_id INTEGER REFERENCES managers(id),
     team_member_id INTEGER NOT NULL REFERENCES team_members(id),
     quarter TEXT NOT NULL,
     description TEXT NOT NULL,
@@ -84,8 +86,10 @@ CREATE TABLE IF NOT EXISTS goals (
 );
 
 CREATE TABLE IF NOT EXISTS config (
-    key TEXT PRIMARY KEY,
-    value TEXT
+    manager_id INTEGER NOT NULL DEFAULT 0,
+    key TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (manager_id, key)
 );
 
 CREATE TABLE IF NOT EXISTS journal_entries (
@@ -115,6 +119,7 @@ CREATE TABLE IF NOT EXISTS self_assessments (
 
 CREATE TABLE IF NOT EXISTS career_conversations (
     id SERIAL PRIMARY KEY,
+    manager_id INTEGER REFERENCES managers(id),
     team_member_id INTEGER NOT NULL REFERENCES team_members(id),
     conversation_date TEXT NOT NULL,
     topic TEXT,
@@ -125,6 +130,7 @@ CREATE TABLE IF NOT EXISTS career_conversations (
 
 CREATE TABLE IF NOT EXISTS skills (
     id SERIAL PRIMARY KEY,
+    manager_id INTEGER REFERENCES managers(id),
     team_member_id INTEGER NOT NULL REFERENCES team_members(id),
     skill_name TEXT NOT NULL,
     proficiency TEXT DEFAULT 'developing'
@@ -138,6 +144,7 @@ CREATE TABLE IF NOT EXISTS skills (
 
 CREATE TABLE IF NOT EXISTS development_plans (
     id SERIAL PRIMARY KEY,
+    manager_id INTEGER REFERENCES managers(id),
     team_member_id INTEGER NOT NULL REFERENCES team_members(id),
     title TEXT NOT NULL,
     description TEXT,
@@ -150,6 +157,7 @@ CREATE TABLE IF NOT EXISTS development_plans (
 
 CREATE TABLE IF NOT EXISTS milestones (
     id SERIAL PRIMARY KEY,
+    manager_id INTEGER REFERENCES managers(id),
     plan_id INTEGER NOT NULL REFERENCES development_plans(id),
     description TEXT NOT NULL,
     target_date TEXT,
