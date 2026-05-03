@@ -727,6 +727,19 @@ class TestEventsSchedule:
         assert resp.status_code == 200  # form re-renders
         assert Event.objects.count() == 0
 
+    def test_time_dropdown_shows_friendly_am_pm_labels(self, client):
+        self._setup(client)
+        body = client.get("/events/schedule/").content.decode()
+        # 30-min increments, 12-hour display format
+        assert "9:00 AM" in body
+        assert "12:00 PM" in body  # noon edge case
+        assert "1:30 PM" in body   # post-noon edge case
+        assert "9:00 PM" in body
+        # Stored value is 24-hour HH:MM
+        assert 'value="09:00"' in body
+        assert 'value="12:00"' in body
+        assert 'value="13:30"' in body
+
     def test_team_member_dropdown_scoped_to_this_manager(self, client):
         m = self._setup(client)
         m2 = Manager.objects.create(
