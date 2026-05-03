@@ -12,7 +12,7 @@ import os
 import re
 import logging
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 logger = logging.getLogger("manager_tool.database")
@@ -484,6 +484,45 @@ def _add_months_anchored(start: date, n: int) -> date:
 
 
 # ---------------------------------------------------------------------------
+# 1:1 session lock contract
+# ---------------------------------------------------------------------------
+#
+# A 1:1 session record is editable for exactly LOCK_WINDOW after `created_at`,
+# then immutable. The lock is computed on read from `created_at` (no
+# `locked_at` column) — it's a deterministic function of an existing column
+# and denormalizing would invite drift on backfilled imports. Composes
+# cleanly with future Django (`@property`).
+
+LOCK_WINDOW = timedelta(hours=24)
+
+
+def is_session_locked(created_at, now=None) -> bool:
+    """True when a 1:1 session can no longer be edited.
+
+    `now` is injectable so the lock contract is unit-testable without
+    `freezegun`. Default: server clock in UTC.
+
+    Boundary contract: `>=` — a session created exactly LOCK_WINDOW ago
+    is locked. Off-by-one risk on the boundary is real on PG (microsecond
+    precision) vs SQLite (second precision); tests cover both sides.
+
+    `created_at` may be a `datetime` (PG psycopg2 with TIMESTAMPTZ) or an
+    ISO string (post-`_normalize_row` SQLite path); coerce to datetime.
+    Naive datetimes are interpreted as server UTC."""
+    if not created_at:
+        return False
+    if isinstance(created_at, str):
+        created_at = datetime.fromisoformat(created_at)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    if now is None:
+        now = datetime.now(tz=timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return (now - created_at) >= LOCK_WINDOW
+
+
+# ---------------------------------------------------------------------------
 # Migration runner (P2.1)
 #
 # A small homegrown migration system: each entry in `_MIGRATIONS` is a
@@ -750,6 +789,57 @@ def _migration_events_recurrence(conn) -> None:
     _commit(conn)
 
 
+def _migration_one_on_one_sessions(conn) -> None:
+    """PR `db/one-on-one-sessions`: add `one_on_one_sessions` table for the
+    1:1 Meeting page. Schema dual-written across schema_postgres.sql and the
+    SQLite block in this file; this migration brings existing deploys forward.
+
+    Idempotent via `CREATE TABLE IF NOT EXISTS`. The UNIQUE constraint on
+    `(manager_id, team_member_id, session_date)` is part of the table DDL
+    so repeat saves UPSERT instead of duplicating. The lock contract is
+    computed on read from `created_at` (no `locked_at` column)."""
+    if _detect_pg():
+        _exec(conn,
+            "CREATE TABLE IF NOT EXISTS one_on_one_sessions ("
+            "  id SERIAL PRIMARY KEY,"
+            "  manager_id INTEGER NOT NULL REFERENCES managers(id),"
+            "  team_member_id INTEGER NOT NULL REFERENCES team_members(id),"
+            "  event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,"
+            "  session_date TEXT NOT NULL,"
+            "  direct_notes TEXT,"
+            "  manager_notes TEXT,"
+            "  followup_notes TEXT,"
+            "  created_at TIMESTAMPTZ DEFAULT NOW(),"
+            "  updated_at TIMESTAMPTZ DEFAULT NOW(),"
+            "  UNIQUE (manager_id, team_member_id, session_date)"
+            ")")
+    else:
+        _exec(conn,
+            "CREATE TABLE IF NOT EXISTS one_on_one_sessions ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  manager_id INTEGER NOT NULL,"
+            "  team_member_id INTEGER NOT NULL,"
+            "  event_id INTEGER,"
+            "  session_date TEXT NOT NULL,"
+            "  direct_notes TEXT,"
+            "  manager_notes TEXT,"
+            "  followup_notes TEXT,"
+            "  created_at TEXT DEFAULT (datetime('now')),"
+            "  updated_at TEXT DEFAULT (datetime('now')),"
+            "  FOREIGN KEY (manager_id) REFERENCES managers(id),"
+            "  FOREIGN KEY (team_member_id) REFERENCES team_members(id),"
+            "  FOREIGN KEY (event_id) REFERENCES events(id),"
+            "  UNIQUE (manager_id, team_member_id, session_date)"
+            ")")
+    _exec(conn,
+        "CREATE INDEX IF NOT EXISTS ix_one_on_one_sessions_member_date "
+        "ON one_on_one_sessions (team_member_id, session_date DESC)")
+    _exec(conn,
+        "CREATE INDEX IF NOT EXISTS ix_one_on_one_sessions_manager "
+        "ON one_on_one_sessions (manager_id)")
+    _commit(conn)
+
+
 def _migration_hot_path_indexes(conn) -> None:
     """P4.1: btree indexes on hot WHERE columns (AUDIT M5). Idempotent via
     `IF NOT EXISTS`. Operators on Postgres prod should consider running
@@ -795,6 +885,7 @@ _MIGRATIONS: list[tuple[str, Any]] = [
     ("0007_hot_path_indexes", _migration_hot_path_indexes),
     ("0008_goals_target_date", _migration_goals_target_date),
     ("0009_events_recurrence", _migration_events_recurrence),
+    ("0010_one_on_one_sessions", _migration_one_on_one_sessions),
 ]
 
 
@@ -1131,6 +1222,23 @@ def init_db(*, force: bool = False):
             FOREIGN KEY (team_member_id) REFERENCES team_members(id)
         );
 
+        CREATE TABLE IF NOT EXISTS one_on_one_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manager_id INTEGER NOT NULL,
+            team_member_id INTEGER NOT NULL,
+            event_id INTEGER,
+            session_date TEXT NOT NULL,
+            direct_notes TEXT,
+            manager_notes TEXT,
+            followup_notes TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (manager_id) REFERENCES managers(id),
+            FOREIGN KEY (team_member_id) REFERENCES team_members(id),
+            FOREIGN KEY (event_id) REFERENCES events(id),
+            UNIQUE (manager_id, team_member_id, session_date)
+        );
+
         CREATE TABLE IF NOT EXISTS decisions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             manager_id INTEGER,
@@ -1187,6 +1295,10 @@ def init_db(*, force: bool = False):
             ON events (parent_event_id);
         CREATE INDEX IF NOT EXISTS ix_events_manager_parent
             ON events (manager_id, parent_event_id);
+        CREATE INDEX IF NOT EXISTS ix_one_on_one_sessions_member_date
+            ON one_on_one_sessions (team_member_id, session_date DESC);
+        CREATE INDEX IF NOT EXISTS ix_one_on_one_sessions_manager
+            ON one_on_one_sessions (manager_id);
         """)
         conn.commit()
 
@@ -2776,10 +2888,17 @@ def get_member_timeline(member_id: int, manager_id: int, limit: int = 50) -> lis
                        COALESCE(topic, 'Career conversation') AS summary,
                        notes AS detail, id AS source_id
                 FROM career_conversations WHERE team_member_id = ? AND manager_id = ?
+                UNION ALL
+                SELECT session_date AS date, 'one_on_one' AS type,
+                       'One-on-one' AS summary,
+                       COALESCE(direct_notes, '') AS detail, id AS source_id
+                FROM one_on_one_sessions
+                WHERE team_member_id = ? AND manager_id = ?
             ) timeline
             ORDER BY date DESC LIMIT ?
         """, (member_id, manager_id, member_id, manager_id,
-              member_id, manager_id, member_id, manager_id, limit))
+              member_id, manager_id, member_id, manager_id,
+              member_id, manager_id, limit))
     return rows
 
 
@@ -3189,6 +3308,165 @@ def delete_running_note(note_id: int, manager_id: int) -> None:
         _exec(conn, "DELETE FROM running_notes WHERE id = ? AND manager_id = ?",
               (note_id, manager_id))
         _commit(conn)
+
+
+# ---------------------------------------------------------------------------
+# 1:1 Meeting Sessions (the keystone artifact of a weekly 1:1)
+# ---------------------------------------------------------------------------
+#
+# Editable for `LOCK_WINDOW` after `created_at`; thereafter immutable.
+# UPSERT on (manager_id, team_member_id, session_date) so a double-click
+# on Save updates the existing row rather than creating a duplicate.
+#
+# `manager_id` is keyword-only and validated with `if x is None: raise
+# ValueError(...)` rather than `assert` — `assert` is stripped under
+# `python -O`, which would silently disable the cross-tenant guard in
+# production. New code must not propagate the existing assert pattern.
+
+def create_one_on_one_session(*, manager_id: int, team_member_id: int,
+                              session_date: str,
+                              direct_notes: str = "",
+                              manager_notes: str = "",
+                              followup_notes: str = "",
+                              event_id: int | None = None) -> int:
+    """Insert a 1:1 session (or UPSERT if one already exists for this
+    manager/member/date). Returns the row id.
+
+    When `event_id` is supplied, asserts `event.team_member_id` matches
+    the session's `team_member_id` to catch the case where the user
+    started a 1:1 from one member's page while a stale event from a
+    different member was the latest in cache."""
+    if manager_id is None:
+        raise ValueError("manager_id required (no implicit cross-tenant)")
+    if team_member_id is None:
+        raise ValueError("team_member_id required")
+    if not session_date:
+        raise ValueError("session_date required")
+
+    with _connect() as conn:
+        if event_id is not None:
+            ev = _fetchone(conn,
+                "SELECT manager_id, team_member_id FROM events WHERE id = ?",
+                (event_id,))
+            if ev is None:
+                raise ValueError(f"event {event_id} does not exist")
+            if ev["manager_id"] != manager_id:
+                raise ValueError(
+                    f"event {event_id} belongs to a different manager")
+            if ev["team_member_id"] != team_member_id:
+                raise ValueError(
+                    f"event {event_id} is for team_member {ev['team_member_id']}, "
+                    f"not {team_member_id} — refuse to bind a session to a "
+                    f"different member's event")
+
+        cur = _exec(conn,
+            "INSERT INTO one_on_one_sessions "
+            "(manager_id, team_member_id, event_id, session_date, "
+            " direct_notes, manager_notes, followup_notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(manager_id, team_member_id, session_date) "
+            "DO UPDATE SET "
+            "  direct_notes = excluded.direct_notes, "
+            "  manager_notes = excluded.manager_notes, "
+            "  followup_notes = excluded.followup_notes, "
+            "  event_id = COALESCE(excluded.event_id, one_on_one_sessions.event_id), "
+            "  updated_at = " + _sql_now(),
+            (manager_id, team_member_id, event_id, session_date,
+             direct_notes, manager_notes, followup_notes))
+        _commit(conn)
+
+        # The INSERT may have returned no row from cur on UPSERT; fetch the
+        # canonical id by the unique tuple. This works on both backends.
+        row = _fetchone(conn,
+            "SELECT id FROM one_on_one_sessions "
+            "WHERE manager_id = ? AND team_member_id = ? AND session_date = ?",
+            (manager_id, team_member_id, session_date))
+    return row["id"]
+
+
+def get_one_on_one_session(session_id: int, *, manager_id: int) -> dict | None:
+    """Fetch a 1:1 session scoped to manager. Returns None for unknown id
+    or cross-tenant access."""
+    if manager_id is None:
+        raise ValueError("manager_id required (no implicit cross-tenant)")
+    with _connect() as conn:
+        return _fetchone(conn,
+            "SELECT * FROM one_on_one_sessions "
+            "WHERE id = ? AND manager_id = ?",
+            (session_id, manager_id))
+
+
+def update_one_on_one_session(session_id: int, *, manager_id: int,
+                              **kwargs) -> None:
+    """Update an editable 1:1 session. Raises PermissionError if the row's
+    `created_at` is older than LOCK_WINDOW. Allowed fields:
+    direct_notes, manager_notes, followup_notes."""
+    if manager_id is None:
+        raise ValueError("manager_id required (no implicit cross-tenant)")
+
+    allowed = {"direct_notes", "manager_notes", "followup_notes"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+
+    with _connect() as conn:
+        row = _fetchone(conn,
+            "SELECT id, created_at FROM one_on_one_sessions "
+            "WHERE id = ? AND manager_id = ?",
+            (session_id, manager_id))
+        if row is None:
+            raise ValueError(
+                f"session {session_id} not found for this manager")
+        if is_session_locked(row["created_at"]):
+            raise PermissionError(
+                f"session {session_id} is locked (created_at "
+                f"{row['created_at']} + {LOCK_WINDOW} has elapsed); "
+                f"record is immutable")
+
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [session_id, manager_id]
+        _exec(conn,
+            f"UPDATE one_on_one_sessions SET {sets}, updated_at = {_sql_now()} "
+            "WHERE id = ? AND manager_id = ?",
+            values)
+        _commit(conn)
+
+
+def list_one_on_one_sessions(*, manager_id: int,
+                             team_member_id: int | None = None,
+                             limit: int = 20) -> list[dict]:
+    """Past sessions ordered session_date DESC, id DESC.
+    Optionally filtered to a single member."""
+    if manager_id is None:
+        raise ValueError("manager_id required (no implicit cross-tenant)")
+
+    sql = "SELECT * FROM one_on_one_sessions WHERE manager_id = ?"
+    params: list[Any] = [manager_id]
+    if team_member_id is not None:
+        sql += " AND team_member_id = ?"
+        params.append(team_member_id)
+    sql += " ORDER BY session_date DESC, id DESC LIMIT ?"
+    params.append(limit)
+
+    with _connect() as conn:
+        return _fetchall(conn, sql, params)
+
+
+def get_most_recent_one_on_one(*, manager_id: int,
+                               team_member_id: int) -> dict | None:
+    """The most recent 1:1 session for this member (any status). Used by
+    the live-meeting page to render a carry-over banner from prior
+    `followup_notes`."""
+    if manager_id is None:
+        raise ValueError("manager_id required (no implicit cross-tenant)")
+    if team_member_id is None:
+        raise ValueError("team_member_id required")
+    with _connect() as conn:
+        return _fetchone(conn,
+            "SELECT * FROM one_on_one_sessions "
+            "WHERE manager_id = ? AND team_member_id = ? "
+            "ORDER BY session_date DESC, id DESC LIMIT 1",
+            (manager_id, team_member_id))
 
 
 # ---------------------------------------------------------------------------

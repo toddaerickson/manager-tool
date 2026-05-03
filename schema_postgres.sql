@@ -235,6 +235,27 @@ CREATE TABLE IF NOT EXISTS running_notes (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 1:1 meeting session records (the keystone artifact of a weekly meeting).
+-- Editable for 24 hours after first save (computed on read from created_at);
+-- thereafter immutable. UPSERT on (manager_id, team_member_id, session_date)
+-- so a double-click on Save updates the existing row instead of creating a
+-- duplicate. created_at uses TIMESTAMPTZ deliberately — every other table
+-- here uses naked TIMESTAMP, but the lock contract is time-comparison and
+-- needs an unambiguous timezone (server UTC).
+CREATE TABLE IF NOT EXISTS one_on_one_sessions (
+    id SERIAL PRIMARY KEY,
+    manager_id INTEGER NOT NULL REFERENCES managers(id),
+    team_member_id INTEGER NOT NULL REFERENCES team_members(id),
+    event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+    session_date TEXT NOT NULL,
+    direct_notes TEXT,
+    manager_notes TEXT,
+    followup_notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (manager_id, team_member_id, session_date)
+);
+
 -- Decision log / decision journal
 CREATE TABLE IF NOT EXISTS decisions (
     id SERIAL PRIMARY KEY,
@@ -297,3 +318,7 @@ CREATE INDEX IF NOT EXISTS ix_events_parent
 CREATE INDEX IF NOT EXISTS ix_events_manager_parent
     ON events (manager_id, parent_event_id)
     WHERE parent_event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_one_on_one_sessions_member_date
+    ON one_on_one_sessions (team_member_id, session_date DESC);
+CREATE INDEX IF NOT EXISTS ix_one_on_one_sessions_manager
+    ON one_on_one_sessions (manager_id);

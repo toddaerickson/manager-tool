@@ -1814,3 +1814,262 @@ class TestExpiryWarning:
         assert count == 11, f"children must survive parent delete; got {count} rows"
 
 
+class TestSessionLockHelper:
+    """is_session_locked is a pure function with an injectable `now` so the
+    24-hour lock contract is unit-testable without freezegun. Boundary is
+    `>=` (a session created exactly LOCK_WINDOW ago is locked)."""
+
+    def test_none_created_at_is_unlocked(self):
+        assert db.is_session_locked(None) is False
+        assert db.is_session_locked("") is False
+
+    def test_within_window_is_unlocked(self):
+        from datetime import datetime, timedelta, timezone
+        now = datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
+        created = now - timedelta(hours=23, minutes=59, seconds=59)
+        assert db.is_session_locked(created, now=now) is False
+
+    def test_exactly_24h_is_locked(self):
+        """Boundary: >= LOCK_WINDOW. A session created exactly 24h ago IS
+        locked. Off-by-one would let edits slip through on the boundary."""
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
+        created = datetime(2026, 5, 2, 12, 0, 0, tzinfo=timezone.utc)
+        assert db.is_session_locked(created, now=now) is True
+
+    def test_after_24h_is_locked(self):
+        from datetime import datetime, timedelta, timezone
+        now = datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
+        created = now - timedelta(hours=24, minutes=0, seconds=1)
+        assert db.is_session_locked(created, now=now) is True
+
+    def test_iso_string_created_at(self):
+        """SQLite path returns ISO strings via _normalize_row; helper must
+        coerce to datetime."""
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
+        # 25h ago in ISO form — naive (SQLite doesn't store TZ info).
+        assert db.is_session_locked("2026-05-02T11:00:00", now=now) is True
+
+    def test_naive_created_at_assumed_utc(self):
+        """Naive datetime (no tzinfo) is interpreted as server UTC."""
+        from datetime import datetime, timezone
+        now = datetime(2026, 5, 3, 12, 0, 0, tzinfo=timezone.utc)
+        created_naive = datetime(2026, 5, 2, 11, 59, 59)  # 24h+1s ago, naive
+        assert db.is_session_locked(created_naive, now=now) is True
+
+
+class TestOneOnOneSessions:
+    """create / read / list / update + UPSERT + cross-tenant + lock guard +
+    event_id consistency. Migration idempotency via re-run."""
+
+    def _setup(self, suffix=""):
+        mid = db.create_manager(f"o3_mgr{suffix}", f"O3{suffix}", "pass1234")
+        member_id = db.add_team_member(f"O3 Member{suffix}", manager_id=mid)
+        return mid, member_id
+
+    def test_create_and_read_roundtrip(self):
+        mid, member_id = self._setup()
+        sid = db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_id,
+            session_date="2026-05-03",
+            direct_notes="Their week was good",
+            manager_notes="Praise progress",
+            followup_notes="Schedule promotion review")
+        row = db.get_one_on_one_session(sid, manager_id=mid)
+        assert row is not None
+        assert row["direct_notes"] == "Their week was good"
+        assert row["followup_notes"] == "Schedule promotion review"
+
+    def test_rejects_none_manager(self):
+        try:
+            db.create_one_on_one_session(
+                manager_id=None, team_member_id=1, session_date="2026-05-03")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("manager_id=None must raise")
+        try:
+            db.get_one_on_one_session(1, manager_id=None)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("get with manager_id=None must raise")
+        try:
+            db.list_one_on_one_sessions(manager_id=None)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("list with manager_id=None must raise")
+
+    def test_upsert_on_same_date_updates_in_place(self):
+        """Double-click on Save must UPDATE the existing row, not create
+        a duplicate. The unique constraint enforces this; the helper's
+        ON CONFLICT clause handles the conflict."""
+        mid, member_id = self._setup()
+        sid1 = db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_id,
+            session_date="2026-05-03", direct_notes="v1")
+        sid2 = db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_id,
+            session_date="2026-05-03", direct_notes="v2")
+        assert sid1 == sid2, "UPSERT should target the same row"
+        row = db.get_one_on_one_session(sid1, manager_id=mid)
+        assert row["direct_notes"] == "v2"
+        # And the count is exactly one row for this tuple.
+        rows = db.list_one_on_one_sessions(
+            manager_id=mid, team_member_id=member_id)
+        assert len(rows) == 1
+
+    def test_cross_tenant_isolation(self):
+        mid_a, member_a = self._setup("_a")
+        mid_b, member_b = self._setup("_b")
+        sid_a = db.create_one_on_one_session(
+            manager_id=mid_a, team_member_id=member_a,
+            session_date="2026-05-03", direct_notes="A's notes")
+        sid_b = db.create_one_on_one_session(
+            manager_id=mid_b, team_member_id=member_b,
+            session_date="2026-05-03", direct_notes="B's notes")
+
+        # Manager A cannot fetch B's session even with the right id.
+        assert db.get_one_on_one_session(sid_b, manager_id=mid_a) is None
+        # Manager B cannot fetch A's session.
+        assert db.get_one_on_one_session(sid_a, manager_id=mid_b) is None
+        # list scoped — A sees only A's; B sees only B's.
+        a_list = db.list_one_on_one_sessions(manager_id=mid_a)
+        b_list = db.list_one_on_one_sessions(manager_id=mid_b)
+        assert {r["direct_notes"] for r in a_list} == {"A's notes"}
+        assert {r["direct_notes"] for r in b_list} == {"B's notes"}
+
+    def test_event_id_consistency_check_rejects_wrong_member(self):
+        mid, member_a = self._setup("_evA")
+        member_b = db.add_team_member("Other Member", manager_id=mid)
+        eid = db.create_event("1:1 with A", "one_on_one",
+                              "2026-05-03", "10:00",
+                              team_member_id=member_a, manager_id=mid)
+
+        # Binding a session for member_b to member_a's event must raise.
+        try:
+            db.create_one_on_one_session(
+                manager_id=mid, team_member_id=member_b,
+                session_date="2026-05-03", event_id=eid)
+        except ValueError as e:
+            assert "different member" in str(e) or "team_member" in str(e)
+        else:
+            raise AssertionError(
+                "event_id pointing at a different member's event must raise")
+
+    def test_event_id_consistency_check_accepts_matching_member(self):
+        mid, member_id = self._setup()
+        eid = db.create_event("Weekly 1:1", "one_on_one",
+                              "2026-05-03", "10:00",
+                              team_member_id=member_id, manager_id=mid)
+        # Matching event_id must succeed.
+        sid = db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_id,
+            session_date="2026-05-03", event_id=eid)
+        assert sid is not None
+
+    def test_update_within_window_succeeds(self):
+        mid, member_id = self._setup()
+        sid = db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_id,
+            session_date="2026-05-03", direct_notes="initial")
+        # Just-created → editable.
+        db.update_one_on_one_session(sid, manager_id=mid,
+                                     direct_notes="updated")
+        row = db.get_one_on_one_session(sid, manager_id=mid)
+        assert row["direct_notes"] == "updated"
+
+    def test_update_after_lock_raises(self):
+        """Backdate created_at to >24h ago via raw UPDATE, then assert the
+        helper refuses to mutate. This is the server-side guard — not a
+        UI concern."""
+        mid, member_id = self._setup()
+        sid = db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_id,
+            session_date="2026-05-03", direct_notes="initial")
+        # Backdate (raw — only allowed in tests).
+        with db._connect() as conn:
+            db._exec(conn,
+                "UPDATE one_on_one_sessions "
+                "SET created_at = datetime('now', '-25 hours') "
+                "WHERE id = ?",
+                (sid,))
+            db._commit(conn)
+        # Helper must refuse.
+        try:
+            db.update_one_on_one_session(sid, manager_id=mid,
+                                         direct_notes="too late")
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError(
+                "update after LOCK_WINDOW must raise PermissionError")
+
+    def test_get_most_recent_one_on_one(self):
+        mid, member_id = self._setup()
+        # Two sessions, different dates.
+        db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_id,
+            session_date="2026-05-01", direct_notes="older")
+        db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_id,
+            session_date="2026-05-08", direct_notes="newer")
+        latest = db.get_most_recent_one_on_one(
+            manager_id=mid, team_member_id=member_id)
+        assert latest is not None
+        assert latest["direct_notes"] == "newer"
+
+    def test_get_most_recent_returns_none_when_no_sessions(self):
+        mid, member_id = self._setup()
+        assert db.get_most_recent_one_on_one(
+            manager_id=mid, team_member_id=member_id) is None
+
+    def test_list_filters_by_team_member(self):
+        mid, member_a = self._setup("_lA")
+        member_b = db.add_team_member("LB", manager_id=mid)
+        db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_a,
+            session_date="2026-05-03", direct_notes="A note")
+        db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_b,
+            session_date="2026-05-03", direct_notes="B note")
+        a_only = db.list_one_on_one_sessions(
+            manager_id=mid, team_member_id=member_a)
+        assert len(a_only) == 1
+        assert a_only[0]["direct_notes"] == "A note"
+
+    def test_member_timeline_includes_one_on_one_sessions(self):
+        """get_member_timeline must surface 1:1 sessions as type='one_on_one'
+        so the existing activity-timeline UI under Team detail shows them
+        without a separate widget."""
+        mid, member_id = self._setup()
+        db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_id,
+            session_date="2026-05-03",
+            direct_notes="Their content goes here")
+        timeline = db.get_member_timeline(member_id, manager_id=mid)
+        types = [r["type"] for r in timeline]
+        assert "one_on_one" in types
+        oo = next(r for r in timeline if r["type"] == "one_on_one")
+        assert oo["date"] == "2026-05-03"
+        assert oo["summary"] == "One-on-one"
+
+    def test_migration_idempotent(self):
+        """0010_one_on_one_sessions: re-running migrations is a no-op
+        (CREATE TABLE IF NOT EXISTS + indexes are idempotent)."""
+        mid, _ = self._setup()
+        with db._connect() as conn:
+            db._run_migrations(conn)  # second run
+        # Sanity: table exists and has the expected columns.
+        with db._connect() as conn:
+            cur = db._exec(conn, "PRAGMA table_info(one_on_one_sessions)")
+            cols = [r[1] for r in cur.fetchall()]
+        for required in ("manager_id", "team_member_id", "event_id",
+                         "session_date", "direct_notes", "manager_notes",
+                         "followup_notes", "created_at", "updated_at"):
+            assert required in cols, \
+                f"0010 migration must add {required} to one_on_one_sessions"
+
+

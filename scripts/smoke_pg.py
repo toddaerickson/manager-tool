@@ -226,6 +226,100 @@ def main() -> int:
         return 1
     print("[ok] forced-failure no-orphan: parent rolled back correctly")
 
+    # -- 1:1 sessions end-to-end (PR `db/one-on-one-sessions`) -------------
+    # Round-trip via app helpers (NOT raw SQL), so the cross-tenant check
+    # exercises the real predicate path on real PG. Round-3 caught raw-SQL
+    # seeding as tautological for predicate verification.
+    today_iso = date.today().isoformat()
+    sid_a = db.create_one_on_one_session(
+        manager_id=mid, team_member_id=member_id,
+        session_date=today_iso,
+        direct_notes="A's direct notes (smoke)",
+        manager_notes="A's manager notes (smoke)",
+        followup_notes="A's followup (smoke)")
+    print(f"[ok] create_one_on_one_session (A) → id={sid_a}")
+
+    # UPSERT idempotency on the same (manager, member, date) tuple.
+    sid_a_again = db.create_one_on_one_session(
+        manager_id=mid, team_member_id=member_id,
+        session_date=today_iso,
+        direct_notes="A's direct notes (smoke v2)")
+    if sid_a_again != sid_a:
+        print(f"error: UPSERT created new row {sid_a_again} instead of "
+              f"updating {sid_a}", file=sys.stderr)
+        return 1
+    a_session = db.get_one_on_one_session(sid_a, manager_id=mid)
+    if (a_session or {}).get("direct_notes") != "A's direct notes (smoke v2)":
+        print(f"error: UPSERT did not update row contents: "
+              f"{a_session}", file=sys.stderr)
+        return 1
+    print("[ok] UPSERT idempotency: same tuple updates in place")
+
+    # Manager B (already seeded) gets their own session.
+    member_b_rows = db.list_team_members(manager_id=mid_b)
+    if not member_b_rows:
+        print("error: manager B has no team members; smoke seed broken",
+              file=sys.stderr)
+        return 1
+    member_b = member_b_rows[0]["id"]
+    sid_b = db.create_one_on_one_session(
+        manager_id=mid_b, team_member_id=member_b,
+        session_date=today_iso, direct_notes="B's notes (smoke)")
+    print(f"[ok] create_one_on_one_session (B) → id={sid_b}")
+
+    # Cross-tenant: manager A cannot read B's session even with the right id.
+    if db.get_one_on_one_session(sid_b, manager_id=mid) is not None:
+        print(f"error: manager A read manager B's session {sid_b}",
+              file=sys.stderr)
+        return 1
+    if db.get_one_on_one_session(sid_a, manager_id=mid_b) is not None:
+        print(f"error: manager B read manager A's session {sid_a}",
+              file=sys.stderr)
+        return 1
+    a_sessions = db.list_one_on_one_sessions(manager_id=mid)
+    a_notes = {(r.get("direct_notes") or "") for r in a_sessions}
+    if "B's notes (smoke)" in a_notes:
+        print(f"error: manager A's list_one_on_one_sessions leaked B's row: "
+              f"{a_notes}", file=sys.stderr)
+        return 1
+    print("[ok] cross-tenant: 1:1 sessions are bidirectionally isolated")
+
+    # event_id consistency check: binding A's session to an event that
+    # belongs to a different member must raise.
+    other_member = db.add_team_member("Other Smoke Member", manager_id=mid)
+    other_event = db.create_event(
+        "Other 1:1", "one_on_one", today_iso, "11:00",
+        team_member_id=other_member, manager_id=mid)
+    try:
+        db.create_one_on_one_session(
+            manager_id=mid, team_member_id=member_id,
+            session_date="2026-12-15", event_id=other_event)
+    except ValueError:
+        print("[ok] event_id consistency check: refused mismatched member")
+    else:
+        print("error: create_one_on_one_session accepted event_id whose "
+              "team_member_id does not match the session's", file=sys.stderr)
+        return 1
+
+    # Lock contract: backdate created_at to >LOCK_WINDOW ago, attempt
+    # update, confirm PermissionError. Mirrors the SQLite test on real PG.
+    with db._connect() as conn:
+        db._exec(conn,
+            "UPDATE one_on_one_sessions "
+            "SET created_at = NOW() - INTERVAL '25 hours' "
+            "WHERE id = ?",
+            (sid_a,))
+        db._commit(conn)
+    try:
+        db.update_one_on_one_session(
+            sid_a, manager_id=mid, direct_notes="too late")
+    except PermissionError:
+        print("[ok] 24h lock: helper raises PermissionError after window")
+    else:
+        print("error: update_one_on_one_session did not raise after 25h",
+              file=sys.stderr)
+        return 1
+
     db.revoke_session(token)
     after_revoke = db.validate_session(token, user_agent_hash="ua-hash")
     if after_revoke is not None:
