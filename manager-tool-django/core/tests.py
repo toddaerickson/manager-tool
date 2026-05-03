@@ -203,7 +203,23 @@ class TestDashboardView:
         resp = client.get("/dashboard/")
         assert resp.status_code == 403
 
-    def test_logged_in_user_with_manager_sees_their_member_count(self, client):
+    def test_logged_in_user_with_manager_sees_dashboard_shell(self, client):
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        self._login_as(client, "todd@example.com")
+        resp = client.get("/dashboard/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        # Phase 4: shell renders before HTMX panel loads. Sidebar shows
+        # the manager's display name; overview panel placeholder is
+        # present (the panel itself is fetched separately).
+        assert "Todd" in body
+        assert "overview-panel" in body
+        assert "/dashboard/panels/overview/" in body
+
+    def test_overview_panel_returns_per_tenant_count(self, client):
         m = Manager.objects.create(
             username="todd", display_name="Todd",
             password_hash="x", email="todd@example.com",
@@ -218,10 +234,11 @@ class TestDashboardView:
         TeamMember.objects.create(name="other report", manager_id=m2.id)
 
         self._login_as(client, "todd@example.com")
-        resp = client.get("/dashboard/")
+        resp = client.get("/dashboard/panels/overview/")
         assert resp.status_code == 200
         body = resp.content.decode()
-        assert "Team members: 2" in body, body
+        # Per-tenant count is 2 (Todd's), not 3 (all rows)
+        assert ">2<" in body, body
         assert "id=" + str(m.id) in body
 
     def test_logout_invalidates_session(self, client):

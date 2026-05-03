@@ -6,6 +6,7 @@ DEBUG off and enforces the security headers documented in
 .streamlit/config.toml's AUDIT L12 comment block.
 """
 
+import os
 from pathlib import Path
 
 import environ
@@ -28,6 +29,17 @@ DEBUG = not IS_PROD
 
 SECRET_KEY = env("DJANGO_SECRET_KEY")
 ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS")
+
+# Render injects RENDER_EXTERNAL_HOSTNAME at runtime. Add it to
+# ALLOWED_HOSTS and CSRF_TRUSTED_ORIGINS automatically so the deploy
+# works without the user having to know the hostname up front.
+_render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+if _render_host and _render_host not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS = list(ALLOWED_HOSTS) + [_render_host]
+
+CSRF_TRUSTED_ORIGINS = []
+if _render_host:
+    CSRF_TRUSTED_ORIGINS.append(f"https://{_render_host}")
 
 
 # --- Apps + middleware --------------------------------------------------

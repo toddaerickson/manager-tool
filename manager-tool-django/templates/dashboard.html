@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Dashboard</h1>
+    <p class="text-sm text-slate-500 mt-1">Signed in as {{ request.user.email }}</p>
+  </header>
+
+  {# HTMX-driven lazy panel — mirrors the Streamlit _dashboard_bundle
+     pattern but loads via a separate request so the shell renders fast
+     and the panel can be cached/refreshed independently. #}
+  <div id="overview-panel"
+       hx-get="{% url 'dashboard-overview' %}"
+       hx-trigger="load"
+       hx-swap="innerHTML"
+       class="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
+    <div class="text-slate-400 text-sm">Loading overview…</div>
+  </div>
+</div>
+{% endblock %}
