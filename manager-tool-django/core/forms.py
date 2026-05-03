@@ -66,9 +66,21 @@ def _time_choices():
 TIME_CHOICES = _time_choices()
 
 
+# Phase 5.2b — recurrence dropdown. Empty string = one-off event;
+# non-empty value routes through core.services.events.create_recurring_events.
+RECURRENCE_CHOICES = [
+    ("", "Doesn't repeat"),
+    ("weekly", "Weekly (up to 12)"),
+    ("monthly", "Monthly (up to 12)"),
+    ("quarterly", "Quarterly (up to 8)"),
+]
+
+
 class EventForm(forms.ModelForm):
-    """Schedule a one-off event. Recurring events come in Phase 5.2b
-    (separate code path: db.create_recurring_events / _materialize_in_txn)."""
+    """Schedule a one-off OR recurring event. Recurrence rule + until
+    date are form-only fields (not Meta.fields); the view branches on
+    cleaned_data['recurrence_rule'] to either create one Event row or
+    delegate to core.services.events.create_recurring_events."""
 
     scheduled_date = forms.DateField(
         widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
@@ -87,6 +99,18 @@ class EventForm(forms.ModelForm):
     title = forms.CharField(
         required=False,
         widget=forms.TextInput(attrs={"class": _INPUT_CLS}),
+    )
+
+    # Phase 5.2b — form-only fields (NOT in Meta.fields):
+    recurrence_rule = forms.ChoiceField(
+        choices=RECURRENCE_CHOICES,
+        required=False,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+    )
+    until_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+        help_text="Optional cap. Series stops at the rule's max count if blank.",
     )
 
     class Meta:
@@ -130,15 +154,31 @@ class EventForm(forms.ModelForm):
     # already in the schema's TEXT format, no conversion needed.
 
     def clean(self):
-        # Default title from event_type if blank — done at form level so
-        # both title and event_type are populated in cleaned_data.
-        # (Per-field clean methods run in declaration order; can't rely
-        # on event_type being available in clean_title.)
         cleaned = super().clean()
+
+        # Default title from event_type if blank.
         title = (cleaned.get("title") or "").strip()
         if not title:
             et = cleaned.get("event_type") or "other"
             cleaned["title"] = dict(EVENT_TYPE_CHOICES).get(et, "Event")
         else:
             cleaned["title"] = title
+
+        # Phase 5.2b — recurrence validation. until_date is only
+        # meaningful when a rule is selected; if rule is blank we ignore
+        # any until_date the user might have set. If rule is set AND
+        # until_date is set, until_date must be on/after scheduled_date.
+        rule = cleaned.get("recurrence_rule") or ""
+        until = cleaned.get("until_date")
+        sched = cleaned.get("scheduled_date")
+        if rule and until and sched:
+            # cleaned_data["scheduled_date"] is already an iso string
+            # because clean_scheduled_date ran. Compare via fromisoformat.
+            from datetime import date as _date
+            sched_d = _date.fromisoformat(sched) if isinstance(sched, str) else sched
+            if until < sched_d:
+                self.add_error("until_date", "Until-date must be on/after the start date.")
+        if not rule:
+            cleaned["until_date"] = None
+
         return cleaned

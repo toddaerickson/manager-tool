@@ -162,6 +162,76 @@ def _exercise_orm() -> None:
     except IntegrityError:
         pass
 
+    _exercise_recurring_events_no_orphan(m1)
+
+
+def _exercise_recurring_events_no_orphan(manager) -> None:
+    """Phase 5.2b — forced-failure no-orphan assertion.
+
+    The plan + CLAUDE.md: '_materialize_in_txn ... The forced-failure
+    no-orphan smoke assertion is the only credible guard against this
+    bug class.' Django's transaction.atomic() should give us the same
+    guarantee for free. Prove it.
+
+    1. Happy path: create a small recurring series, assert parent + N-1
+       children exist with parent_event FK wired correctly.
+    2. Failure path: monkey-patch Event.objects.bulk_create to raise
+       AFTER the parent INSERT. Assert that the parent INSERT was rolled
+       back (post-failure event count == pre-failure count).
+    """
+    from datetime import date, timedelta
+
+    from core.models import Event
+    from core.services.events import create_recurring_events
+
+    _step("create_recurring_events happy path (weekly, 4 children)")
+    start = date(2026, 6, 1)  # Monday — deterministic, far from now
+    until = start + timedelta(weeks=3)  # 4 occurrences total: parent + 3 children
+    parent = create_recurring_events(
+        manager_id=manager.id, title="weekly 1:1",
+        event_type="one_on_one", start_date=start,
+        scheduled_time="10:00", rule="weekly", until_date=until,
+    )
+    series = Event.objects.for_manager(manager.id).filter(
+        recurrence_rule="weekly",
+    )
+    assert series.count() == 4, f"expected 4 events in series, got {series.count()}"
+    children = series.filter(parent_event=parent)
+    assert children.count() == 3, f"expected 3 children, got {children.count()}"
+    assert all(c.parent_event_id == parent.id for c in children), \
+        "children must point at parent via parent_event_id"
+    assert series.filter(parent_event__isnull=True).count() == 1, \
+        "exactly one row (the parent) should have parent_event NULL"
+
+    _step("forced-failure no-orphan assertion (monkey-patch bulk_create to raise)")
+    initial = Event.objects.for_manager(manager.id).count()
+    original = Event.objects.bulk_create
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("smoke: forced failure to test transaction rollback")
+
+    Event.objects.bulk_create = _boom
+    try:
+        try:
+            create_recurring_events(
+                manager_id=manager.id, title="forced-fail",
+                event_type="other", start_date=date(2026, 7, 1),
+                scheduled_time="11:00", rule="weekly",
+            )
+        except RuntimeError:
+            pass
+        else:
+            _bail("forced failure should have raised RuntimeError")
+    finally:
+        Event.objects.bulk_create = original
+
+    final = Event.objects.for_manager(manager.id).count()
+    if final != initial:
+        _bail(
+            f"NO-ORPHAN FAIL: {final - initial} orphan event row(s) left after "
+            f"forced failure (transaction did not roll back)"
+        )
+
 
 def main() -> None:
     _setup_env()

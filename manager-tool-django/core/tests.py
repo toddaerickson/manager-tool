@@ -839,3 +839,255 @@ class TestEventsCancelComplete:
         m, ev = self._setup(client)
         assert client.get(f"/events/{ev.id}/cancel/").status_code == 405
         assert client.get(f"/events/{ev.id}/complete/").status_code == 405
+
+
+# ============================================================
+# Phase 5.2b — recurring events
+# ============================================================
+
+
+class TestAddMonthsAnchored:
+    """Pure-Python helper. Algo A (anchored), NOT Algo B (drift)."""
+
+    def test_zero_months_is_identity(self):
+        from datetime import date
+        from core.services.events import add_months_anchored
+        assert add_months_anchored(date(2026, 5, 15), 0) == date(2026, 5, 15)
+
+    def test_jan_31_plus_one_clamps_to_feb_28(self):
+        from datetime import date
+        from core.services.events import add_months_anchored
+        assert add_months_anchored(date(2026, 1, 31), 1) == date(2026, 2, 28)
+
+    def test_jan_31_plus_two_anchors_back_to_mar_31(self):
+        """Algo A: anchor preserved (+2 from start, not +1 from clamped)."""
+        from datetime import date
+        from core.services.events import add_months_anchored
+        assert add_months_anchored(date(2026, 1, 31), 2) == date(2026, 3, 31)
+
+    def test_leap_year_feb_29_handling(self):
+        from datetime import date
+        from core.services.events import add_months_anchored
+        assert add_months_anchored(date(2028, 1, 31), 1) == date(2028, 2, 29)
+
+    def test_year_rollover(self):
+        from datetime import date
+        from core.services.events import add_months_anchored
+        assert add_months_anchored(date(2026, 12, 15), 1) == date(2027, 1, 15)
+        assert add_months_anchored(date(2026, 12, 15), 14) == date(2028, 2, 15)
+
+
+class TestExpandRecurrenceDates:
+    def test_weekly_default_count_is_12(self):
+        from datetime import date
+        from core.services.events import expand_recurrence_dates
+        dates = expand_recurrence_dates(date(2026, 6, 1), "weekly", until=None)
+        assert len(dates) == 12
+
+    def test_monthly_default_count_is_12(self):
+        from datetime import date
+        from core.services.events import expand_recurrence_dates
+        dates = expand_recurrence_dates(date(2026, 6, 1), "monthly", until=None)
+        assert len(dates) == 12
+
+    def test_quarterly_default_count_is_8(self):
+        from datetime import date
+        from core.services.events import expand_recurrence_dates
+        dates = expand_recurrence_dates(date(2026, 6, 1), "quarterly", until=None)
+        assert len(dates) == 8
+
+    def test_until_caps_count(self):
+        from datetime import date, timedelta
+        from core.services.events import expand_recurrence_dates
+        start = date(2026, 6, 1)
+        until = start + timedelta(weeks=3)
+        dates = expand_recurrence_dates(start, "weekly", until=until)
+        assert len(dates) == 4
+        assert dates[-1] == start + timedelta(weeks=3)
+
+    def test_unknown_rule_raises(self):
+        from datetime import date
+        from core.services.events import expand_recurrence_dates
+        with pytest.raises(ValueError, match="unknown recurrence rule"):
+            expand_recurrence_dates(date(2026, 6, 1), "yearly")
+
+
+@pytest.mark.django_db
+class TestCreateRecurringEvents:
+    """Service-layer: atomic materialization. The forced-failure no-orphan
+    case mirrors smoke_pg_django.py's check; this version uses SQLite
+    in-memory but the transaction.atomic guarantee is the same."""
+
+    def _manager(self):
+        return Manager.objects.create(
+            username="todd_recur", display_name="Todd",
+            password_hash="x", email="todd_recur@example.com",
+        )
+
+    def test_happy_path_creates_parent_plus_children(self):
+        from datetime import date, timedelta
+        from core.services.events import create_recurring_events
+        m = self._manager()
+        start = date(2026, 6, 1)
+        until = start + timedelta(weeks=3)
+        parent = create_recurring_events(
+            manager_id=m.id, title="weekly 1:1",
+            event_type="one_on_one", start_date=start,
+            scheduled_time="10:00", rule="weekly", until_date=until,
+        )
+        in_series = Event.objects.for_manager(m.id).filter(
+            recurrence_rule="weekly",
+        )
+        assert in_series.count() == 4
+        assert in_series.filter(parent_event__isnull=True).count() == 1
+        assert in_series.filter(parent_event=parent).count() == 3
+
+    def test_forced_failure_rolls_back_parent(self):
+        """No-orphan: bulk_create raises → parent Event.create rolls back."""
+        from datetime import date
+        from core.services.events import create_recurring_events
+        m = self._manager()
+        before = Event.objects.for_manager(m.id).count()
+        original = Event.objects.bulk_create
+
+        def _boom(*_a, **_kw):
+            raise RuntimeError("test forced failure")
+
+        Event.objects.bulk_create = _boom
+        try:
+            with pytest.raises(RuntimeError, match="test forced failure"):
+                create_recurring_events(
+                    manager_id=m.id, title="X", event_type="other",
+                    start_date=date(2026, 6, 1),
+                    scheduled_time="10:00", rule="weekly",
+                )
+        finally:
+            Event.objects.bulk_create = original
+
+        after = Event.objects.for_manager(m.id).count()
+        assert after == before, (
+            f"NO-ORPHAN FAIL: {after - before} orphan rows after rollback"
+        )
+
+    def test_rejects_string_start_date(self):
+        from core.services.events import create_recurring_events
+        m = self._manager()
+        with pytest.raises(TypeError, match="start_date must be a date"):
+            create_recurring_events(
+                manager_id=m.id, title="X", event_type="other",
+                start_date="2026-06-01",  # string, not date
+                scheduled_time="10:00", rule="weekly",
+            )
+
+    def test_rejects_until_before_start(self):
+        from datetime import date
+        from core.services.events import create_recurring_events
+        m = self._manager()
+        with pytest.raises(ValueError, match="until_date must be >= start_date"):
+            create_recurring_events(
+                manager_id=m.id, title="X", event_type="other",
+                start_date=date(2026, 6, 5),
+                until_date=date(2026, 6, 1),
+                scheduled_time="10:00", rule="weekly",
+            )
+
+    def test_rejects_missing_manager_id(self):
+        from datetime import date
+        from core.services.events import create_recurring_events
+        with pytest.raises(ValueError, match="manager_id required"):
+            create_recurring_events(
+                manager_id=None, title="X", event_type="other",
+                start_date=date(2026, 6, 1),
+                scheduled_time="10:00", rule="weekly",
+            )
+
+    def test_cross_tenant_isolation(self):
+        from datetime import date
+        from core.services.events import create_recurring_events
+        m1 = self._manager()
+        m2 = Manager.objects.create(
+            username="other_recur", display_name="Other",
+            password_hash="x", email="other_recur@example.com",
+        )
+        create_recurring_events(
+            manager_id=m1.id, title="m1", event_type="one_on_one",
+            start_date=date(2026, 6, 1), scheduled_time="10:00",
+            rule="weekly", until_date=date(2026, 6, 22),
+        )
+        assert Event.objects.for_manager(m1.id).count() == 4
+        assert Event.objects.for_manager(m2.id).count() == 0
+
+
+@pytest.mark.django_db
+class TestEventsScheduleRecurringForm:
+    """View-level: POST with rule routes through create_recurring_events."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def test_post_with_rule_creates_series(self, client):
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd_view_r", display_name="Todd",
+            password_hash="x", email="todd_view_r@example.com",
+        )
+        self._login_as(client, "todd_view_r@example.com")
+        start = date.today() + timedelta(days=7)
+        until = start + timedelta(weeks=2)
+        resp = client.post("/events/schedule/", {
+            "event_type": "one_on_one",
+            "title": "",
+            "scheduled_date": start.isoformat(),
+            "scheduled_time": "10:00",
+            "duration_minutes": "30",
+            "recurrence_rule": "weekly",
+            "until_date": until.isoformat(),
+        })
+        assert resp.status_code == 302
+        assert Event.objects.for_manager(m.id).filter(
+            recurrence_rule="weekly",
+        ).count() == 3
+
+    def test_post_until_before_start_returns_form(self, client):
+        from datetime import date, timedelta
+        Manager.objects.create(
+            username="todd_view_r2", display_name="Todd",
+            password_hash="x", email="todd_view_r2@example.com",
+        )
+        self._login_as(client, "todd_view_r2@example.com")
+        start = date.today() + timedelta(days=7)
+        resp = client.post("/events/schedule/", {
+            "event_type": "one_on_one",
+            "scheduled_date": start.isoformat(),
+            "scheduled_time": "10:00",
+            "duration_minutes": "30",
+            "recurrence_rule": "weekly",
+            "until_date": (start - timedelta(days=1)).isoformat(),
+        })
+        assert resp.status_code == 200
+        assert Event.objects.count() == 0
+
+    def test_post_blank_rule_creates_one_off(self, client):
+        """Blank rule must NOT route through the recurring service
+        (which would error on the empty rule)."""
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd_view_r3", display_name="Todd",
+            password_hash="x", email="todd_view_r3@example.com",
+        )
+        self._login_as(client, "todd_view_r3@example.com")
+        client.post("/events/schedule/", {
+            "event_type": "one_on_one",
+            "scheduled_date": (date.today() + timedelta(days=1)).isoformat(),
+            "scheduled_time": "11:00",
+            "duration_minutes": "30",
+            "recurrence_rule": "",
+        })
+        events = Event.objects.for_manager(m.id)
+        assert events.count() == 1
+        assert events.first().recurrence_rule in (None, "")

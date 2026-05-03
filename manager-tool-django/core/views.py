@@ -7,6 +7,7 @@ from django.views.decorators.http import require_http_methods
 
 from .forms import EventForm, TeamMemberForm
 from .models import Event, TeamMember
+from .services.events import create_recurring_events
 
 
 def hello(request):
@@ -212,21 +213,48 @@ def events_upcoming(request):
 
 @login_required
 def events_schedule(request):
-    """Phase 5.2a — GET shows the form, POST creates a one-off event
-    and redirects to /events/. Recurring events come in 5.2b
-    (separate code path; the rule field on the form lives in EventForm
-    but is unused until then)."""
+    """Phase 5.2b — branches on recurrence_rule:
+      - blank → single Event.create (one-off)
+      - weekly/monthly/quarterly → create_recurring_events service
+        (parent + N children, atomic via transaction.atomic; the
+        no-orphan guarantee is asserted by smoke_pg_django.py)
+    Both paths redirect to /events/ on success."""
     manager, err = _require_manager(request)
     if err:
         return err
     if request.method == "POST":
         form = EventForm(request.POST, manager_id=manager.id)
         if form.is_valid():
-            ev = form.save(commit=False)
-            ev.manager_id = manager.id
-            ev.status = "scheduled"
-            ev.save()
-            return redirect("events-upcoming")
+            rule = form.cleaned_data.get("recurrence_rule") or ""
+            if rule:
+                # cleaned_data["scheduled_date"] is iso string after
+                # clean_scheduled_date; the service expects a date.
+                sched_d = date.fromisoformat(form.cleaned_data["scheduled_date"])
+                until = form.cleaned_data.get("until_date")
+                try:
+                    create_recurring_events(
+                        manager_id=manager.id,
+                        title=form.cleaned_data["title"],
+                        event_type=form.cleaned_data["event_type"],
+                        start_date=sched_d,
+                        scheduled_time=form.cleaned_data["scheduled_time"],
+                        rule=rule,
+                        until_date=until,
+                        team_member=form.cleaned_data.get("team_member"),
+                        duration_minutes=form.cleaned_data.get("duration_minutes") or 30,
+                        location=form.cleaned_data.get("location"),
+                        agenda=form.cleaned_data.get("agenda"),
+                    )
+                except (TypeError, ValueError) as e:
+                    form.add_error(None, str(e))
+                else:
+                    return redirect("events-upcoming")
+            else:
+                ev = form.save(commit=False)
+                ev.manager_id = manager.id
+                ev.status = "scheduled"
+                ev.save()
+                return redirect("events-upcoming")
     else:
         form = EventForm(manager_id=manager.id)
     return render(request, "events_schedule.html", {"form": form})
