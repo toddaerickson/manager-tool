@@ -183,6 +183,11 @@ class TeamMember(models.Model):
 
     objects = TeamMemberManager()
 
+    def __str__(self):
+        # Used by ModelChoiceField in dropdowns (EventForm participant
+        # picker); without this, options render as "TeamMember object (1)".
+        return self.name
+
     class Meta:
         db_table = "team_members"
         indexes = [

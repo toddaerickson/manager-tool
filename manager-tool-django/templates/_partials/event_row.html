@@ -1,0 +1,34 @@
+{% load static %}
+<div id="event-row-{{ ev.id }}" class="px-4 py-3 flex items-start gap-3">
+  <span class="text-xs uppercase tracking-wider text-slate-500 bg-slate-100 px-2 py-0.5 rounded font-medium tabular-nums shrink-0 mt-0.5">
+    {{ ev.scheduled_time }}
+  </span>
+  <div class="flex-1">
+    <div class="font-medium">{{ ev.title }}</div>
+    <div class="text-xs text-slate-500 mt-0.5">
+      {{ ev.get_event_type_display|default:ev.event_type }}
+      {% if ev.team_member %} · {{ ev.team_member.name }}{% endif %}
+      {% if ev.location %} · {{ ev.location }}{% endif %}
+      {% if ev.duration_minutes %} · {{ ev.duration_minutes }} min{% endif %}
+    </div>
+  </div>
+  <div class="shrink-0 flex items-center gap-2 text-xs">
+    <button type="button"
+            hx-post="{% url 'events-complete' ev.id %}"
+            hx-target="#event-row-{{ ev.id }}"
+            hx-swap="outerHTML"
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            class="text-slate-700 hover:text-slate-900 underline">
+      Complete
+    </button>
+    <button type="button"
+            hx-post="{% url 'events-cancel' ev.id %}"
+            hx-target="#event-row-{{ ev.id }}"
+            hx-swap="outerHTML"
+            hx-confirm="Cancel {{ ev.title }}? This can't be undone."
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            class="text-red-600 hover:text-red-800 underline">
+      Cancel
+    </button>
+  </div>
+</div>

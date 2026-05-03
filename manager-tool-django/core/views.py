@@ -1,43 +1,12 @@
-from django import forms
+from datetime import date, timedelta
+
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, HttpResponseForbidden
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
-from .models import TeamMember
-
-
-class TeamMemberForm(forms.ModelForm):
-    """Add-member form. manager_id is set in the view from request.manager;
-    not user-editable. start_date stays TextField on the model (Streamlit
-    convention, CLAUDE.md), so we use a date input + format on save."""
-
-    start_date = forms.DateField(
-        required=False,
-        widget=forms.DateInput(attrs={
-            "type": "date",
-            "class": "mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-sm",
-        }),
-    )
-
-    class Meta:
-        model = TeamMember
-        fields = ["name", "email", "role", "start_date", "notes"]
-        # Tailwind classes go inline (Play CDN doesn't support @apply).
-        _input_cls = (
-            "mt-1 block w-full border border-slate-300 rounded "
-            "px-2 py-1.5 text-sm"
-        )
-        widgets = {
-            "name": forms.TextInput(attrs={"placeholder": "Full name", "class": _input_cls}),
-            "email": forms.EmailInput(attrs={"placeholder": "name@company.com", "class": _input_cls}),
-            "role": forms.TextInput(attrs={"placeholder": "Engineer / PM / ...", "class": _input_cls}),
-            "notes": forms.Textarea(attrs={"rows": 2, "class": _input_cls}),
-        }
-
-    def clean_start_date(self):
-        d = self.cleaned_data.get("start_date")
-        return d.isoformat() if d else None
+from .forms import EventForm, TeamMemberForm
+from .models import Event, TeamMember
 
 
 def hello(request):
@@ -184,6 +153,121 @@ def team_members_restore(request, member_id: int):
         "members": TeamMember.objects.active_for_manager(manager.id).order_by("name"),
         "deleted_members": TeamMember.objects.recently_deleted_for_manager(manager.id),
     })
+
+
+# ============================================================
+# Phase 5.2a — Events (one-off; recurring comes in 5.2b)
+# ============================================================
+
+# Lex order of YYYY-MM-DD matches chronological — see CLAUDE.md
+# "Date semantics". Compute bounds in Python and bind as TEXT.
+
+_TODAY_HEADER_ISO = None  # set per-request via date.today().isoformat()
+
+
+def _date_label(iso: str, today_iso: str, tomorrow_iso: str) -> str:
+    if iso == today_iso:
+        return "Today"
+    if iso == tomorrow_iso:
+        return "Tomorrow"
+    try:
+        return date.fromisoformat(iso).strftime("%a %b %-d")
+    except ValueError:
+        return iso
+
+
+def _group_events_by_date(events, today_iso, tomorrow_iso):
+    """Returns [(date_label, [events])] in chronological order."""
+    by_date = {}
+    for ev in events:
+        by_date.setdefault(ev.scheduled_date, []).append(ev)
+    return [
+        (_date_label(d, today_iso, tomorrow_iso), by_date[d])
+        for d in sorted(by_date.keys())
+    ]
+
+
+@login_required
+def events_upcoming(request):
+    """Phase 5.2a — Upcoming events (status='scheduled', date >= today)
+    grouped by date. Mirrors Streamlit's page_upcoming_events but only
+    the events portion (todos / check-ins / goals come in their own
+    Phase 5 sub-PRs)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    today_iso = date.today().isoformat()
+    tomorrow_iso = (date.today() + timedelta(days=1)).isoformat()
+    events = (
+        Event.objects.for_manager(manager.id)
+        .filter(status="scheduled", scheduled_date__gte=today_iso)
+        .select_related("team_member")
+        .order_by("scheduled_date", "scheduled_time")
+    )
+    return render(request, "events_upcoming.html", {
+        "groups": _group_events_by_date(events, today_iso, tomorrow_iso),
+        "any_events": events.exists(),
+    })
+
+
+@login_required
+def events_schedule(request):
+    """Phase 5.2a — GET shows the form, POST creates a one-off event
+    and redirects to /events/. Recurring events come in 5.2b
+    (separate code path; the rule field on the form lives in EventForm
+    but is unused until then)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    if request.method == "POST":
+        form = EventForm(request.POST, manager_id=manager.id)
+        if form.is_valid():
+            ev = form.save(commit=False)
+            ev.manager_id = manager.id
+            ev.status = "scheduled"
+            ev.save()
+            return redirect("events-upcoming")
+    else:
+        form = EventForm(manager_id=manager.id)
+    return render(request, "events_schedule.html", {"form": form})
+
+
+@login_required
+@require_http_methods(["POST"])
+def events_cancel(request, event_id: int):
+    """HTMX: set status='cancelled' if currently scheduled. Returns an
+    empty 200 — HTMX hx-target removes the row via outerHTML swap.
+    Cross-tenant or already-non-scheduled returns 404 (audit C1
+    pattern)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    updated = (
+        Event.objects.for_manager(manager.id)
+        .filter(pk=event_id, status="scheduled")
+        .update(status="cancelled")
+    )
+    if updated == 0:
+        return HttpResponse(status=404)
+    return HttpResponse(status=200)
+
+
+@login_required
+@require_http_methods(["POST"])
+def events_complete(request, event_id: int):
+    """HTMX: set status='completed'. Notes-on-complete UI deferred to
+    a follow-up sub-PR; this PR does status-only."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    updated = (
+        Event.objects.for_manager(manager.id)
+        .filter(pk=event_id, status="scheduled")
+        .update(status="completed")
+    )
+    if updated == 0:
+        return HttpResponse(status=404)
+    return HttpResponse(status=200)
 
 
 @login_required
