@@ -840,6 +840,68 @@ def _migration_one_on_one_sessions(conn) -> None:
     _commit(conn)
 
 
+def _migration_running_notes_member_nullable(conn) -> None:
+    """PR δ: allow `running_notes.team_member_id` NULL so the manager can
+    broadcast a single note to ALL their directs (NULL = applies-to-all).
+    Idempotent — checks current nullability before mutating.
+
+    PG path: `ALTER TABLE ... DROP NOT NULL` is idempotent (no-op when
+    already nullable) and metadata-only (no table rewrite).
+
+    SQLite path: NOT NULL constraints can't be modified in place. Check
+    nullability via PRAGMA; if still NOT NULL, rebuild the table preserving
+    rows + recreate the index. Fresh test DBs created from the SQLite
+    block in this file already have the new shape, so the rebuild only
+    fires for legacy dev DBs."""
+    if _detect_pg():
+        _exec(conn,
+            "ALTER TABLE running_notes "
+            "ALTER COLUMN team_member_id DROP NOT NULL")
+        _commit(conn)
+        return
+
+    # SQLite — check current nullability via PRAGMA.
+    cur = _exec(conn, "PRAGMA table_info(running_notes)")
+    info = cur.fetchall()
+    needs_rebuild = False
+    for col in info:
+        # PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk
+        if col[1] == "team_member_id" and col[3] == 1:
+            needs_rebuild = True
+            break
+    if not needs_rebuild:
+        return
+
+    # Rebuild: new nullable shape, copy rows, swap, recreate index.
+    _exec(conn,
+        "CREATE TABLE running_notes_new ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  manager_id INTEGER,"
+        "  team_member_id INTEGER,"
+        "  note_date TEXT NOT NULL DEFAULT (date('now')),"
+        "  content TEXT NOT NULL,"
+        "  category TEXT DEFAULT 'general' CHECK(category IN"
+        "    ('general', 'meeting_prep', 'observation',"
+        "     'follow_up', 'praise')),"
+        "  created_at TEXT DEFAULT (datetime('now')),"
+        "  FOREIGN KEY (manager_id) REFERENCES managers(id),"
+        "  FOREIGN KEY (team_member_id) REFERENCES team_members(id)"
+        ")")
+    _exec(conn,
+        "INSERT INTO running_notes_new "
+        "(id, manager_id, team_member_id, note_date, content, "
+        " category, created_at) "
+        "SELECT id, manager_id, team_member_id, note_date, content, "
+        "       category, created_at FROM running_notes")
+    _exec(conn, "DROP TABLE running_notes")
+    _exec(conn,
+        "ALTER TABLE running_notes_new RENAME TO running_notes")
+    _exec(conn,
+        "CREATE INDEX IF NOT EXISTS ix_running_notes_member_date "
+        "ON running_notes (team_member_id, note_date)")
+    _commit(conn)
+
+
 def _migration_hot_path_indexes(conn) -> None:
     """P4.1: btree indexes on hot WHERE columns (AUDIT M5). Idempotent via
     `IF NOT EXISTS`. Operators on Postgres prod should consider running
@@ -886,6 +948,7 @@ _MIGRATIONS: list[tuple[str, Any]] = [
     ("0008_goals_target_date", _migration_goals_target_date),
     ("0009_events_recurrence", _migration_events_recurrence),
     ("0010_one_on_one_sessions", _migration_one_on_one_sessions),
+    ("0011_running_notes_member_nullable", _migration_running_notes_member_nullable),
 ]
 
 
@@ -1212,7 +1275,7 @@ def init_db(*, force: bool = False):
         CREATE TABLE IF NOT EXISTS running_notes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             manager_id INTEGER,
-            team_member_id INTEGER NOT NULL,
+            team_member_id INTEGER,  -- nullable: NULL = broadcast to all directs
             note_date TEXT NOT NULL DEFAULT (date('now')),
             content TEXT NOT NULL,
             category TEXT DEFAULT 'general' CHECK(category IN
@@ -3358,11 +3421,13 @@ def get_overdue_delegations(*, manager_id: int) -> list[dict[str, Any]]:
 # Running 1:1 Notes (persistent per-member notes across meetings)
 # ---------------------------------------------------------------------------
 
-def add_running_note(team_member_id: int, content: str,
+def add_running_note(team_member_id: int | None, content: str,
                      category: str = "general",
                      note_date: str | None = None,
                      manager_id: int | None = None) -> int | None:
-    """Add a running note for a team member."""
+    """Add a running note. `team_member_id=None` is a broadcast note that
+    surfaces in every direct's feed for this manager — used by the 'All
+    team members' option on the 1:1 Notes page."""
     if not note_date:
         note_date = datetime.now().date().isoformat()
     with _connect() as conn:
@@ -3378,10 +3443,25 @@ def add_running_note(team_member_id: int, content: str,
 
 def list_running_notes(team_member_id: int,
                        manager_id: int | None = None,
-                       limit: int = 50) -> list[dict[str, Any]]:
-    """Get running notes for a team member, newest first."""
+                       limit: int = 50,
+                       include_broadcast: bool = True) -> list[dict[str, Any]]:
+    """Get running notes for a team member, newest first.
+
+    By default also includes the manager's broadcast notes (those with
+    `team_member_id IS NULL`) — the 1:1 page's 'recent notes' panel and
+    the per-member view on page_running_notes both want this so a single
+    'all directs' note shows in every member's context.
+
+    Pass `include_broadcast=False` to get only the per-member rows
+    (e.g. when listing notes that can be promoted to feedback — broadcast
+    notes are by definition not member-specific so promotion would be
+    meaningless)."""
     with _connect() as conn:
-        sql = "SELECT * FROM running_notes WHERE team_member_id = ?"
+        if include_broadcast:
+            sql = ("SELECT * FROM running_notes "
+                   "WHERE (team_member_id = ? OR team_member_id IS NULL)")
+        else:
+            sql = "SELECT * FROM running_notes WHERE team_member_id = ?"
         params: list = [team_member_id]
         if manager_id is not None:
             sql += " AND manager_id = ?"
@@ -3389,6 +3469,22 @@ def list_running_notes(team_member_id: int,
         sql += " ORDER BY note_date DESC, created_at DESC LIMIT ?"
         params.append(limit)
         cur = _exec(conn, sql, params)
+        rows = [dict(r) for r in cur.fetchall()]
+    return rows
+
+
+def list_broadcast_running_notes(*, manager_id: int,
+                                 limit: int = 50) -> list[dict[str, Any]]:
+    """Get the manager's broadcast notes (team_member_id IS NULL) — used
+    by the 1:1 Notes page when 'All team members' is the active filter."""
+    if manager_id is None:
+        raise ValueError("manager_id required (no implicit cross-tenant)")
+    with _connect() as conn:
+        cur = _exec(conn,
+            "SELECT * FROM running_notes "
+            "WHERE manager_id = ? AND team_member_id IS NULL "
+            "ORDER BY note_date DESC, created_at DESC LIMIT ?",
+            (manager_id, limit))
         rows = [dict(r) for r in cur.fetchall()]
     return rows
 
