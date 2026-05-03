@@ -96,6 +96,9 @@ def main() -> int:
     prep = db.get_pre_meeting_prep(member_id, manager_id=mid)
     print(f"[ok] get_pre_meeting_prep → keys={sorted((prep or {}).keys())}")
 
+    trends = db.get_manager_activity_trends(weeks=12, manager_id=mid)
+    print(f"[ok] get_manager_activity_trends → {len(trends)} week(s)")
+
     db.revoke_session(token)
     after_revoke = db.validate_session(token, user_agent_hash="ua-hash")
     if after_revoke is not None:
