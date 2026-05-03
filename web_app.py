@@ -710,6 +710,22 @@ def page_event_history():
 # -- People -----------------------------------------------------------------
 
 def page_team_roster():
+    # Member-detail mode: when team_member_id is set, render the full timeline
+    # body for that member. Folded in from the dropped standalone Timeline page.
+    detail_id = st.session_state.get("team_member_id")
+    if detail_id is not None:
+        members = db.list_team_members(manager_id=_mid())
+        member = next((m for m in members if m["id"] == detail_id), None)
+        if member is None:
+            # Stale id (member deleted, or wrong tenant) — clear and re-render.
+            st.session_state.pop("team_member_id", None)
+            st.rerun()
+        if st.button("←  Back to team", key="back_to_team"):
+            st.session_state.pop("team_member_id", None)
+            st.rerun()
+        _render_member_timeline(detail_id, member["name"])
+        return
+
     st.title("Team Roster")
 
     members = db.list_team_members(manager_id=_mid())
@@ -773,57 +789,95 @@ def page_team_roster():
     )
 
     if st.button("View Details"):
-        st.session_state["detail_member_id"] = mid
-
-    if "detail_member_id" in st.session_state:
-        summary = db.get_member_summary(st.session_state["detail_member_id"], manager_id=_mid())
-        if summary:
-            _render_member_detail(summary)
+        st.session_state["team_member_id"] = mid
+        st.rerun()
 
 
-def _render_member_detail(summary):
-    m = summary["member"]
+def _render_member_timeline(member_id, member_name):
+    """Member-detail body: pre-meeting prep, recent notes, coaching pane, and
+    activity timeline. Folded into Team detail mode from the dropped standalone
+    Timeline page."""
+    show_toast()
+    st.subheader(member_name)
+
+    # -- Pre-meeting prep panel --
+    prep = db.get_pre_meeting_prep(member_id, manager_id=_mid())
+    if prep:
+        st.markdown(f"**Before your 1-on-1 with {member_name}:**")
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        with mc1:
+            days_m = prep.get("days_since_meeting")
+            st.metric("Days since meeting", days_m if days_m is not None else "Never")
+        with mc2:
+            days_f = prep.get("days_since_feedback")
+            st.metric("Days since feedback", days_f if days_f is not None else "Never")
+        with mc3:
+            st.metric("Pending actions", prep.get("pending_actions", 0))
+        with mc4:
+            st.metric("Active goals", len(prep.get("active_goals", [])))
+
+        # Feedback ratio bar
+        pos = prep.get("positive_count", 0)
+        con = prep.get("constructive_count", 0)
+        if pos + con > 0:
+            ratio_pct = int(pos / (pos + con) * 100)
+            st.progress(ratio_pct / 100,
+                text=f"Feedback balance: {pos} positive / {con} constructive "
+                     f"({ratio_pct}% positive, ideal >80%)")
+
+        # Coaching provocations — the variable reward
+        provocations = templates.get_coaching_provocations(prep)
+        if provocations:
+            st.markdown("**\U0001F4A1 Coaching Provocations:**")
+            for p in provocations:
+                st.warning(f"**{p['observation']}**")
+                st.caption(f"> {p['wisdom']}")
+
+    # -- Running 1:1 Notes (persistent across meetings) --
+    recent_notes = db.list_running_notes(member_id, manager_id=_mid(), limit=5)
+    if recent_notes:
+        st.divider()
+        st.subheader(f"Recent Notes about {member_name}")
+        for n in recent_notes:
+            cat_icons = {"general": "\U0001F4DD", "meeting_prep": "\U0001F4C5",
+                        "observation": "\U0001F440", "follow_up": "\U0001F504",
+                        "praise": "⭐"}
+            icon = cat_icons.get(n.get("category", ""), "\U0001F4DD")
+            st.markdown(f"{icon} **{n['note_date']}** — {n['content']}")
+
+    # -- Coaching pane for this member --
     st.divider()
-    st.subheader(f"Member: {m['name']}")
-    st.markdown(
-        f"**Role:** {m.get('role', 'N/A')} &nbsp;&nbsp; "
-        f"**Email:** {m.get('email', 'N/A')} &nbsp;&nbsp; "
-        f"**Start:** {m.get('start_date', 'N/A')}"
-    )
-    if m.get("notes"):
-        st.markdown(f"**Notes:** {m['notes']}")
+    prep_left, prep_right = st.columns([3, 2])
+    with prep_left:
+        st.subheader("Quick Notes")
+        meeting_notes = st.text_area(
+            f"Notes about {member_name} (meeting prep, observations, concerns):",
+            height=120, placeholder="Type anything — then get coaching on it.",
+            key=f"timeline_notes_{member_id}")
+    with prep_right:
+        render_coaching_pane(
+            meeting_notes if meeting_notes else "",
+            context_type="meeting_prep",
+            member_name=member_name,
+            prep_data=prep,
+            key_suffix=f"timeline_{member_id}")
 
-    if summary["recent_events"]:
-        st.markdown("**Recent Events**")
-        st.dataframe(
-            df_from(summary["recent_events"],
-                    ["id", "title", "event_type", "scheduled_date", "status"]),
-            use_container_width=True, hide_index=True,
-        )
-    if summary["goals"]:
-        st.markdown("**Goals**")
-        st.dataframe(
-            df_from(summary["goals"], ["id", "quarter", "description", "status"]),
-            use_container_width=True, hide_index=True,
-        )
-    if summary["feedback"]:
-        st.markdown("**Feedback History**")
-        for fb in summary["feedback"][:5]:
-            color = "green" if fb["feedback_type"] == "positive" else "orange"
-            fb_col, del_col = st.columns([5, 1])
-            with fb_col:
-                st.markdown(
-                    f":{color}[**{fb['feedback_type'].upper()}**] "
-                    f"— {fb['created_at'][:10]}  \n"
-                    f"&nbsp;&nbsp;**S:** {fb.get('situation', 'N/A')}  \n"
-                    f"&nbsp;&nbsp;**B:** {fb.get('behavior', 'N/A')}  \n"
-                    f"&nbsp;&nbsp;**I:** {fb.get('impact', 'N/A')}"
-                )
-            with del_col:
-                if st.button("Delete", key=f"del_fb_{fb['id']}"):
-                    db.delete_feedback(fb["id"], manager_id=_mid())
-                    set_toast("success", f"Feedback #{fb['id']} deleted.")
-                    st.rerun()
+    # -- Timeline feed --
+    st.subheader("Activity Timeline")
+    timeline = db.get_member_timeline(member_id, manager_id=_mid())
+    if not timeline:
+        st.caption("No activity recorded for this member yet.")
+    type_icons = {
+        "event": "\U0001F4C5", "positive_feedback": "\U0001F4AC",
+        "constructive_feedback": "\U0001F4AC", "goal": "\U0001F3AF",
+        "action": "✅", "career": "\U0001F680",
+    }
+    for item in timeline:
+        icon = type_icons.get(item["type"], "\U0001F4CB")
+        label = f"{icon} {item['date']} — **{item['type'].replace('_', ' ').title()}**: {item.get('summary', '') or ''}"
+        with st.expander(label):
+            if item.get("detail"):
+                st.markdown(item["detail"])
 
 
 # -- Tracking ---------------------------------------------------------------
@@ -1312,97 +1366,6 @@ def page_journal():
                     st.caption(f"Coaching notes: {entry['private_notes']}")
                 if entry.get("tags"):
                     st.caption(f"Tags: {entry['tags']}")
-
-
-def page_member_timeline():
-    st.title("Member Timeline")
-    show_toast()
-    names, mapping = member_options()
-    if not names:
-        st.caption("Add team members first to see their timeline.")
-        return
-
-    selected = st.selectbox("Select team member", names)
-    member_id = mapping[selected]
-
-    # -- Pre-meeting prep panel --
-    prep = db.get_pre_meeting_prep(member_id, manager_id=_mid())
-    if prep:
-        st.subheader(f"Before your 1-on-1 with {selected}:")
-        mc1, mc2, mc3, mc4 = st.columns(4)
-        with mc1:
-            days_m = prep.get("days_since_meeting")
-            st.metric("Days since meeting", days_m if days_m is not None else "Never")
-        with mc2:
-            days_f = prep.get("days_since_feedback")
-            st.metric("Days since feedback", days_f if days_f is not None else "Never")
-        with mc3:
-            st.metric("Pending actions", prep.get("pending_actions", 0))
-        with mc4:
-            st.metric("Active goals", len(prep.get("active_goals", [])))
-
-        # Feedback ratio bar
-        pos = prep.get("positive_count", 0)
-        con = prep.get("constructive_count", 0)
-        if pos + con > 0:
-            ratio_pct = int(pos / (pos + con) * 100)
-            st.progress(ratio_pct / 100,
-                text=f"Feedback balance: {pos} positive / {con} constructive "
-                     f"({ratio_pct}% positive, ideal >80%)")
-
-        # Coaching provocations — the variable reward
-        provocations = templates.get_coaching_provocations(prep)
-        if provocations:
-            st.markdown("**\U0001F4A1 Coaching Provocations:**")
-            for p in provocations:
-                st.warning(f"**{p['observation']}**")
-                st.caption(f"> {p['wisdom']}")
-
-    # -- Running 1:1 Notes (persistent across meetings) --
-    recent_notes = db.list_running_notes(member_id, manager_id=_mid(), limit=5)
-    if recent_notes:
-        st.divider()
-        st.subheader(f"Recent Notes about {selected}")
-        for n in recent_notes:
-            cat_icons = {"general": "\U0001F4DD", "meeting_prep": "\U0001F4C5",
-                        "observation": "\U0001F440", "follow_up": "\U0001F504",
-                        "praise": "\u2B50"}
-            icon = cat_icons.get(n.get("category", ""), "\U0001F4DD")
-            st.markdown(f"{icon} **{n['note_date']}** — {n['content']}")
-
-    # -- Coaching pane for this member --
-    st.divider()
-    prep_left, prep_right = st.columns([3, 2])
-    with prep_left:
-        st.subheader("Quick Notes")
-        meeting_notes = st.text_area(
-            f"Notes about {selected} (meeting prep, observations, concerns):",
-            height=120, placeholder="Type anything — then get coaching on it.",
-            key=f"timeline_notes_{member_id}")
-    with prep_right:
-        render_coaching_pane(
-            meeting_notes if meeting_notes else "",
-            context_type="meeting_prep",
-            member_name=selected,
-            prep_data=prep,
-            key_suffix=f"timeline_{member_id}")
-
-    # -- Timeline feed --
-    st.subheader("Activity Timeline")
-    timeline = db.get_member_timeline(member_id, manager_id=_mid())
-    if not timeline:
-        st.caption("No activity recorded for this member yet.")
-    type_icons = {
-        "event": "\U0001F4C5", "positive_feedback": "\U0001F4AC",
-        "constructive_feedback": "\U0001F4AC", "goal": "\U0001F3AF",
-        "action": "\u2705", "career": "\U0001F680",
-    }
-    for item in timeline:
-        icon = type_icons.get(item["type"], "\U0001F4CB")
-        label = f"{icon} {item['date']} — **{item['type'].replace('_', ' ').title()}**: {item.get('summary', '') or ''}"
-        with st.expander(label):
-            if item.get("detail"):
-                st.markdown(item["detail"])
 
 
 def page_analytics():
@@ -2006,7 +1969,6 @@ _DISPATCH = {
     "Dashboard": page_dashboard,
     "Journal": page_journal,
     "Team": page_team_roster,
-    "Timeline": page_member_timeline,
     "1:1 Notes": page_running_notes,
     "Career Dev": page_career_development,
     "Actions": page_action_items,
@@ -2021,9 +1983,12 @@ _DISPATCH = {
     "Resources": page_resources,
     "Settings": page_configuration,
     "My Profile": page_my_profile,
-    # Legacy routes (for backward compat with session state)
+    # Legacy routes (for backward compat with session state).
+    # Timeline is folded into Team detail; aliases redirect there for any
+    # cached nav_page values from earlier deploys.
+    "Timeline": page_team_roster,
+    "Member Timeline": page_team_roster,
     "Team Roster": page_team_roster,
-    "Member Timeline": page_member_timeline,
     "Running Notes": page_running_notes,
     "Career Development": page_career_development,
     "Action Items": page_action_items,
@@ -2059,9 +2024,9 @@ def main():
     manager_name = st.session_state.get("manager_name", "Manager")
     current_page = st.session_state.get("nav_page", "Dashboard")
 
-    # -- Sidebar: flat, compact, workflow-ordered --
+    # -- Sidebar: three-section IA (Manager / Directs / Reference) --
     with st.sidebar:
-        st.markdown("### \U0001F4CB Manager Tool")
+        st.markdown("### Manager Tool")
 
         # Streak + daily status (engagement hook)
         streak = db.get_journal_streak(manager_id=_mid())
@@ -2073,35 +2038,32 @@ def main():
 
         st.markdown("---")
 
-        # -- Primary actions (daily use) --
-        _nav_button("\U0001F4CA  Dashboard", "Dashboard", current_page)
-        _nav_button("\u270D\uFE0F  Journal", "Journal", current_page)
-
-        st.caption("PEOPLE")
-        _nav_button("\U0001F465  Team", "Team", current_page)
-        _nav_button("\U0001F550  Timeline", "Timeline", current_page)
-        _nav_button("\U0001F4DD  1:1 Notes", "1:1 Notes", current_page)
-        _nav_button("\U0001F680  Career Dev", "Career Dev", current_page)
-
-        st.caption("TRACKING")
-        # Badge counts for urgency
+        # Overdue badge \u2014 only shown when count > 0
         _summary = db.get_weekly_summary(manager_id=_mid()) or {}
         overdue_actions = len(_summary.get("overdue_actions", []))
-        actions_label = f"\u2705  Actions ({overdue_actions} overdue)" if overdue_actions else "\u2705  Actions"
-        _nav_button(actions_label, "Actions", current_page)
-        _nav_button("\U0001F4AC  Feedback", "Feedback", current_page)
-        _nav_button("\U0001F4E4  Delegations", "Delegations", current_page)
-        _nav_button("\U0001F3AF  Goals", "Goals", current_page)
+        todo_label = (f"\u2705  To Do  \u00B7  {overdue_actions} overdue"
+                      if overdue_actions else "\u2705  To Do")
+
+        st.caption("MANAGER")
+        _nav_button("\U0001F4CA  Dashboard", "Dashboard", current_page)
+        _nav_button("\U0001F4C6  Upcoming", "Upcoming", current_page)
+        _nav_button("\u270D\uFE0F  Manager Journal", "Journal", current_page)
+        _nav_button("\U0001F4C5  Schedule Event", "Schedule", current_page)
+        _nav_button(todo_label, "Actions", current_page)
         _nav_button("\U0001F9E0  Decisions", "Decisions", current_page)
 
-        st.caption("EVENTS")
-        _nav_button("\U0001F4C5  Schedule", "Schedule", current_page)
-        _nav_button("\U0001F4C6  Upcoming", "Upcoming", current_page)
-        _nav_button("\U0001F4DA  History", "History", current_page)
+        st.caption("DIRECTS")
+        _nav_button("\U0001F4DD  1:1 Notes", "1:1 Notes", current_page)
+        _nav_button("\U0001F4E4  Delegations", "Delegations", current_page)
+        _nav_button("\U0001F4AC  Feedback", "Feedback", current_page)
+        _nav_button("\U0001F3AF  Goals", "Goals", current_page)
+        _nav_button("\U0001F680  Career Dev", "Career Dev", current_page)
 
         st.caption("REFERENCE")
         _nav_button("\U0001F4C8  Analytics", "Analytics", current_page)
+        _nav_button("\U0001F4DA  History", "History", current_page)
         _nav_button("\U0001F4DA  Resources", "Resources", current_page)
+        _nav_button("\U0001F465  Team", "Team", current_page)
 
         st.markdown("---")
         _nav_button("\u2699\uFE0F  Settings", "Settings", current_page)
