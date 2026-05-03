@@ -40,6 +40,11 @@ REPO_ROOT = DJANGO_DIR.parent
 SCHEMA_SQL = REPO_ROOT / "schema_postgres.sql"
 PHASE2_SQL = REPO_ROOT / "scripts" / "migrate_p2_config_to_id_pk.sql"
 
+# Make `mt` and the apps importable when this script is run as
+# `python scripts/smoke_pg_django.py` — Python adds the script's own
+# directory (scripts/) to sys.path but not its parent.
+sys.path.insert(0, str(DJANGO_DIR))
+
 
 def _bail(msg: str) -> None:
     print(f"FAIL: {msg}", file=sys.stderr)
