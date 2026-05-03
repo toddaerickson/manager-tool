@@ -48,6 +48,24 @@ EVENT_TYPE_CHOICES = [
 ]
 
 
+def _time_choices():
+    """30-min increments from 6:00 AM through 9:00 PM. Stored value is
+    24-hour HH:MM (matches the schema's TEXT format); display is
+    12-hour with AM/PM for readability."""
+    out = []
+    for h in range(6, 22):  # 06..21 inclusive
+        for m in (0, 30):
+            value = f"{h:02d}:{m:02d}"
+            display_h = ((h - 1) % 12) + 1   # 0/12 → 12, 13 → 1, etc.
+            display_period = "PM" if h >= 12 else "AM"
+            display = f"{display_h}:{m:02d} {display_period}"
+            out.append((value, display))
+    return out
+
+
+TIME_CHOICES = _time_choices()
+
+
 class EventForm(forms.ModelForm):
     """Schedule a one-off event. Recurring events come in Phase 5.2b
     (separate code path: db.create_recurring_events / _materialize_in_txn)."""
@@ -55,8 +73,10 @@ class EventForm(forms.ModelForm):
     scheduled_date = forms.DateField(
         widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
     )
-    scheduled_time = forms.TimeField(
-        widget=forms.TimeInput(attrs={"type": "time", "class": _INPUT_CLS}),
+    scheduled_time = forms.ChoiceField(
+        choices=TIME_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+        initial="10:00",
     )
     event_type = forms.ChoiceField(
         choices=EVENT_TYPE_CHOICES,
@@ -106,9 +126,8 @@ class EventForm(forms.ModelForm):
         d = self.cleaned_data["scheduled_date"]
         return d.isoformat()  # text in DB
 
-    def clean_scheduled_time(self):
-        t = self.cleaned_data["scheduled_time"]
-        return t.strftime("%H:%M")  # text in DB
+    # scheduled_time comes in as "HH:MM" string from the ChoiceField —
+    # already in the schema's TEXT format, no conversion needed.
 
     def clean(self):
         # Default title from event_type if blank — done at form level so
