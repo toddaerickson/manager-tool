@@ -116,7 +116,12 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 LOGIN_REDIRECT_URL = "/dashboard/"
 LOGOUT_REDIRECT_URL = "/"
-LOGIN_URL = "/accounts/login/"
+# Google-only auth: @login_required redirects straight to the Google
+# OAuth flow rather than allauth's default email/password form. Set
+# SOCIALACCOUNT_LOGIN_ON_GET so Google flow starts on GET (no
+# intermediate "click to continue" page).
+LOGIN_URL = "/accounts/google/login/"
+SOCIALACCOUNT_LOGIN_ON_GET = True
 
 
 # --- Internationalization ----------------------------------------------

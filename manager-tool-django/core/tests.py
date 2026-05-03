@@ -191,10 +191,12 @@ class TestDashboardView:
         client.force_login(u)
         return u
 
-    def test_anonymous_redirects_to_login(self, client):
+    def test_anonymous_redirects_to_google_login(self, client):
+        """Phase 3: Google-only auth. Anonymous hits go straight to the
+        Google OAuth flow, not the email/password form."""
         resp = client.get("/dashboard/")
         assert resp.status_code == 302
-        assert "/accounts/login/" in resp["Location"]
+        assert "/accounts/google/login/" in resp["Location"]
 
     def test_logged_in_user_with_no_manager_gets_403(self, client):
         self._login_as(client, "stranger@example.com")
@@ -235,4 +237,4 @@ class TestDashboardView:
         # Now blocked
         resp = client.get("/dashboard/")
         assert resp.status_code == 302
-        assert "/accounts/login/" in resp["Location"]
+        assert "/accounts/google/login/" in resp["Location"]
