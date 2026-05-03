@@ -67,6 +67,47 @@ def test_next_step_row_escapes_button_label():
         "Next Step button label must wrap rule-based suggestion in html.escape()"
 
 
+def test_one_on_one_page_escapes_member_name_in_title():
+    """The 1:1 page header interpolates `member["name"]` into a markdown
+    string. A team member with a `<script>` in their name would otherwise
+    surface as live HTML when the page renders the title."""
+    src = _src()
+    assert "html.escape(member[\"name\"])" in src or "name_safe = html.escape" in src, \
+        "1:1 page must escape member name before interpolating into the title"
+
+
+def test_one_on_one_page_escapes_carryover_followup_notes():
+    """`followup_notes` from the prior session are user-controlled text.
+    The carry-over banner uses `st.info(...)` with markdown-style content;
+    the value must be html-escaped so a `<script>` in last week's notes
+    doesn't render as live HTML in this week's banner."""
+    src = _src()
+    assert "html.escape(prior['followup_notes'])" in src, \
+        "Carry-over banner must escape prior followup_notes"
+
+
+def test_one_on_one_page_escapes_feedback_fields():
+    """SBI feedback fields (situation, behavior, impact) flow into the
+    'Latest feedback' expander on the 1:1 page. Each field is user-typed
+    and must be escaped before rendering inside the markdown block."""
+    src = _src()
+    for snippet in (
+        'html.escape(fb.get("situation") or "")',
+        'html.escape(fb.get("behavior") or "")',
+        'html.escape(fb.get("impact") or "")',
+    ):
+        assert snippet in src, \
+            f"Feedback expander missing escape: {snippet!r}"
+
+
+def test_one_on_one_past_records_escape_preview():
+    """Past 1:1 records are listed with a 80-char preview of `direct_notes`.
+    User-typed; must be escaped before rendering in the markdown row."""
+    src = _src()
+    assert "preview_safe = html.escape(preview)" in src, \
+        "Past 1:1 records must escape direct_notes preview"
+
+
 def test_html_escape_neutralises_canonical_xss_payloads():
     """Sanity-check the underlying escape function — guards against someone
     swapping in a partial replacement. The contract: the output must contain
