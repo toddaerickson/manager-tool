@@ -629,6 +629,114 @@ class TestRunningNotes:
         assert len(notes) == 0
 
 
+class TestBroadcastRunningNotes:
+    """PR δ: running_notes.team_member_id is now nullable. NULL = broadcast,
+    surfaces in every direct's per-member view AND in the 1:1 meeting page's
+    recent-notes panel for any direct of this manager. Cross-tenant
+    isolation still holds (broadcasts are per-manager, not global)."""
+
+    def test_create_broadcast_with_none_team_member(self):
+        mid = db.create_manager("bc_mgr1", "BC1", "pass1234")
+        nid = db.add_running_note(
+            team_member_id=None,
+            content="All-hands recap: focus shifts to onboarding next sprint",
+            category="general", manager_id=mid)
+        assert nid is not None
+        bcasts = db.list_broadcast_running_notes(manager_id=mid)
+        assert len(bcasts) == 1
+        assert bcasts[0]["team_member_id"] is None
+        assert "onboarding" in bcasts[0]["content"]
+
+    def test_member_view_includes_broadcast_by_default(self):
+        """list_running_notes(member_id, ...) defaults to include_broadcast=True
+        so the manager sees both per-member and broadcast notes when viewing
+        any direct's feed."""
+        mid = db.create_manager("bc_mgr2", "BC2", "pass1234")
+        a = db.add_team_member("Alice", manager_id=mid)
+        b = db.add_team_member("Bob", manager_id=mid)
+        # Per-member note for Alice only.
+        db.add_running_note(a, "Alice's prep note",
+                            category="meeting_prep", manager_id=mid)
+        # Broadcast note — should surface in BOTH Alice's and Bob's views.
+        db.add_running_note(None, "Team-wide announcement",
+                            category="general", manager_id=mid)
+
+        alice_notes = db.list_running_notes(a, manager_id=mid)
+        bob_notes = db.list_running_notes(b, manager_id=mid)
+        assert any("Team-wide" in n["content"] for n in alice_notes), \
+            "broadcast must appear in Alice's view"
+        assert any("Team-wide" in n["content"] for n in bob_notes), \
+            "broadcast must appear in Bob's view"
+        assert any("Alice's prep" in n["content"] for n in alice_notes)
+        assert not any("Alice's prep" in n["content"] for n in bob_notes), \
+            "Alice's per-member note must NOT appear in Bob's view"
+
+    def test_member_view_excludes_broadcast_when_flag_false(self):
+        """Pass include_broadcast=False to get only per-member rows. Used
+        by the promote-to-feedback flow (broadcast notes can't be promoted
+        because they have no member to attribute SBI to)."""
+        mid = db.create_manager("bc_mgr3", "BC3", "pass1234")
+        a = db.add_team_member("Alice", manager_id=mid)
+        db.add_running_note(a, "Alice-specific note", manager_id=mid)
+        db.add_running_note(None, "Broadcast", manager_id=mid)
+
+        only_member = db.list_running_notes(
+            a, manager_id=mid, include_broadcast=False)
+        assert len(only_member) == 1
+        assert only_member[0]["content"] == "Alice-specific note"
+
+    def test_broadcast_view_is_manager_scoped(self):
+        """Cross-tenant: manager A's broadcasts must not surface for
+        manager B, and vice versa. Broadcasts are per-manager, not global."""
+        m1 = db.create_manager("bc_a", "A", "pass1234")
+        m2 = db.create_manager("bc_b", "B", "pass1234")
+        db.add_running_note(None, "A's announcement", manager_id=m1)
+        db.add_running_note(None, "B's announcement", manager_id=m2)
+
+        a_view = db.list_broadcast_running_notes(manager_id=m1)
+        b_view = db.list_broadcast_running_notes(manager_id=m2)
+        a_contents = {n["content"] for n in a_view}
+        b_contents = {n["content"] for n in b_view}
+        assert "A's announcement" in a_contents
+        assert "B's announcement" not in a_contents
+        assert "B's announcement" in b_contents
+        assert "A's announcement" not in b_contents
+
+    def test_member_view_does_not_leak_other_managers_broadcast(self):
+        """Even with include_broadcast=True, manager A's per-member view
+        must not see manager B's broadcast notes."""
+        m1 = db.create_manager("bc_x", "X", "pass1234")
+        m2 = db.create_manager("bc_y", "Y", "pass1234")
+        a1 = db.add_team_member("A1", manager_id=m1)
+        db.add_running_note(None, "Y's broadcast", manager_id=m2)
+
+        notes = db.list_running_notes(a1, manager_id=m1)
+        assert not any("Y's broadcast" in n["content"] for n in notes), \
+            "manager X's view of A1 must not include manager Y's broadcasts"
+
+    def test_broadcast_rejects_none_manager(self):
+        try:
+            db.list_broadcast_running_notes(manager_id=None)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "list_broadcast_running_notes(manager_id=None) must raise")
+
+    def test_migration_idempotent_running_notes_nullable(self):
+        """Re-running migrations is a no-op — the 0011 migration's PRAGMA
+        guard skips the rebuild when team_member_id is already nullable."""
+        mid = db.create_manager("bc_mig", "Mig", "pass1234")
+        with db._connect() as conn:
+            db._run_migrations(conn)
+        # Sanity: column is nullable on this fresh fixture.
+        with db._connect() as conn:
+            cur = db._exec(conn, "PRAGMA table_info(running_notes)")
+            cols = {r[1]: r[3] for r in cur.fetchall()}  # name → notnull
+        assert cols.get("team_member_id") == 0, \
+            "team_member_id must be nullable after 0011 migration"
+
+
 class TestDecisionLog:
     def test_add_and_list(self):
         mid = db.create_manager("mgr", "Mgr", "pass1234")

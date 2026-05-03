@@ -322,6 +322,45 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
+    # -- Broadcast running notes (PR `db/broadcast-running-notes`) ---------
+    # team_member_id is nullable now; NULL = broadcast surfaces in every
+    # direct's per-member view. Round-trip on real PG plus cross-tenant.
+    db.add_running_note(
+        team_member_id=None,
+        content="A's all-hands recap (broadcast smoke)",
+        category="general", manager_id=mid)
+    db.add_running_note(
+        team_member_id=None,
+        content="B's all-hands recap (broadcast smoke)",
+        category="general", manager_id=mid_b)
+
+    a_bcasts = db.list_broadcast_running_notes(manager_id=mid)
+    a_contents = {n["content"] for n in a_bcasts}
+    if "A's all-hands recap (broadcast smoke)" not in a_contents:
+        print(f"error: A's broadcast missing from A's view: {a_contents}",
+              file=sys.stderr)
+        return 1
+    if "B's all-hands recap (broadcast smoke)" in a_contents:
+        print(f"error: A's broadcast view leaked B's broadcast: {a_contents}",
+              file=sys.stderr)
+        return 1
+    print(f"[ok] broadcast notes: round-trip + cross-tenant isolated "
+          f"({len(a_bcasts)} for A)")
+
+    # Per-member view of A's direct must include A's broadcast (because
+    # include_broadcast=True is the default for the helper).
+    member_view = db.list_running_notes(member_id, manager_id=mid)
+    member_contents = {n["content"] for n in member_view}
+    if "A's all-hands recap (broadcast smoke)" not in member_contents:
+        print(f"error: per-member view did not include broadcast: "
+              f"{member_contents}", file=sys.stderr)
+        return 1
+    if "B's all-hands recap (broadcast smoke)" in member_contents:
+        print(f"error: per-member view of A's direct leaked B's broadcast: "
+              f"{member_contents}", file=sys.stderr)
+        return 1
+    print("[ok] broadcast notes: surface in per-member view, no cross-tenant leak")
+
     db.revoke_session(token)
     after_revoke = db.validate_session(token, user_agent_hash="ua-hash")
     if after_revoke is not None:

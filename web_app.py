@@ -1064,6 +1064,9 @@ def _render_member_timeline(member_id, member_name):
                 st.caption(f"> {p['wisdom']}")
 
     # -- Running 1:1 Notes (persistent across meetings) --
+    # include_broadcast=True (default) so the manager's "all directs"
+    # notes surface here alongside member-specific ones. A megaphone
+    # marker tags the broadcast rows so the manager can tell them apart.
     recent_notes = db.list_running_notes(member_id, manager_id=_mid(), limit=5)
     if recent_notes:
         st.divider()
@@ -1073,7 +1076,11 @@ def _render_member_timeline(member_id, member_name):
                         "observation": "\U0001F440", "follow_up": "\U0001F504",
                         "praise": "⭐"}
             icon = cat_icons.get(n.get("category", ""), "\U0001F4DD")
-            st.markdown(f"{icon} **{n['note_date']}** — {n['content']}")
+            broadcast_marker = ("\U0001F4E2 "
+                                if n.get("team_member_id") is None
+                                else "")
+            st.markdown(
+                f"{broadcast_marker}{icon} **{n['note_date']}** — {n['content']}")
 
     # -- Coaching pane for this member --
     st.divider()
@@ -2238,6 +2245,9 @@ def page_delegations():
 # Running 1:1 Notes
 # ---------------------------------------------------------------------------
 
+_RN_BROADCAST_LABEL = "All team members (broadcast)"
+
+
 def page_running_notes():
     st.title("Running 1:1 Notes")
     show_toast()
@@ -2252,25 +2262,32 @@ def page_running_notes():
         st.info("Add team members first.")
         return
 
-    selected = st.selectbox("Team member", names, key="rn_member")
-    member_id = mapping[selected]
+    # "All team members" is the first (default) option. A broadcast note has
+    # team_member_id IS NULL and surfaces in every direct's per-member feed
+    # AND in the 1:1 meeting page's recent-notes panel for any direct.
+    selectbox_options = [_RN_BROADCAST_LABEL] + names
+    selected = st.selectbox("Team member", selectbox_options, key="rn_member")
+    is_broadcast = selected == _RN_BROADCAST_LABEL
+    member_id = None if is_broadcast else mapping[selected]
 
-    # -- Start 1:1 — primary entry point. Surfaced here (1:1 Notes is the
-    # natural home) rather than buried under Team → select member → detail
-    # → Start 1:1 button. The selectbox above already chose the member.
-    if st.button(f"Start 1:1 with {selected}",
-                 key="rn_start_1on1", type="primary",
-                 use_container_width=True):
-        st.session_state["one_on_one_member_id"] = member_id
-        st.session_state.pop("one_on_one_session_id", None)
-        st.session_state["nav_page"] = "1:1 Meeting"
-        st.rerun()
+    # -- Start 1:1 — only meaningful for an individual member.
+    if not is_broadcast:
+        if st.button(f"Start 1:1 with {selected}",
+                     key="rn_start_1on1", type="primary",
+                     use_container_width=True):
+            st.session_state["one_on_one_member_id"] = member_id
+            st.session_state.pop("one_on_one_session_id", None)
+            st.session_state["nav_page"] = "1:1 Meeting"
+            st.rerun()
 
     # -- Add note --
     with st.form("add_running_note"):
         nc1, nc2 = st.columns([3, 1])
         with nc1:
-            content = st.text_area(f"Note about {selected}", height=100,
+            note_label = ("Note for all directs (broadcast)"
+                          if is_broadcast
+                          else f"Note about {selected}")
+            content = st.text_area(note_label, height=100,
                 placeholder="Observation, meeting prep, follow-up, praise...")
         with nc2:
             category = st.selectbox("Category", [
@@ -2283,15 +2300,30 @@ def page_running_notes():
                     category=category, note_date=note_date.isoformat(),
                     manager_id=_mid(),
                 )
-                set_toast("success", "Note added.")
+                if is_broadcast:
+                    set_toast("success",
+                              "Broadcast note added — visible to every direct.")
+                else:
+                    set_toast("success", "Note added.")
                 st.rerun()
             else:
                 st.warning("Write something first.")
 
     # -- Display notes --
-    notes = db.list_running_notes(member_id, manager_id=_mid())
+    # Broadcast view: only the manager's NULL-team_member rows.
+    # Per-member view: that member's rows PLUS broadcasts (so the manager
+    # sees what's relevant during prep without flipping the selectbox).
+    if is_broadcast:
+        notes = db.list_broadcast_running_notes(manager_id=_mid())
+        header_text = f"Broadcast notes ({len(notes)})"
+    else:
+        notes = db.list_running_notes(
+            member_id, manager_id=_mid(), include_broadcast=True)
+        bcount = sum(1 for n in notes if n.get("team_member_id") is None)
+        header_text = (f"Notes for {selected} ({len(notes)}"
+                       f"{' incl. ' + str(bcount) + ' broadcast' if bcount else ''})")
     if notes:
-        st.subheader(f"Notes for {selected} ({len(notes)})")
+        st.subheader(header_text)
         category_icons = {
             "general": "\U0001F4DD", "meeting_prep": "\U0001F4C5",
             "observation": "\U0001F440", "follow_up": "\U0001F504",
@@ -2300,11 +2332,18 @@ def page_running_notes():
         for n in notes:
             icon = category_icons.get(n.get("category", ""), "\U0001F4DD")
             cat = n.get("category", "general")
+            note_is_broadcast = n.get("team_member_id") is None
+            # Broadcast marker (megaphone) prefixed when the note has no
+            # team_member_id. Per-member view shows broadcasts inline so
+            # the prefix is what tells the manager this note is global.
+            broadcast_marker = "\U0001F4E2 " if note_is_broadcast else ""
             # Promote button shows only for observation/praise notes — those
             # are the categories that map cleanly to SBI feedback. praise →
             # positive feedback; observation → constructive feedback. The
-            # source note stays put after promotion.
-            promotable = cat in ("observation", "praise")
+            # source note stays put after promotion. Broadcast notes can't
+            # be promoted (no member to attribute SBI to).
+            promotable = (cat in ("observation", "praise")
+                          and not note_is_broadcast)
             if promotable:
                 col_note, col_promote, col_del = st.columns([5, 1, 1])
             else:
@@ -2312,8 +2351,9 @@ def page_running_notes():
                 col_promote = None
             with col_note:
                 st.markdown(
-                    f"{icon} **{n['note_date']}** [{cat}]  \n"
-                    f"{n['content']}"
+                    f"{broadcast_marker}{icon} **{n['note_date']}** [{cat}]"
+                    + (" · _broadcast_" if note_is_broadcast else "")
+                    + f"  \n{n['content']}"
                 )
             if col_promote is not None:
                 with col_promote:
@@ -2337,7 +2377,12 @@ def page_running_notes():
                     st.rerun()
             st.markdown("---")
     else:
-        st.caption(f"No notes yet for {selected}. Start building a history.")
+        empty_msg = (
+            "No broadcast notes yet. Add one above to share context with all "
+            "directs."
+            if is_broadcast
+            else f"No notes yet for {selected}. Start building a history.")
+        st.caption(empty_msg)
 
 
 # ---------------------------------------------------------------------------

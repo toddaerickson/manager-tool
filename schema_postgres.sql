@@ -227,7 +227,9 @@ CREATE TABLE IF NOT EXISTS delegations (
 CREATE TABLE IF NOT EXISTS running_notes (
     id SERIAL PRIMARY KEY,
     manager_id INTEGER,
-    team_member_id INTEGER NOT NULL REFERENCES team_members(id),
+    -- team_member_id NULL = broadcast: surfaces in every direct's feed
+    -- when the manager looks at the 1:1 page or the per-member view.
+    team_member_id INTEGER REFERENCES team_members(id),
     note_date TEXT NOT NULL DEFAULT CURRENT_DATE,
     content TEXT NOT NULL,
     category TEXT DEFAULT 'general' CHECK(category IN
