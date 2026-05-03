@@ -1,6 +1,8 @@
-{# Returned by team-delete on success.
-   - Removes the row (HTMX target is the row, swap=outerHTML, this body is empty)
-   - Out-of-band swaps the deleted-section with the updated list #}
+{% comment %}
+Returned by team-delete on success.
+- Removes the row (HTMX target is the row, swap=outerHTML, this body is empty)
+- Out-of-band swaps the deleted-section with the updated list
+{% endcomment %}
 <div id="deleted-section" hx-swap-oob="true">
   {% include "_partials/team_member_deleted_list.html" %}
 </div>
