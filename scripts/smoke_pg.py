@@ -56,6 +56,7 @@ def _seed_second_manager(db, soon: str) -> int:
         manager_id=mid_b)
     db.add_action_item("B's task", due_date=soon, manager_id=mid_b)
     db.add_delegation("B's deleg", team_member_id=member_b,
+                      outcome_expected="B's deleg outcome (smoke)",
                       check_in_date=soon, manager_id=mid_b)
     db.add_goal(member_b, "Q2 2026", "B's goal",
                 target_date=soon, manager_id=mid_b)
@@ -152,6 +153,7 @@ def main() -> int:
 
     db.add_action_item("A's task", due_date=soon, manager_id=mid)
     db.add_delegation("A's deleg", team_member_id=member_id,
+                      outcome_expected="A's deleg outcome (smoke)",
                       check_in_date=soon, manager_id=mid)
     db.add_goal(member_id, "Q2 2026", "A's goal",
                 target_date=soon, manager_id=mid)

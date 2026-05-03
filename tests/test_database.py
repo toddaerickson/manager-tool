@@ -377,7 +377,9 @@ class TestDelegations:
 
     def test_complete_delegation(self):
         mid = db.create_manager("mgr2", "Mgr2", "pass1234")
-        did = db.add_delegation(task="Write docs", manager_id=mid)
+        did = db.add_delegation(task="Write docs",
+                                outcome_expected="Docs published to wiki",
+                                manager_id=mid)
         db.update_delegation(did, manager_id=mid, status="completed")
 
         active = db.list_delegations(manager_id=mid, status="active")
@@ -386,17 +388,162 @@ class TestDelegations:
     def test_isolation(self):
         m1 = db.create_manager("del_m1", "M1", "pass1234")
         m2 = db.create_manager("del_m2", "M2", "pass1234")
-        db.add_delegation(task="M1 task", manager_id=m1)
-        db.add_delegation(task="M2 task", manager_id=m2)
+        db.add_delegation(task="M1 task",
+                          outcome_expected="M1 result delivered", manager_id=m1)
+        db.add_delegation(task="M2 task",
+                          outcome_expected="M2 result delivered", manager_id=m2)
 
         assert len(db.list_delegations(manager_id=m1)) == 1
         assert len(db.list_delegations(manager_id=m2)) == 1
 
     def test_active_count(self):
         mid = db.create_manager("mgr3", "Mgr3", "pass1234")
-        db.add_delegation(task="Task 1", manager_id=mid)
-        db.add_delegation(task="Task 2", manager_id=mid)
+        db.add_delegation(task="Task 1",
+                          outcome_expected="Task 1 outcome", manager_id=mid)
+        db.add_delegation(task="Task 2",
+                          outcome_expected="Task 2 outcome", manager_id=mid)
         assert db.get_active_delegations_count(manager_id=mid) == 2
+
+
+class TestDelegationOutcomeValidation:
+    """add_delegation / update_delegation reject delegations without a
+    substantive outcome statement. Per the approved stage-of-delivery plan:
+    a delegation without a defined outcome is just a to-do in nicer clothes,
+    so the writer enforces the discipline server-side."""
+
+    def _mid(self):
+        return db.create_manager("dv_mgr", "DV", "pass1234")
+
+    def test_empty_outcome_rejected(self):
+        mid = self._mid()
+        for bad in (None, "", "   "):
+            try:
+                db.add_delegation(task="real task", outcome_expected=bad,
+                                  manager_id=mid)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"empty outcome_expected={bad!r} must raise ValueError")
+
+    def test_junk_strings_rejected(self):
+        mid = self._mid()
+        for bad in ("n/a", "N/A", "  na  ", "TBD", "tbd"):
+            try:
+                db.add_delegation(task="real task", outcome_expected=bad,
+                                  manager_id=mid)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"junk outcome_expected={bad!r} must raise ValueError")
+
+    def test_outcome_equals_task_rejected(self):
+        """Outcome must be DISTINCT from the task — describing the result,
+        not the activity. Prevents the LinkedIn-skill-endorsement
+        degeneration where the manager just copies the task into the outcome."""
+        mid = self._mid()
+        try:
+            db.add_delegation(task="Run the Q3 review",
+                              outcome_expected="Run the Q3 review",
+                              manager_id=mid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "outcome_expected == task must raise ValueError")
+        # Case + whitespace-insensitive: should still reject.
+        try:
+            db.add_delegation(task="Run the Q3 review",
+                              outcome_expected="  RUN THE Q3 REVIEW  ",
+                              manager_id=mid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "outcome_expected == task (case/whitespace) must raise ValueError")
+
+    def test_substantive_outcome_accepted(self):
+        mid = self._mid()
+        did = db.add_delegation(task="Run the Q3 review",
+                                outcome_expected="Final report shared with execs",
+                                manager_id=mid)
+        assert did is not None
+
+    def test_empty_task_rejected(self):
+        mid = self._mid()
+        try:
+            db.add_delegation(task="   ",
+                              outcome_expected="something",
+                              manager_id=mid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("empty task must raise ValueError")
+
+    def test_update_with_junk_outcome_rejected(self):
+        mid = self._mid()
+        did = db.add_delegation(task="Initial",
+                                outcome_expected="Initial outcome",
+                                manager_id=mid)
+        try:
+            db.update_delegation(did, manager_id=mid, outcome_expected="n/a")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "update_delegation with junk outcome must raise ValueError")
+
+    def test_update_outcome_equals_existing_task_rejected(self):
+        """When outcome_expected is updated without changing task, the
+        validator looks up the existing task to compare — the update path
+        can't bypass the equal-to-task rule by omitting task from kwargs."""
+        mid = self._mid()
+        did = db.add_delegation(task="Lead the migration",
+                                outcome_expected="Migration shipped",
+                                manager_id=mid)
+        try:
+            db.update_delegation(did, manager_id=mid,
+                                 outcome_expected="Lead the migration")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "update outcome == existing task must raise ValueError")
+
+
+class TestDelegationManagerScoping:
+    """The list/count/overdue helpers used to take optional manager_id=None,
+    a multi-tenant hole audit caught. Plan PR α tightens them to
+    keyword-only required with `if x is None: raise ValueError(...)` (NOT
+    `assert`, which is stripped under `python -O`)."""
+
+    def test_list_delegations_rejects_none_manager(self):
+        try:
+            db.list_delegations(manager_id=None)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "list_delegations(manager_id=None) must raise ValueError")
+
+    def test_get_active_delegations_count_rejects_none_manager(self):
+        try:
+            db.get_active_delegations_count(manager_id=None)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "get_active_delegations_count(manager_id=None) must raise")
+
+    def test_get_overdue_delegations_rejects_none_manager(self):
+        try:
+            db.get_overdue_delegations(manager_id=None)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "get_overdue_delegations(manager_id=None) must raise")
 
 
 class TestRunningNotes:
@@ -798,7 +945,9 @@ class TestCrossManagerScoping:
 
     def test_delegation_cross_manager_rejected(self):
         m1, m2, t1 = self._two_managers()
-        did = db.add_delegation(task="Original task", team_member_id=t1, manager_id=m1)
+        did = db.add_delegation(task="Original task", team_member_id=t1,
+                                outcome_expected="Original outcome",
+                                manager_id=m1)
 
         db.delete_delegation(did, manager_id=m2)
         active = db.list_delegations(manager_id=m1)
@@ -1468,6 +1617,7 @@ class TestUpcomingAggregator:
         db.add_action_item("Review Aggie's draft", due_date=soon,
                            manager_id=mid)
         db.add_delegation("Own Q3 onboarding", team_member_id=member_id,
+                          outcome_expected="Onboarding plan rolled out",
                           check_in_date=soon, manager_id=mid)
         db.add_goal(member_id, "Q2 2026", "Ship the migration",
                     target_date=soon, manager_id=mid)
@@ -1523,8 +1673,10 @@ class TestUpcomingAggregator:
         db.add_action_item("A's task", due_date=soon, manager_id=m1)
         db.add_action_item("B's task", due_date=soon, manager_id=m2)
         db.add_delegation("A's deleg", team_member_id=member_a,
+                          outcome_expected="A's deleg outcome",
                           check_in_date=soon, manager_id=m1)
         db.add_delegation("B's deleg", team_member_id=member_b,
+                          outcome_expected="B's deleg outcome",
                           check_in_date=soon, manager_id=m2)
 
         a_rows = db.get_upcoming_aggregate(manager_id=m1)

@@ -3165,13 +3165,46 @@ def list_milestones_for_plans(plan_ids, manager_id: int) -> dict[int, list[dict[
 # Delegation Tracker
 # ---------------------------------------------------------------------------
 
+_OUTCOME_JUNK_VALUES = frozenset({"", "n/a", "na", "tbd"})
+
+
+def _validate_delegation_outcome(task: str | None,
+                                 outcome_expected: str | None) -> None:
+    """Reject delegations without a substantive outcome statement.
+
+    A delegation without a defined outcome is just a to-do in nicer
+    clothes (per the management-theory framing). The writer enforces
+    the rule so the discipline can't be bypassed by alternate callers
+    (CLI, tests-bypass, future Django port). UI catches ValueError and
+    surfaces a friendly error.
+
+    Reject:
+      - empty / whitespace-only / None outcome_expected
+      - junk strings: 'n/a' / 'na' / 'tbd' (case-insensitive trim)
+      - outcome_expected equal to task (no actual outcome statement)"""
+    outcome_norm = (outcome_expected or "").strip().lower()
+    if outcome_norm in _OUTCOME_JUNK_VALUES:
+        raise ValueError(
+            "Delegation needs a substantive outcome statement. "
+            "Describe the result you'll accept as done — not 'n/a' or empty.")
+    task_norm = (task or "").strip().lower()
+    if outcome_norm == task_norm:
+        raise ValueError(
+            "Outcome must be distinct from the task itself — describe the "
+            "result, not the activity.")
+
+
 def add_delegation(task: str, team_member_id: int | None = None,
                    outcome_expected: str | None = None,
                    autonomy_level: str = "guided",
                    check_in_date: str | None = None,
                    notes: str | None = None,
                    manager_id: int | None = None) -> int | None:
-    """Create a new delegation record."""
+    """Create a new delegation record. Validates outcome_expected per
+    _validate_delegation_outcome — junk values raise ValueError."""
+    if not (task or "").strip():
+        raise ValueError("Delegation task is required.")
+    _validate_delegation_outcome(task, outcome_expected)
     with _connect() as conn:
         did = _exec_returning_id(
             conn,
@@ -3185,20 +3218,20 @@ def add_delegation(task: str, team_member_id: int | None = None,
     return did
 
 
-def list_delegations(manager_id: int | None = None,
+def list_delegations(*, manager_id: int,
                      team_member_id: int | None = None,
                      status: str | None = None) -> list[dict[str, Any]]:
-    """List delegations with optional filters."""
+    """List delegations scoped to manager_id (required)."""
+    if manager_id is None:
+        raise ValueError("manager_id required (no implicit cross-tenant)")
     with _connect() as conn:
         query = (
             "SELECT d.*, tm.name AS member_name "
             "FROM delegations d "
-            "LEFT JOIN team_members tm ON d.team_member_id = tm.id WHERE 1=1"
+            "LEFT JOIN team_members tm ON d.team_member_id = tm.id "
+            "WHERE d.manager_id = ?"
         )
-        params = []
-        if manager_id is not None:
-            query += " AND d.manager_id = ?"
-            params.append(manager_id)
+        params: list[Any] = [manager_id]
         if team_member_id is not None:
             query += " AND d.team_member_id = ?"
             params.append(team_member_id)
@@ -3212,12 +3245,26 @@ def list_delegations(manager_id: int | None = None,
 
 
 def update_delegation(delegation_id: int, manager_id: int, **kwargs: Any) -> None:
-    """Update delegation fields owned by manager_id."""
+    """Update delegation fields owned by manager_id. Validates
+    outcome_expected when present in kwargs (same rule as add_delegation:
+    reject junk values and outcome == task)."""
     allowed = {"task", "outcome_expected", "autonomy_level", "check_in_date",
                "notes", "status"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
+    if "outcome_expected" in fields:
+        # Resolve the task to compare against — either the new task in this
+        # update or the existing row's task. Skip validation if the writer
+        # is somehow given outcome_expected without context (degenerate).
+        task_for_check = fields.get("task")
+        if task_for_check is None:
+            with _connect() as conn:
+                row = _fetchone(conn,
+                    "SELECT task FROM delegations WHERE id = ? AND manager_id = ?",
+                    (delegation_id, manager_id))
+            task_for_check = (row or {}).get("task", "")
+        _validate_delegation_outcome(task_for_check, fields["outcome_expected"])
     if fields.get("status") == "completed":
         fields["completed_at"] = datetime.now().isoformat()
     sets = ", ".join(f"{k} = ?" for k in fields)
@@ -3234,31 +3281,31 @@ def delete_delegation(delegation_id: int, manager_id: int) -> None:
         _commit(conn)
 
 
-def get_active_delegations_count(manager_id: int | None = None) -> int:
-    """Count active delegations for nudge/dashboard display."""
+def get_active_delegations_count(*, manager_id: int) -> int:
+    """Count active delegations scoped to manager_id (required)."""
+    if manager_id is None:
+        raise ValueError("manager_id required (no implicit cross-tenant)")
     with _connect() as conn:
-        sql = "SELECT COUNT(*) AS cnt FROM delegations WHERE status = 'active'"
-        params = []
-        if manager_id is not None:
-            sql += " AND manager_id = ?"
-            params.append(manager_id)
-        row = _fetchone(conn, sql, params or None)
+        row = _fetchone(conn,
+            "SELECT COUNT(*) AS cnt FROM delegations "
+            "WHERE status = 'active' AND manager_id = ?",
+            (manager_id,))
     return row["cnt"] if row else 0
 
 
-def get_overdue_delegations(manager_id: int | None = None) -> list[dict[str, Any]]:
-    """Get delegations past their check-in date."""
+def get_overdue_delegations(*, manager_id: int) -> list[dict[str, Any]]:
+    """Get delegations past their check-in date, scoped to manager_id."""
+    if manager_id is None:
+        raise ValueError("manager_id required (no implicit cross-tenant)")
     with _connect() as conn:
         cd = _sql_current_date()
         sql = (f"SELECT d.*, tm.name AS member_name "
                f"FROM delegations d "
                f"LEFT JOIN team_members tm ON d.team_member_id = tm.id "
                f"WHERE d.status = 'active' AND d.check_in_date < {cd} "
-               f"AND d.check_in_date IS NOT NULL")
-        params = []
-        if manager_id is not None:
-            sql += " AND d.manager_id = ?"
-            params.append(manager_id)
+               f"AND d.check_in_date IS NOT NULL "
+               f"AND d.manager_id = ?")
+        params: list[Any] = [manager_id]
         sql += " ORDER BY d.check_in_date"
         rows = _fetchall(conn, sql, params or None)
     return rows
