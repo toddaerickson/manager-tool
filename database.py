@@ -2238,6 +2238,12 @@ def get_manager_activity_trends(weeks=12, manager_id=None):
     with _connect() as conn:
         wk = _sql_week
         dt = _sql_date_offset("?")
+        # feedback.created_at and action_items.created_at are TIMESTAMP on PG,
+        # so a direct comparison against `dt` (text on PG) raises
+        # "operator does not exist: timestamp >= text". Render them as date
+        # strings to match `dt`'s type. SQLite stores these as ISO text
+        # already, so the helper is a no-op-shaped substr() there.
+        ca_date = _sql_date_of_timestamp("created_at")
         evt_filter = " AND manager_id = ?" if manager_id is not None else ""
         ai_filter = " AND manager_id = ?" if manager_id is not None else ""
         # feedback doesn't have manager_id directly; filter via team_members join
@@ -2257,13 +2263,13 @@ def get_manager_activity_trends(weeks=12, manager_id=None):
                 SELECT {wk('created_at')} AS week,
                        0, COUNT(*), 0
                 FROM feedback
-                WHERE created_at >= {dt}{fb_filter}
+                WHERE {ca_date} >= {dt}{fb_filter}
                 GROUP BY {wk('created_at')}
                 UNION ALL
                 SELECT {wk('created_at')} AS week,
                        0, 0, COUNT(*)
                 FROM action_items
-                WHERE created_at >= {dt}{ai_filter}
+                WHERE {ca_date} >= {dt}{ai_filter}
                 GROUP BY {wk('created_at')}
             ) sub
             GROUP BY week ORDER BY week
