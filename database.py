@@ -2211,6 +2211,27 @@ def get_pending_action_items(manager_id: int | None = None) -> list[dict[str, An
         status=("pending", "in_progress"), manager_id=manager_id)
 
 
+def count_self_assigned_action_items_since(*, manager_id: int,
+                                           since_iso: str) -> int:
+    """Count action_items this manager created since `since_iso` (YYYY-MM-DD)
+    where the assignee is empty/None — i.e. self-assigned, the manager
+    kept it. Used by the Dashboard once-per-week soft prompt that asks
+    whether any of those should be delegated.
+
+    `created_at` is TIMESTAMP on PG / TEXT on SQLite; `_sql_date_of_timestamp`
+    coerces both into a 'YYYY-MM-DD' text we can compare to `since_iso`."""
+    if manager_id is None:
+        raise ValueError("manager_id required (no implicit cross-tenant)")
+    created_date = _sql_date_of_timestamp("created_at")
+    sql = (f"SELECT COUNT(*) AS cnt FROM action_items "
+           f"WHERE manager_id = ? "
+           f"AND (assignee IS NULL OR TRIM(assignee) = '') "
+           f"AND {created_date} >= ?")
+    with _connect() as conn:
+        row = _fetchone(conn, sql, (manager_id, since_iso))
+    return row["cnt"] if row else 0
+
+
 def delete_action_item(item_id: int, manager_id: int) -> None:
     """Delete an action item owned by manager_id."""
     with _connect() as conn:
