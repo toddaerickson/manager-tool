@@ -591,6 +591,21 @@ def _migration_sessions_and_login_attempts(conn) -> None:
     _commit(conn)
 
 
+def _migration_goals_target_date(conn) -> None:
+    """P-Upcoming.A: add goals.target_date so the Upcoming aggregator can
+    surface goals approaching their deadline. Existing rows stay NULL and
+    don't appear in Upcoming until a deadline is set. Idempotent via
+    `_table_columns` check + `CREATE INDEX IF NOT EXISTS`."""
+    cols = _table_columns(conn, "goals")
+    if "target_date" not in cols:
+        _exec(conn, "ALTER TABLE goals ADD COLUMN target_date TEXT")
+        _commit(conn)
+    _exec(conn,
+        "CREATE INDEX IF NOT EXISTS ix_goals_manager_target "
+        "ON goals (manager_id, target_date)")
+    _commit(conn)
+
+
 def _migration_hot_path_indexes(conn) -> None:
     """P4.1: btree indexes on hot WHERE columns (AUDIT M5). Idempotent via
     `IF NOT EXISTS`. Operators on Postgres prod should consider running
@@ -634,6 +649,7 @@ _MIGRATIONS: list[tuple[str, Any]] = [
     ("0005_sessions_and_login_attempts", _migration_sessions_and_login_attempts),
     ("0006_save_uniqueness_constraints", _migration_save_uniqueness_constraints),
     ("0007_hot_path_indexes", _migration_hot_path_indexes),
+    ("0008_goals_target_date", _migration_goals_target_date),
 ]
 
 
@@ -827,6 +843,7 @@ def init_db(*, force: bool = False):
             quarter TEXT NOT NULL,
             description TEXT NOT NULL,
             key_results TEXT,
+            target_date TEXT,
             status TEXT DEFAULT 'not_started' CHECK(status IN
                 ('not_started', 'in_progress', 'met', 'exceeded',
                  'partially_met', 'not_met')),
@@ -1016,6 +1033,8 @@ def init_db(*, force: bool = False):
             ON delegations (manager_id, status, check_in_date);
         CREATE INDEX IF NOT EXISTS ix_coach_suggestions_manager_date
             ON coach_suggestions (manager_id, suggestion_date);
+        CREATE INDEX IF NOT EXISTS ix_goals_manager_target
+            ON goals (manager_id, target_date);
         """)
         conn.commit()
 
@@ -1562,6 +1581,97 @@ def get_upcoming_events(days: int = 7, manager_id: int | None = None) -> list[di
                        manager_id=manager_id)
 
 
+# ---------------------------------------------------------------------------
+# Upcoming / Overdue aggregator — events + action_items + delegations + goals
+# ---------------------------------------------------------------------------
+#
+# Date bounds are computed in Python and bound as TEXT params, never inlined
+# via _sql_current_date(). On Postgres, _sql_current_date() returns a `date`
+# type and `text BETWEEN date AND date` triggers the same UndefinedFunction
+# class that bit get_member_timeline + get_manager_activity_trends. All four
+# date columns are TEXT YYYY-MM-DD; lex order == chronological order on both
+# backends, so `text BETWEEN ? AND ?` with string params works on PG and SQLite.
+
+_UPCOMING_AGGREGATE_SQL = """
+    SELECT 'event' AS type, e.scheduled_date AS due_date,
+           e.scheduled_time AS time_str, e.title AS title,
+           tm.name AS member_name, 'Schedule' AS link_page, e.id AS link_id
+    FROM events e
+    LEFT JOIN team_members tm ON e.team_member_id = tm.id
+    WHERE e.manager_id = ?
+      AND e.scheduled_date BETWEEN ? AND ?
+      AND e.status = 'scheduled'
+    UNION ALL
+    SELECT 'todo' AS type, ai.due_date AS due_date,
+           NULL AS time_str, ai.description AS title,
+           NULL AS member_name, 'Actions' AS link_page, ai.id AS link_id
+    FROM action_items ai
+    WHERE ai.manager_id = ?
+      AND ai.status IN ('pending', 'in_progress')
+      AND ai.due_date BETWEEN ? AND ?
+    UNION ALL
+    SELECT 'check-in' AS type, d.check_in_date AS due_date,
+           NULL AS time_str, d.task AS title,
+           tm.name AS member_name, 'Delegations' AS link_page, d.id AS link_id
+    FROM delegations d
+    LEFT JOIN team_members tm ON d.team_member_id = tm.id
+    WHERE d.manager_id = ?
+      AND d.status = 'active'
+      AND d.check_in_date BETWEEN ? AND ?
+    UNION ALL
+    SELECT 'goal' AS type, g.target_date AS due_date,
+           NULL AS time_str, g.description AS title,
+           tm.name AS member_name, 'Goals' AS link_page, g.id AS link_id
+    FROM goals g
+    LEFT JOIN team_members tm ON g.team_member_id = tm.id
+    WHERE g.manager_id = ?
+      AND g.status IN ('not_started', 'in_progress')
+      AND g.target_date BETWEEN ? AND ?
+    ORDER BY due_date, time_str
+"""
+
+
+def get_upcoming_aggregate(*, manager_id: int,
+                           days: int = 7) -> list[dict[str, Any]]:
+    """Items due within `days` days (today through today+days inclusive)
+    across events, action_items, delegations, and goals.
+
+    `manager_id` is keyword-only and asserted non-None: an unauthenticated
+    `_mid()` returning None must fail loud rather than silently returning
+    zero rows that read as 'nothing upcoming.' Goals filter is the
+    positive form ('not_started', 'in_progress') — `partially_met` and
+    `not_met` are terminal historical states and must not appear here."""
+    assert manager_id is not None, "manager_id required (no implicit cross-tenant)"
+    today = date.today().isoformat()
+    horizon = (date.today() + timedelta(days=days)).isoformat()
+    params = (manager_id, today, horizon,
+              manager_id, today, horizon,
+              manager_id, today, horizon,
+              manager_id, today, horizon)
+    with _connect() as conn:
+        return _fetchall(conn, _UPCOMING_AGGREGATE_SQL, params)
+
+
+def get_overdue_aggregate(*, manager_id: int,
+                          lookback_days: int = 90) -> list[dict[str, Any]]:
+    """Past-due items in the same four streams. Lookback is capped so a
+    user with old completed-but-never-marked events doesn't scan years
+    of history; 90 days is enough to surface anything actionable.
+
+    Same goals-status contract as get_upcoming_aggregate — terminal states
+    (met / exceeded / partially_met / not_met) are excluded so an overdue
+    goal that the user already gave up on doesn't keep appearing."""
+    assert manager_id is not None, "manager_id required (no implicit cross-tenant)"
+    earliest = (date.today() - timedelta(days=lookback_days)).isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    params = (manager_id, earliest, yesterday,
+              manager_id, earliest, yesterday,
+              manager_id, earliest, yesterday,
+              manager_id, earliest, yesterday)
+    with _connect() as conn:
+        return _fetchall(conn, _UPCOMING_AGGREGATE_SQL, params)
+
+
 def get_event_history(team_member_id, limit=20, manager_id=None):
     return list_events(team_member_id=team_member_id, status="completed",
                        limit=limit, manager_id=manager_id)
@@ -1751,15 +1861,24 @@ def delete_feedback(feedback_id: int, manager_id: int) -> None:
 
 def add_goal(team_member_id: int, quarter: str, description: str,
              key_results: str | None = None,
+             target_date: str | None = None,
              manager_id: int | None = None) -> int | None:
+    if target_date:
+        # Defense-in-depth — st.date_input always emits a YYYY-MM-DD string
+        # via .isoformat() in our form, but the writer is also reachable from
+        # tests / scripts. A malformed value here would silently break the
+        # Upcoming aggregator's `BETWEEN ? AND ?` lex-comparison.
+        date.fromisoformat(target_date)
     with _connect() as conn:
         if manager_id is None:
             manager_id = _resolve_manager_id_from_member(conn, team_member_id)
         goal_id = _exec_returning_id(
             conn,
-            "INSERT INTO goals (manager_id, team_member_id, quarter, description, key_results) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (manager_id, team_member_id, quarter, description, key_results),
+            "INSERT INTO goals (manager_id, team_member_id, quarter, description, "
+            "key_results, target_date) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (manager_id, team_member_id, quarter, description, key_results,
+             target_date),
         )
         _commit(conn)
     return goal_id
@@ -1767,7 +1886,9 @@ def add_goal(team_member_id: int, quarter: str, description: str,
 
 def update_goal(goal_id: int, manager_id: int, **kwargs) -> None:
     with _connect() as conn:
-        allowed = {"description", "key_results", "status", "quarter"}
+        allowed = {"description", "key_results", "status", "quarter", "target_date"}
+        if kwargs.get("target_date"):
+            date.fromisoformat(kwargs["target_date"])
         fields = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         if not fields:
             return

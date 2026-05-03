@@ -1420,3 +1420,137 @@ class TestMigrationRunner:
                 "Failed migration must NOT be recorded as applied"
         finally:
             conn.close()
+
+
+class TestUpcomingAggregator:
+    """get_upcoming_aggregate + get_overdue_aggregate cover the four streams
+    fed into the Upcoming page (events + action_items + delegations + goals).
+    Multi-tenancy on the aggregator is the high-blast-radius failure mode —
+    a missing manager_id predicate on any subquery leaks data across tenants.
+
+    Note: SQLite-only (conftest pins _USE_PG=False), so these tests verify
+    the predicate exists. Cross-tenant leak under PG-specific predicate
+    quirks (e.g. an array-typed predicate swap) is the smoke job's
+    responsibility — see scripts/smoke_pg.py."""
+
+    def _today_iso(self):
+        from datetime import date
+        return date.today().isoformat()
+
+    def _in_n_days(self, n):
+        from datetime import date, timedelta
+        return (date.today() + timedelta(days=n)).isoformat()
+
+    def test_rejects_none_manager(self):
+        """assert manager_id is not None must fire — no implicit cross-tenant
+        return-empty fallback."""
+        try:
+            db.get_upcoming_aggregate(manager_id=None)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("get_upcoming_aggregate(manager_id=None) must raise")
+        try:
+            db.get_overdue_aggregate(manager_id=None)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("get_overdue_aggregate(manager_id=None) must raise")
+
+    def test_returns_seeded_rows_within_window(self):
+        """All four streams surface when seeded within the 7-day window."""
+        mid = db.create_manager("agg_mgr1", "Agg1", "pass1234")
+        member_id = db.add_team_member("Aggie", manager_id=mid)
+        soon = self._in_n_days(2)
+
+        db.create_event("1:1 with Aggie", "one_on_one", soon, "10:00",
+                        team_member_id=member_id, manager_id=mid)
+        db.add_action_item("Review Aggie's draft", due_date=soon,
+                           manager_id=mid)
+        db.add_delegation("Own Q3 onboarding", team_member_id=member_id,
+                          check_in_date=soon, manager_id=mid)
+        db.add_goal(member_id, "Q2 2026", "Ship the migration",
+                    target_date=soon, manager_id=mid)
+
+        rows = db.get_upcoming_aggregate(manager_id=mid)
+        types = sorted({r["type"] for r in rows})
+        assert types == ["check-in", "event", "goal", "todo"], \
+            f"all four streams must appear; got {types}"
+
+    def test_filters_terminal_goal_states(self):
+        """Goals filter is the positive form — partially_met / not_met are
+        terminal historical states and must not appear in Upcoming even
+        when target_date falls inside the window."""
+        mid = db.create_manager("agg_mgr2", "Agg2", "pass1234")
+        member_id = db.add_team_member("Done Person", manager_id=mid)
+        soon = self._in_n_days(3)
+
+        gid_active = db.add_goal(member_id, "Q2 2026", "Active goal",
+                                 target_date=soon, manager_id=mid)
+        gid_done = db.add_goal(member_id, "Q2 2026", "Already-done goal",
+                               target_date=soon, manager_id=mid)
+        # Update the second to a terminal state
+        db.update_goal(gid_done, manager_id=mid, status="partially_met")
+
+        rows = db.get_upcoming_aggregate(manager_id=mid)
+        goal_titles = [r["title"] for r in rows if r["type"] == "goal"]
+        assert "Active goal" in goal_titles
+        assert "Already-done goal" not in goal_titles, \
+            "partially_met goal must not appear in Upcoming"
+
+    def test_overdue_includes_past_due_actions(self):
+        """get_overdue_aggregate surfaces past-due, non-terminal items."""
+        from datetime import date, timedelta
+        mid = db.create_manager("agg_mgr3", "Agg3", "pass1234")
+        past = (date.today() - timedelta(days=5)).isoformat()
+        db.add_action_item("Forgot to do this", due_date=past, manager_id=mid)
+
+        rows = db.get_overdue_aggregate(manager_id=mid)
+        titles = [r["title"] for r in rows if r["type"] == "todo"]
+        assert "Forgot to do this" in titles, \
+            "past-due pending action must appear in overdue aggregate"
+
+    def test_predicate_present_for_cross_tenant(self):
+        """Same-DB cross-tenant check on SQLite. The smoke job repeats this
+        on real PG against PG-specific predicate quirks; this is the fast
+        SQLite-side regression that the predicate exists at all."""
+        m1 = db.create_manager("agg_a", "A", "pass1234")
+        m2 = db.create_manager("agg_b", "B", "pass1234")
+        soon = self._in_n_days(2)
+        # Seed under both managers using the same app helpers the form uses.
+        member_a = db.add_team_member("A's report", manager_id=m1)
+        member_b = db.add_team_member("B's report", manager_id=m2)
+        db.add_action_item("A's task", due_date=soon, manager_id=m1)
+        db.add_action_item("B's task", due_date=soon, manager_id=m2)
+        db.add_delegation("A's deleg", team_member_id=member_a,
+                          check_in_date=soon, manager_id=m1)
+        db.add_delegation("B's deleg", team_member_id=member_b,
+                          check_in_date=soon, manager_id=m2)
+
+        a_rows = db.get_upcoming_aggregate(manager_id=m1)
+        b_rows = db.get_upcoming_aggregate(manager_id=m2)
+        a_titles = {r["title"] for r in a_rows}
+        b_titles = {r["title"] for r in b_rows}
+        # Bidirectional: each manager sees ONLY their own rows.
+        assert "A's task" in a_titles and "A's deleg" in a_titles
+        assert "B's task" not in a_titles and "B's deleg" not in a_titles
+        assert "B's task" in b_titles and "B's deleg" in b_titles
+        assert "A's task" not in b_titles and "A's deleg" not in b_titles
+
+    def test_migration_idempotent(self):
+        """0008_goals_target_date is idempotent: a second _run_migrations
+        run is a no-op (column already present, INDEX IF NOT EXISTS)."""
+        mid = db.create_manager("agg_mig", "Mig", "pass1234")
+        # Force-re-run: the conftest fixture already ran migrations once on
+        # a fresh db. Re-running must not raise.
+        with db._connect() as conn:
+            db._run_migrations(conn)
+        # Sanity: target_date column exists.
+        cols = []
+        with db._connect() as conn:
+            cur = db._exec(conn, "PRAGMA table_info(goals)")
+            cols = [r[1] for r in cur.fetchall()]
+        assert "target_date" in cols, \
+            "0008 migration must add goals.target_date"
+
+
