@@ -63,6 +63,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "allauth.account.middleware.AccountMiddleware",
     "django_htmx.middleware.HtmxMiddleware",
+    "core.middleware.ManagerBridgeMiddleware",
 ]
 
 ROOT_URLCONF = "mt.urls"
@@ -113,8 +114,9 @@ SOCIALACCOUNT_PROVIDERS = {
         "AUTH_PARAMS": {"access_type": "online"},
     },
 }
-LOGIN_REDIRECT_URL = "/"
+LOGIN_REDIRECT_URL = "/dashboard/"
 LOGOUT_REDIRECT_URL = "/"
+LOGIN_URL = "/accounts/login/"
 
 
 # --- Internationalization ----------------------------------------------
