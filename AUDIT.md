@@ -3,8 +3,87 @@
 **Date:** 2026-05-02
 **Branch:** `claude/audit-code-TYxHC`
 **Scope:** Full repository (~7.9K LOC Python, plus SQL/shell). Four parallel audits: security, database/architecture, code quality, tests.
+**Status as of 2026-05-03:** ✅ All Critical, High, Medium findings resolved. Resolution Status section below maps each finding to where it shipped. Original audit text follows verbatim — kept for history because the line references and remediation reasoning are still useful when reading old commits.
 
 This report consolidates findings, deduplicating overlap between the four audits. Items are prioritized by impact, not by which audit surfaced them. Every finding includes a file:line reference and a concrete remediation.
+
+---
+
+## Resolution Status (2026-05-03 update)
+
+### CRITICAL — all resolved
+| ID | Finding | Status | Shipped in |
+|---|---|---|---|
+| C1 | Pervasive IDOR — mutators ignore `manager_id` | ✅ | Migration `0001`–`0004` + helper-signature pass across `database.py` (P1.2) |
+| C2 | Tables missing `manager_id` column | ✅ | Migration `0002_orphan_table_manager_id` (P1.1) |
+| C3 | `set_config` / `get_config` are GLOBAL | ✅ | Migration `0003_partition_config_table` (P1.3) |
+| C4 | Encryption fails open | ✅ | `database.py` Fernet helpers refactored to fail-closed (P0.2) |
+| C5 | Destructive auto-migration (`os.remove(DB_PATH)`) | ✅ | Removed; `init_db` raises a clear error on legacy schema instead (P0.1) |
+
+### HIGH — all resolved
+| ID | Finding | Status | Shipped in |
+|---|---|---|---|
+| H1 | Connection leak on exception | ✅ | All public helpers use `with _connect() as conn:` (P2.2) |
+| H2 | Login rate limit bypassable | ✅ | `login_attempts` table + exponential backoff (P2.3) |
+| H3 | Sessions unsigned, never expire, never revoke | ✅ | `sessions` table + `expires_at` + UA-hash binding (P2.3) |
+| H4 | `update_manager_password` doesn't require old password | ✅ | Signature now `(manager_id, old_password, new_password)`; `IncorrectPasswordError` raised otherwise (P0.3) |
+| H5 | SQLite fallback masks Postgres outage | ✅ | Initially gated on `MANAGER_TOOL_ENV != prod`; later widened — fallback disabled whenever `DATABASE_URL` is set, regardless of env (PR #29) |
+| H6 | Race conditions on DELETE-then-INSERT | ✅ | `INSERT ... ON CONFLICT DO UPDATE` + unique constraints (`0006_save_uniqueness_constraints`) |
+| H7 | Backup script leaks credentials | ✅ | `~/.pgpass`, GPG, S3, sha256 (P2.4) |
+| H8 | `fix_sequences.sql` is a workaround | ✅ | Documented as recovery-only (P5) |
+
+### MEDIUM — all resolved
+| ID | Finding | Status | Shipped in |
+|---|---|---|---|
+| M1 | XSS in daily-coach suggestion | ✅ | `html.escape` before `unsafe_allow_html` (P3.1); regression test in `tests/test_web_app_xss.py` |
+| M2 | Prompt-injection surface | ✅ | `<user_input>` tags + system-prompt guard + token cap (P3.2) |
+| M3 | ICS / email header injection | ✅ | Control-char strip + `email.header.Header` (P3.3) |
+| M4 | No caching, fan-out connections | ✅ | `@st.cache_data` on hot paths + bundled dashboard reads + N+1 fixed (P4.2) |
+| M5 | Missing indexes | ✅ | Migration `0007_hot_path_indexes` (8 indexes) (P4.1); plus `ix_goals_manager_target` (`0008`) and `ix_events_parent` + `ix_events_manager_parent` (`0009`) |
+| M6 | Silent error swallowing | ✅ | Audit `tests/test_no_silent_excepts.py` blocks `except: pass` literally; offending sites rewritten (P5) |
+| M7 | Streamlit dialog buttons missing `key=` | ✅ | All dialog buttons keyed (P5) |
+| M8 | SMTP/PG credentials may surface in error UI | ✅ | `_redact_db_credentials` + sanitized SMTP errors (P5) |
+| M9 | Encryption key auto-generation and co-location | ✅ | `MANAGER_TOOL_ENV=prod` requires `CONFIG_ENCRYPTION_KEY` env var; `chmod 0o600` on key file (P5) |
+
+### LOW — partially addressed
+| ID | Finding | Status | Notes |
+|---|---|---|---|
+| L1 | f-string SQL in update helpers | ⏳ Deferred | Whitelist-gated; safe today, refactor not urgent |
+| L2 | `bcrypt.gensalt()` uses library default | ✅ | Pinned to `rounds=12` (P5) |
+| L3 | OAuth nonce never validated | ⏳ Deferred | Existing OAuth flow works; switch to ID-token validation tracked separately |
+| L4 | Unpinned dependencies | ⏳ Deferred | `requirements.txt` still uses `>=`; `pip-audit` not yet in CI |
+| L5 | Legacy `gui.py` ships with deployed package | ⏳ Deferred | Still present; not loaded by `web_app.py` |
+| L6 | Unused `_connect()` context manager | ✅ | Now used everywhere (H1) |
+| L7 | Dead code / unused imports | ✅ | Cleaned up (P5) |
+| L8 | Function length | ⏳ Partial | `init_db` still long; some page handlers unsplit |
+| L9 | Magic numbers | ✅ | Promoted to module constants (P5) |
+| L10 | Inconsistent commit handling | ✅ | All paths route through `_commit(conn)` |
+| L11 | `_exec_returning_id` SQL fragility | ✅ | Strips trailing `;` and whitespace defensively (P5) |
+| L12 | No HSTS / security headers | ⏳ Documented | Reverse-proxy responsibility; documented in deployment notes |
+
+### Tests — all top-10 shipped
+T#1–T#10 from the original list all landed alongside their corresponding fix PRs. Test count grew from ~25 (audit baseline) to **251 (2026-05-03)**.
+
+### Follow-on hardening not in the original audit
+
+After the Neon cutover, four PG-only bug classes shipped that the SQLite-only pytest suite missed. They are the reason `scripts/smoke_pg.py` exists:
+
+| Class | Symptom | Fixed in |
+|---|---|---|
+| `conn.execute()` on psycopg2 | `AttributeError: 'connection' object has no attribute 'execute'` at `init_db` | PR #25 |
+| TIMESTAMP comparison vs ISO string | `validate_session` `TypeError: '<=' not supported between datetime and str` | PR #25 |
+| `LEFT(timestamp, 10)` on PG | `UndefinedFunction: function left(timestamp without time zone, integer)` on member timeline | PR #28 |
+| `text BETWEEN date AND date` on PG | `UndefinedFunction: operator does not exist: text >= date` on analytics | PR #30 |
+
+CI now runs the SQLite pytest suite AND the PG smoke job on every PR (`.github/workflows/test.yml`).
+
+---
+
+## Original audit (kept for history)
+
+The findings below are the 2026-05-02 audit as written. Line numbers reference that snapshot of the codebase and may have shifted; use the `git blame` / git log against the relevant migration if you need to trace a fix back to its diff.
+
+---
 
 ---
 
