@@ -1,0 +1,8 @@
+{# Returned by team-restore on success.
+   - HTMX target is #deleted-section (swap=innerHTML); this is its body
+   - Out-of-band swap updates #member-list with the restored row #}
+{% include "_partials/team_member_deleted_list.html" %}
+
+<div id="member-list" hx-swap-oob="true">
+  {% include "_partials/team_member_list.html" %}
+</div>

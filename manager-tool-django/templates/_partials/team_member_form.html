@@ -1,5 +1,7 @@
-{# Add-member form. Posts via HTMX; errors swap back in here, success
-   replaces #member-list and #member-form-wrap (oob). #}
+{% comment %}
+Add-member form. Posts via HTMX; errors swap back in here, success
+replaces #member-list (oob) and #member-form-wrap.
+{% endcomment %}
 <form id="member-form"
       hx-post="{% url 'team-add' %}"
       hx-target="#member-form-wrap"
@@ -42,11 +44,3 @@
   </div>
 </form>
 
-<style>
-  #member-form input[type="text"],
-  #member-form input[type="email"],
-  #member-form input[type="date"],
-  #member-form textarea {
-    @apply mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-sm;
-  }
-</style>
