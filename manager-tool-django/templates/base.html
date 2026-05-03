@@ -28,10 +28,11 @@
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Manager</div>
           <a href="{% url 'dashboard' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'dashboard' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Dashboard</a>
-          {% for label in "Upcoming,Manager Journal,Schedule Event,To Do,Decisions"|cut:" "|cut:" "|slice:":0" %}{% endfor %}
-          <div class="block px-2 py-1.5 text-slate-500">Upcoming <span class="text-xs">(Phase 5)</span></div>
+          <a href="{% url 'events-upcoming' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-upcoming' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Upcoming</a>
           <div class="block px-2 py-1.5 text-slate-500">Manager Journal <span class="text-xs">(Phase 5)</span></div>
-          <div class="block px-2 py-1.5 text-slate-500">Schedule Event <span class="text-xs">(Phase 5)</span></div>
+          <a href="{% url 'events-schedule' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-schedule' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Schedule Event</a>
           <div class="block px-2 py-1.5 text-slate-500">To Do <span class="text-xs">(Phase 5)</span></div>
           <div class="block px-2 py-1.5 text-slate-500">Decisions <span class="text-xs">(Phase 5)</span></div>
         </div>

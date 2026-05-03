@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Upcoming — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6 flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold">Upcoming</h1>
+      <p class="text-sm text-slate-500 mt-1">Scheduled events from today onward</p>
+    </div>
+    <a href="{% url 'events-schedule' %}"
+       class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">
+      Schedule event
+    </a>
+  </header>
+
+  {% if not any_events %}
+    <div class="text-center text-slate-500 py-12 bg-white rounded-lg shadow-sm border border-slate-200">
+      Nothing scheduled. <a href="{% url 'events-schedule' %}" class="underline">Schedule one</a>.
+    </div>
+  {% else %}
+    <div class="space-y-6">
+      {% for label, events in groups %}
+      <section>
+        <h2 class="text-xs uppercase tracking-wider text-slate-500 mb-2">{{ label }}</h2>
+        <div class="bg-white rounded-lg shadow-sm border border-slate-200 divide-y divide-slate-100">
+          {% for ev in events %}
+            {% include "_partials/event_row.html" with ev=ev %}
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

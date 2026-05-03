@@ -563,3 +563,266 @@ class TestPurgeDeletedTeamMembers:
         )
         call_command("purge_deleted_team_members", "--dry-run")
         assert TeamMember.objects.filter(pk=expired.id).exists()
+
+
+# ============================================================
+# Phase 5.2a: Events — list, schedule one-off, cancel, complete
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestEventsUpcoming:
+    """GET /events/ — only this manager's scheduled events from today on,
+    grouped by date."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        self._login_as(client, "todd@example.com")
+        return m, date.today(), date.today() + timedelta(days=1)
+
+    def test_anonymous_redirects_to_google_login(self, client):
+        resp = client.get("/events/")
+        assert resp.status_code == 302
+        assert "/accounts/google/login/" in resp["Location"]
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger@example.com")
+        assert client.get("/events/").status_code == 403
+
+    def test_empty_state(self, client):
+        m, today, tomorrow = self._setup(client)
+        resp = client.get("/events/")
+        assert resp.status_code == 200
+        assert "Nothing scheduled" in resp.content.decode()
+
+    def test_only_own_scheduled_future_events_shown(self, client):
+        from datetime import date, timedelta
+        m, today, tomorrow = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other", display_name="Other",
+            password_hash="x", email="other@example.com",
+        )
+        # Mine, today, scheduled — should appear
+        Event.objects.create(
+            manager_id=m.id, title="Mine today", event_type="one_on_one",
+            scheduled_date=today.isoformat(), scheduled_time="10:00",
+            status="scheduled",
+        )
+        # Mine, yesterday — should NOT appear (past)
+        Event.objects.create(
+            manager_id=m.id, title="Mine past", event_type="one_on_one",
+            scheduled_date=(today - timedelta(days=1)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+        )
+        # Mine, tomorrow, cancelled — should NOT appear (status filter)
+        Event.objects.create(
+            manager_id=m.id, title="Mine cancelled", event_type="one_on_one",
+            scheduled_date=tomorrow.isoformat(), scheduled_time="10:00",
+            status="cancelled",
+        )
+        # Other manager's, tomorrow — should NOT appear (cross-tenant)
+        Event.objects.create(
+            manager_id=m2.id, title="Other's", event_type="one_on_one",
+            scheduled_date=tomorrow.isoformat(), scheduled_time="10:00",
+            status="scheduled",
+        )
+        resp = client.get("/events/")
+        body = resp.content.decode()
+        assert "Mine today" in body
+        assert "Mine past" not in body
+        assert "Mine cancelled" not in body
+        assert "Other&#x27;s" not in body and "Other's" not in body
+
+    def test_today_label_used_for_today(self, client):
+        from datetime import date
+        m, today, tomorrow = self._setup(client)
+        Event.objects.create(
+            manager_id=m.id, title="X", event_type="one_on_one",
+            scheduled_date=today.isoformat(), scheduled_time="09:00",
+            status="scheduled",
+        )
+        body = client.get("/events/").content.decode()
+        assert ">Today<" in body
+
+
+@pytest.mark.django_db
+class TestEventsSchedule:
+    """GET/POST /events/schedule/ — create a one-off event."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        self._login_as(client, "todd@example.com")
+        return m
+
+    def test_get_renders_form(self, client):
+        self._setup(client)
+        resp = client.get("/events/schedule/")
+        assert resp.status_code == 200
+        assert "Schedule event" in resp.content.decode()
+
+    def test_post_creates_event_with_manager_id_and_redirects(self, client):
+        from datetime import date, timedelta
+        m = self._setup(client)
+        resp = client.post("/events/schedule/", {
+            "event_type": "one_on_one",
+            "title": "1:1 with someone",
+            "scheduled_date": (date.today() + timedelta(days=2)).isoformat(),
+            "scheduled_time": "14:30",
+            "duration_minutes": "30",
+        })
+        assert resp.status_code == 302  # redirect to /events/
+        assert resp["Location"].endswith("/events/")
+
+        ev = Event.objects.for_manager(m.id).get()
+        assert ev.title == "1:1 with someone"
+        assert ev.scheduled_time == "14:30"  # TextField, formatted
+        assert ev.status == "scheduled"
+        assert ev.manager_id == m.id
+
+    def test_blank_title_uses_default_from_event_type(self, client):
+        from datetime import date, timedelta
+        m = self._setup(client)
+        client.post("/events/schedule/", {
+            "event_type": "coaching",
+            "title": "",
+            "scheduled_date": (date.today() + timedelta(days=1)).isoformat(),
+            "scheduled_time": "11:00",
+            "duration_minutes": "30",
+        })
+        ev = Event.objects.for_manager(m.id).get()
+        assert ev.title == "Coaching"  # from EVENT_TYPE_CHOICES label
+
+    def test_invalid_event_type_rejected(self, client):
+        from datetime import date, timedelta
+        m = self._setup(client)
+        resp = client.post("/events/schedule/", {
+            "event_type": "not_a_real_type",
+            "scheduled_date": (date.today() + timedelta(days=1)).isoformat(),
+            "scheduled_time": "11:00",
+            "duration_minutes": "30",
+        })
+        assert resp.status_code == 200  # form re-renders
+        assert Event.objects.count() == 0
+
+    def test_team_member_dropdown_scoped_to_this_manager(self, client):
+        m = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other", display_name="Other",
+            password_hash="x", email="other@example.com",
+        )
+        TeamMember.objects.create(name="Mine", manager_id=m.id)
+        TeamMember.objects.create(name="Theirs", manager_id=m2.id)
+        body = client.get("/events/schedule/").content.decode()
+        assert "Mine" in body
+        assert "Theirs" not in body, "cross-tenant team_member leak in dropdown"
+
+
+@pytest.mark.django_db
+class TestEventsCancelComplete:
+    """POST /events/<id>/cancel/ + /events/<id>/complete/ — HTMX status
+    transitions, cross-tenant rejection."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        self._login_as(client, "todd@example.com")
+        ev = Event.objects.create(
+            manager_id=m.id, title="X", event_type="one_on_one",
+            scheduled_date=(date.today() + timedelta(days=1)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+        )
+        return m, ev
+
+    def test_cancel_sets_status_cancelled(self, client):
+        m, ev = self._setup(client)
+        resp = client.post(f"/events/{ev.id}/cancel/")
+        assert resp.status_code == 200
+        ev.refresh_from_db()
+        assert ev.status == "cancelled"
+
+    def test_cancel_already_non_scheduled_returns_404(self, client):
+        m, ev = self._setup(client)
+        ev.status = "completed"
+        ev.save()
+        resp = client.post(f"/events/{ev.id}/cancel/")
+        assert resp.status_code == 404
+
+    def test_cancel_cross_tenant_returns_404(self, client):
+        m, _ = self._setup(client)  # Todd
+        m2 = Manager.objects.create(
+            username="other", display_name="Other",
+            password_hash="x", email="other@example.com",
+        )
+        from datetime import date
+        other = Event.objects.create(
+            manager_id=m2.id, title="Other", event_type="other",
+            scheduled_date=date.today().isoformat(),
+            scheduled_time="10:00", status="scheduled",
+        )
+        resp = client.post(f"/events/{other.id}/cancel/")
+        assert resp.status_code == 404
+        other.refresh_from_db()
+        assert other.status == "scheduled"  # untouched
+
+    def test_complete_sets_status_completed(self, client):
+        m, ev = self._setup(client)
+        resp = client.post(f"/events/{ev.id}/complete/")
+        assert resp.status_code == 200
+        ev.refresh_from_db()
+        assert ev.status == "completed"
+
+    def test_complete_cross_tenant_returns_404(self, client):
+        m, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other", display_name="Other",
+            password_hash="x", email="other@example.com",
+        )
+        from datetime import date
+        other = Event.objects.create(
+            manager_id=m2.id, title="Other", event_type="other",
+            scheduled_date=date.today().isoformat(),
+            scheduled_time="10:00", status="scheduled",
+        )
+        resp = client.post(f"/events/{other.id}/complete/")
+        assert resp.status_code == 404
+        other.refresh_from_db()
+        assert other.status == "scheduled"
+
+    def test_get_not_allowed_on_status_endpoints(self, client):
+        m, ev = self._setup(client)
+        assert client.get(f"/events/{ev.id}/cancel/").status_code == 405
+        assert client.get(f"/events/{ev.id}/complete/").status_code == 405

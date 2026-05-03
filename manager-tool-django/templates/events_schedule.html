@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Schedule event — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Schedule event</h1>
+    <p class="text-sm text-slate-500 mt-1">One-off events. Recurring schedules come in a follow-up sub-PR.</p>
+  </header>
+
+  <form method="post" class="space-y-4 bg-white p-6 rounded-lg shadow-sm border border-slate-200">
+    {% csrf_token %}
+
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Type</label>
+      {{ form.event_type }}
+      {% if form.event_type.errors %}<p class="text-xs text-red-600 mt-1">{{ form.event_type.errors.0 }}</p>{% endif %}
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Title</label>
+      {{ form.title }}
+      <p class="text-xs text-slate-500 mt-1">Leave blank for a default title based on the type.</p>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Date</label>
+        {{ form.scheduled_date }}
+        {% if form.scheduled_date.errors %}<p class="text-xs text-red-600 mt-1">{{ form.scheduled_date.errors.0 }}</p>{% endif %}
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Time</label>
+        {{ form.scheduled_time }}
+        {% if form.scheduled_time.errors %}<p class="text-xs text-red-600 mt-1">{{ form.scheduled_time.errors.0 }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Participant</label>
+        {{ form.team_member }}
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Duration (min)</label>
+        {{ form.duration_minutes }}
+      </div>
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Location / link</label>
+      {{ form.location }}
+    </div>
+
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Agenda</label>
+      {{ form.agenda }}
+    </div>
+
+    <div class="flex justify-end gap-3 pt-2">
+      <a href="{% url 'events-upcoming' %}" class="text-sm text-slate-500 hover:text-slate-700 px-3 py-2">Cancel</a>
+      <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">
+        Schedule
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}
