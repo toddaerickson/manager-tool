@@ -389,6 +389,16 @@ def _sql_left(col, n):
     return f"substr({col}, 1, {n})"
 
 
+def _sql_date_of_timestamp(col):
+    """SQL expression: extract the date portion of a TIMESTAMP column as a
+    'YYYY-MM-DD' text value. PG's LEFT() rejects TIMESTAMP arguments, so
+    string-slicing a timestamp the SQLite way (substr) needs an explicit
+    date cast on Postgres."""
+    if _detect_pg():
+        return f"({col})::date::text"
+    return f"substr({col}, 1, 10)"
+
+
 # ---------------------------------------------------------------------------
 # Migration runner (P2.1)
 #
@@ -2277,7 +2287,7 @@ def get_manager_activity_trends(weeks=12, manager_id=None):
 
 def get_member_timeline(member_id: int, manager_id: int, limit: int = 50) -> list[dict[str, Any]]:
     with _connect() as conn:
-        left10 = _sql_left("created_at", 10)
+        left10 = _sql_date_of_timestamp("created_at")
         rows = _fetchall(conn, f"""
             SELECT date, type, summary, detail, source_id FROM (
                 SELECT scheduled_date AS date, 'event' AS type,
