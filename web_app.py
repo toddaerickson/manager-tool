@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 import pandas as pd
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import json
 import html
@@ -897,9 +897,18 @@ def page_team_roster():
             # Stale id (member deleted, or wrong tenant) — clear and re-render.
             st.session_state.pop("team_member_id", None)
             st.rerun()
-        if st.button("←  Back to team", key="back_to_team"):
-            st.session_state.pop("team_member_id", None)
-            st.rerun()
+        bt_col, st_col = st.columns([1, 1])
+        with bt_col:
+            if st.button("←  Back to team", key="back_to_team"):
+                st.session_state.pop("team_member_id", None)
+                st.rerun()
+        with st_col:
+            if st.button(f"Start 1:1 with {member['name']}",
+                         key="start_1on1", type="primary"):
+                st.session_state["one_on_one_member_id"] = detail_id
+                st.session_state.pop("one_on_one_session_id", None)
+                st.session_state["nav_page"] = "1:1 Meeting"
+                st.rerun()
         _render_member_timeline(detail_id, member["name"])
         return
 
@@ -2146,6 +2155,302 @@ def page_decision_log():
 
 
 # ---------------------------------------------------------------------------
+# 1:1 Meeting page (live + read-only past records)
+# ---------------------------------------------------------------------------
+#
+# Reached from "Start 1:1 with X" button on Team detail. Sets:
+#   st.session_state["one_on_one_member_id"]  = team_member_id  (live mode)
+#   st.session_state["one_on_one_session_id"] = session_id      (browse mode)
+#
+# Live mode: today's session for that member; UPSERT on Save.
+# Browse mode: a specific past session id, rendered read-only if locked.
+#
+# All persistence goes through database.py helpers (no schema or business
+# logic in this file). Notes are saved as plain text and rendered as
+# markdown — `*` bullets show as bullets in the Preview tab and on the
+# read-only render of past sessions, but the user types raw text.
+
+_O3_MARKDOWN_HELP = (
+    "Use `*` or `-` for bullets, `**bold**`, `_italic_`. "
+    "Click Preview to see formatted output."
+)
+
+
+def _o3_widget_key(prefix: str, member_id: int, session_date: str) -> str:
+    """Stable widget key — Streamlit persists keyed widget state across
+    reruns within the same session, which is the autosave mechanism."""
+    return f"oneonone_{prefix}_{member_id}_{session_date}"
+
+
+def _o3_render_textarea_with_preview(label: str, key: str,
+                                     initial_value: str = "",
+                                     height: int = 160,
+                                     read_only: bool = False) -> str:
+    """Edit/Preview tabs around a single notes field. The Edit tab uses a
+    bare `st.text_area(key=...)` so Streamlit persists state across reruns
+    (the autosave mechanism). Preview tab renders st.markdown of the
+    current value. In read-only mode, only the rendered markdown shows."""
+    if read_only:
+        st.markdown(f"**{label}**")
+        st.markdown(initial_value or "_(empty)_")
+        return initial_value or ""
+
+    # Seed the widget key with the existing value on FIRST render only.
+    # Subsequent reruns let user typing persist via Streamlit's keyed-state.
+    if key not in st.session_state:
+        st.session_state[key] = initial_value or ""
+
+    edit_tab, preview_tab = st.tabs([f"{label} — Edit", f"{label} — Preview"])
+    with edit_tab:
+        st.text_area(label, key=key, height=height,
+                     label_visibility="collapsed",
+                     placeholder=_O3_MARKDOWN_HELP)
+    with preview_tab:
+        # Read current widget state — st.markdown auto-escapes by default
+        # (no unsafe_allow_html), so user-controlled bullet text is safe.
+        current = st.session_state.get(key, "") or "_(empty)_"
+        st.markdown(current)
+    return st.session_state.get(key, "")
+
+
+def _o3_format_lock_status(created_at_iso: str | None) -> str:
+    """Return a human-readable lock-countdown string for the page header.
+    Server-clock based; the badge intentionally reads server time, not
+    browser time."""
+    if not created_at_iso:
+        return "Draft — not yet saved"
+    if db.is_session_locked(created_at_iso):
+        return f"🔒 Locked — finalized at {created_at_iso}"
+    try:
+        created = datetime.fromisoformat(created_at_iso)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        unlock_until = created + db.LOCK_WINDOW
+        return f"✏️ Editable until {unlock_until.strftime('%a %b %-d %-I:%M %p UTC')}"
+    except (TypeError, ValueError):
+        return "✏️ Editable"
+
+
+def page_one_on_one():
+    show_toast()
+    mid = _mid()
+    if mid is None:
+        st.error("Authentication required.")
+        return
+
+    # Two entry modes:
+    #   1. live — one_on_one_member_id is set; render today's session
+    #   2. browse — one_on_one_session_id is set; render a specific record
+    member_id = st.session_state.get("one_on_one_member_id")
+    session_id = st.session_state.get("one_on_one_session_id")
+
+    if not member_id and not session_id:
+        st.warning("Open a team member first to start a 1:1.")
+        if st.button("Go to Team"):
+            navigate("Team")
+            st.rerun()
+        return
+
+    # Browse mode: load the specific session and pull its member from the row.
+    session = None
+    if session_id is not None:
+        session = db.get_one_on_one_session(session_id, manager_id=mid)
+        if session is None:
+            st.error("Session not found (or it belongs to another manager).")
+            st.session_state.pop("one_on_one_session_id", None)
+            return
+        member_id = session["team_member_id"]
+
+    # Resolve member.
+    members = db.list_team_members(manager_id=mid)
+    member = next((m for m in members if m["id"] == member_id), None)
+    if member is None:
+        st.error("Team member not found.")
+        st.session_state.pop("one_on_one_member_id", None)
+        st.session_state.pop("one_on_one_session_id", None)
+        return
+
+    # Live mode: today's session date drives the widget keys + UPSERT key.
+    if session is None:
+        session_date = datetime.now().date().isoformat()
+        # Look for an existing session for today to seed widget state.
+        existing = db.get_most_recent_one_on_one(
+            manager_id=mid, team_member_id=member_id)
+        if existing and existing.get("session_date") == session_date:
+            session = existing
+    else:
+        session_date = session["session_date"]
+
+    is_locked = (session is not None
+                 and db.is_session_locked(session.get("created_at")))
+
+    # ---- Header ----
+    name_safe = html.escape(member["name"])
+    st.markdown(f"## 1:1 with {name_safe}  ·  {session_date}")
+    st.caption(_o3_format_lock_status(
+        session.get("created_at") if session else None))
+    nav_left, nav_right = st.columns([1, 1])
+    with nav_left:
+        if st.button("← Back to Team", key="o3_back"):
+            st.session_state.pop("one_on_one_member_id", None)
+            st.session_state.pop("one_on_one_session_id", None)
+            st.session_state["team_member_id"] = member_id
+            navigate("Team")
+            st.rerun()
+    with nav_right:
+        if session_id is not None:
+            if st.button("Start a new 1:1 today", key="o3_new"):
+                st.session_state.pop("one_on_one_session_id", None)
+                st.session_state["one_on_one_member_id"] = member_id
+                st.rerun()
+
+    # ---- Carry-over from prior session ----
+    if session is None or session_id is None:
+        prior = db.get_most_recent_one_on_one(
+            manager_id=mid, team_member_id=member_id)
+        if prior and prior.get("followup_notes") \
+                and prior.get("session_date") != session_date:
+            st.info(
+                f"**Carry-over from {prior['session_date']}:**  \n"
+                f"{html.escape(prior['followup_notes'])}")
+
+    # ---- Pre-meeting prep strip (live mode only) ----
+    if session_id is None:
+        prep = db.get_pre_meeting_prep(member_id, manager_id=mid)
+        if prep:
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            with mc1:
+                d = prep.get("days_since_meeting")
+                st.metric("Days since meeting", d if d is not None else "Never")
+            with mc2:
+                d = prep.get("days_since_feedback")
+                st.metric("Days since feedback", d if d is not None else "Never")
+            with mc3:
+                st.metric("Pending actions", prep.get("pending_actions", 0))
+            with mc4:
+                st.metric("Active goals", len(prep.get("active_goals", [])))
+
+    st.divider()
+
+    # ---- Their 10 ----
+    st.markdown("### Their 10  ·  Direct's notes")
+    direct_key = _o3_widget_key("direct", member_id, session_date)
+    direct_value = _o3_render_textarea_with_preview(
+        "Direct's notes", direct_key,
+        initial_value=(session or {}).get("direct_notes", "") or "",
+        height=200, read_only=is_locked)
+
+    st.divider()
+
+    # ---- My 10 ----
+    st.markdown("### My 10  ·  Manager's notes")
+
+    # Read-only feedback list for this member
+    feedback_for_member = db.list_feedback(manager_id=mid,
+                                            team_member_id=member_id)
+    with st.expander(f"Latest feedback ({len(feedback_for_member)})"):
+        if feedback_for_member:
+            for fb in feedback_for_member[:10]:
+                created = (fb.get("created_at") or "")[:10]
+                ftype = fb.get("feedback_type", "?")
+                situ = html.escape(fb.get("situation") or "")
+                beh = html.escape(fb.get("behavior") or "")
+                imp = html.escape(fb.get("impact") or "")
+                st.markdown(
+                    f"**{ftype}** · {created}  \n"
+                    f"S: {situ}  \nB: {beh}  \nI: {imp}")
+        else:
+            st.caption("No feedback recorded for this member yet.")
+
+    # Read-only delegations list for this member
+    delegs = db.list_delegations(manager_id=mid, team_member_id=member_id)
+    with st.expander(f"Outstanding delegations ({len(delegs)})"):
+        active = [d for d in delegs if d.get("status") == "active"]
+        if active:
+            for d in active:
+                task = html.escape(d.get("task") or "")
+                checkin = d.get("check_in_date") or "no check-in date"
+                st.markdown(f"- **{task}** · check-in: {checkin}")
+        else:
+            st.caption("No active delegations for this member.")
+
+    manager_key = _o3_widget_key("manager", member_id, session_date)
+    manager_value = _o3_render_textarea_with_preview(
+        "Manager's notes", manager_key,
+        initial_value=(session or {}).get("manager_notes", "") or "",
+        height=200, read_only=is_locked)
+
+    st.divider()
+
+    # ---- Future / Follow-up ----
+    st.markdown("### Future  ·  Follow-up")
+    followup_key = _o3_widget_key("followup", member_id, session_date)
+    followup_value = _o3_render_textarea_with_preview(
+        "Follow-up notes", followup_key,
+        initial_value=(session or {}).get("followup_notes", "") or "",
+        height=160, read_only=is_locked)
+
+    st.caption(
+        "Quick actions live on their own pages — links are not in-form to "
+        "avoid losing typing on rerun.")
+    qa_cols = st.columns(3)
+    with qa_cols[0]:
+        if st.button("Open Delegations", key="o3_link_deleg"):
+            navigate("Delegations"); st.rerun()
+    with qa_cols[1]:
+        if st.button("Open Schedule Event", key="o3_link_sched"):
+            navigate("Schedule"); st.rerun()
+    with qa_cols[2]:
+        if st.button("Open Actions", key="o3_link_actions"):
+            navigate("Actions"); st.rerun()
+
+    st.divider()
+
+    # ---- Save bar (live mode only) ----
+    if not is_locked and session_id is None:
+        if st.button("💾 Save 1:1", key="o3_save", type="primary",
+                     use_container_width=True):
+            try:
+                db.create_one_on_one_session(
+                    manager_id=mid, team_member_id=member_id,
+                    session_date=session_date,
+                    direct_notes=direct_value,
+                    manager_notes=manager_value,
+                    followup_notes=followup_value)
+                set_toast("success",
+                          f"1:1 with {member['name']} saved for {session_date}.")
+            except (ValueError, PermissionError) as e:
+                set_toast("error", str(e))
+            st.rerun()
+    elif is_locked:
+        st.info("This 1:1 is locked — past the 24-hour edit window.")
+
+    st.divider()
+
+    # ---- Past 1:1 records for this member ----
+    past = db.list_one_on_one_sessions(
+        manager_id=mid, team_member_id=member_id, limit=20)
+    # Filter out the current session if we're in live-edit mode for today.
+    if session_id is None:
+        past = [p for p in past if p.get("session_date") != session_date]
+    with st.expander(f"Past 1:1 records ({len(past)})"):
+        if not past:
+            st.caption("No past 1:1 sessions yet.")
+        for p in past:
+            sd = p.get("session_date") or ""
+            preview = (p.get("direct_notes") or "")[:80]
+            preview_safe = html.escape(preview)
+            cols = st.columns([4, 1])
+            with cols[0]:
+                st.markdown(f"**{sd}** — {preview_safe}…")
+            with cols[1]:
+                if st.button("Open", key=f"o3_open_{p['id']}"):
+                    st.session_state["one_on_one_session_id"] = p["id"]
+                    st.session_state.pop("one_on_one_member_id", None)
+                    st.rerun()
+
+
+# ---------------------------------------------------------------------------
 # Sidebar navigation & dispatch
 # ---------------------------------------------------------------------------
 
@@ -2153,6 +2458,7 @@ _DISPATCH = {
     "Dashboard": page_dashboard,
     "Journal": page_journal,
     "Team": page_team_roster,
+    "1:1 Meeting": page_one_on_one,
     "1:1 Notes": page_running_notes,
     "Career Dev": page_career_development,
     "Actions": page_action_items,
