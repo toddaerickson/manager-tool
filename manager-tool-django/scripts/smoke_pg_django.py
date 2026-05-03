@@ -117,8 +117,9 @@ def _exercise_orm() -> None:
         entry_date="2026-05-01", entry_type="daily",
         content="m1 only", manager_id=m1.id,
     )
+    # tier must be 'rule' or 'ai' per schema_postgres.sql CHECK constraint
     CoachSuggestion.objects.create(
-        suggestion_date="2026-05-01", tier="weekly",
+        suggestion_date="2026-05-01", tier="rule",
         suggestion="m1 only", manager_id=m1.id,
     )
 
