@@ -399,6 +399,27 @@ def page_dashboard():
     st.title("Dashboard")
     show_toast()
 
+    # -- Next Step (single imperative action; rule-based, fast) --
+    # Reserve a layout slot whether or not a suggestion is present, so the
+    # dashboard doesn't reflow on first paint when the row is absent.
+    next_step_slot = st.empty()
+    if _mid():
+        next_step = coaching.next_step_for(_mid())
+        if next_step is not None:
+            ns_text, ns_page = next_step
+            with next_step_slot.container():
+                # html.escape is defense-in-depth: tertiary buttons don't
+                # render HTML in their label, but action item / delegation /
+                # event titles flow through user-controlled text into the
+                # rule generator. Mirrors the Coach escape pattern below.
+                if st.button(html.escape(ns_text),
+                             key="next_step_btn",
+                             type="tertiary",
+                             use_container_width=True):
+                    if ns_page:
+                        navigate(ns_page)
+                        st.rerun()
+
     # -- Daily Coach Suggestion (personalized first action) --
     if _mid():
         suggestion = coaching.get_daily_suggestion(_mid())

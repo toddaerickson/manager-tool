@@ -73,6 +73,63 @@ class TestRuleBasedSuggestion:
         assert page is not None
 
 
+class TestNextStepFor:
+    """next_step_for is the dashboard Next Step row's source. PR 2 ships
+    it as a thin wrapper over generate_rule_based_suggestion; PR 4 will
+    add an expiry-warning branch ahead of the delegation/event branches.
+    Tests assert "this branch returns X when this condition holds" rather
+    than "this is the only possible result," so PR 4 can insert new
+    branches without rewriting the matrix."""
+
+    def test_returns_tuple_for_known_user(self):
+        """Default flow on an empty manager: returns a tuple, not None."""
+        mid = db.create_manager("ns_mgr1", "NS1", "pass1234")
+        result = coaching.next_step_for(mid)
+        assert result is not None
+        text, action_page = result
+        assert isinstance(text, str) and text
+        assert isinstance(action_page, str) and action_page
+
+    def test_returns_none_for_none_manager(self):
+        """Defensive: an unauthenticated _mid() must not crash the dashboard."""
+        assert coaching.next_step_for(None) is None
+
+    def test_text_matches_underlying_rule_generator(self):
+        """PR 2 contract: next_step_for is a thin wrapper. PR 4 will diverge
+        by inserting an expiry-warning branch — when that lands, this test
+        becomes 'matches OR is the expiry branch.'"""
+        mid = db.create_manager("ns_mgr2", "NS2", "pass1234")
+        wrapper = coaching.next_step_for(mid)
+        rule = coaching.generate_rule_based_suggestion(mid)
+        assert wrapper == rule
+
+    def test_overdue_priority_above_baseline(self):
+        """Branch priority: an overdue-meeting state must win over the
+        all-clear baseline. The plan declares
+            overdue > expiry-warning > delegation > event > nothing
+        — PR 2 only ships overdue + the lower branches; this test pins the
+        top of the priority order so PR 4 can insert expiry-warning at
+        slot 2 without disturbing it."""
+        mid = db.create_manager("ns_mgr3", "NS3", "pass1234")
+        # Add a team member with a 60-day-stale meeting → critical nudge.
+        from datetime import datetime, timedelta
+        member_id = db.add_team_member("Stale Member", manager_id=mid)
+        old = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+        eid = db.create_event("1:1 with Stale", "one_on_one", old, "10:00",
+                              team_member_id=member_id, manager_id=mid)
+        db.complete_event(eid, manager_id=mid)
+        # Today's journal so streak/mood branches don't fire first.
+        today = datetime.now().date().isoformat()
+        db.add_journal_entry(today, "daily", "fine", mood=4, energy=4,
+                             manager_id=mid)
+        result = coaching.next_step_for(mid)
+        assert result is not None
+        text, page = result
+        # Critical nudge for stale meeting routes to Schedule per the
+        # generator's branch at coaching.py:451.
+        assert page == "Schedule" or "Stale" in text or "1-on-1" in text
+
+
 class TestDailySuggestion:
     def test_caches_suggestion(self):
         """get_daily_suggestion should cache the result."""

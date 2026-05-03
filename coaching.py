@@ -491,6 +491,28 @@ def generate_rule_based_suggestion(manager_id):
             "Goals")
 
 
+def next_step_for(manager_id):
+    """Pick the single most-urgent action for the dashboard Next Step row.
+
+    Returns (text, action_page) or None when no recommendation should surface.
+
+    Today this is a thin wrapper over generate_rule_based_suggestion. PR 4
+    will insert a recurring-event expiry-warning branch ahead of the
+    delegation/event branches without touching the rule generator's
+    signature, so coaching's existing API stays stable for callers like
+    get_daily_suggestion.
+
+    Branch priority (declared so future additions slot in cleanly):
+      overdue > expiry-warning (PR 4) > delegation > event > nothing
+    """
+    if manager_id is None:
+        return None
+    text, action_page = generate_rule_based_suggestion(manager_id)
+    if not text:
+        return None
+    return text, action_page
+
+
 def generate_ai_suggestion(manager_id):
     """Tier 2: AI-enhanced suggestion using Claude. Returns suggestion text or None."""
     client = _get_client(manager_id)
