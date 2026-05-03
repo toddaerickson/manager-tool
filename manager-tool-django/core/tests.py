@@ -97,3 +97,144 @@ class TestCrossManagerScoping:
         scan the whole table."""
         with pytest.raises(ValueError, match="requires a manager_id"):
             TeamMember.objects.for_manager(None)
+
+
+# ============================================================
+# Phase 3: bridge from request.user (allauth) to request.manager
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestManagerBridge:
+    """Phase 3 → 4 gate — ManagerBridgeMiddleware attaches the right
+    Manager row (or None) to the request based on request.user.email.
+    """
+
+    def _user(self, email):
+        from django.contrib.auth import get_user_model
+        return get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+
+    def _request(self, user):
+        from django.test import RequestFactory
+        rf = RequestFactory()
+        request = rf.get("/dashboard/")
+        request.user = user
+        return request
+
+    def _bridge(self, request):
+        from core.middleware import ManagerBridgeMiddleware
+        mw = ManagerBridgeMiddleware(get_response=lambda r: None)
+        mw(request)
+        return request
+
+    def test_unauth_user_yields_none(self):
+        from django.contrib.auth.models import AnonymousUser
+        request = self._request(AnonymousUser())
+        self._bridge(request)
+        assert request.manager is None
+
+    def test_auth_user_with_no_matching_manager_yields_none(self):
+        Manager.objects.create(
+            username="other", display_name="Other",
+            password_hash="x", email="other@example.com",
+        )
+        request = self._request(self._user("nobody@example.com"))
+        self._bridge(request)
+        assert request.manager is None
+
+    def test_auth_user_with_matching_manager_attaches_it(self):
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        request = self._request(self._user("todd@example.com"))
+        self._bridge(request)
+        assert request.manager is not None
+        assert request.manager.id == m.id
+
+    def test_email_match_is_case_insensitive(self):
+        """Google sometimes normalizes case; managers.email is whatever
+        was typed. Match must be case-insensitive."""
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="Todd@Example.COM",
+        )
+        request = self._request(self._user("todd@example.com"))
+        self._bridge(request)
+        assert request.manager is not None
+        assert request.manager.id == m.id
+
+    def test_user_with_no_email_yields_none(self):
+        """Defensive — if Google somehow returns a user with no email
+        (shouldn't happen with our scopes), don't 500."""
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username="noemail", email="", password="x",
+        )
+        request = self._request(u)
+        self._bridge(request)
+        assert request.manager is None
+
+
+@pytest.mark.django_db
+class TestDashboardView:
+    """Phase 3 → 4 gate — `request.manager.id` correctly scopes the
+    dashboard's per-tenant query, and logout invalidates the session."""
+
+    def _login_as(self, client, email, manager=None):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="testpw",
+        )
+        client.force_login(u)
+        return u
+
+    def test_anonymous_redirects_to_google_login(self, client):
+        """Phase 3: Google-only auth. Anonymous hits go straight to the
+        Google OAuth flow, not the email/password form."""
+        resp = client.get("/dashboard/")
+        assert resp.status_code == 302
+        assert "/accounts/google/login/" in resp["Location"]
+
+    def test_logged_in_user_with_no_manager_gets_403(self, client):
+        self._login_as(client, "stranger@example.com")
+        resp = client.get("/dashboard/")
+        assert resp.status_code == 403
+
+    def test_logged_in_user_with_manager_sees_their_member_count(self, client):
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        TeamMember.objects.create(name="report A", manager_id=m.id)
+        TeamMember.objects.create(name="report B", manager_id=m.id)
+        # Another manager's data — must not bleed in
+        m2 = Manager.objects.create(
+            username="other", display_name="Other",
+            password_hash="x", email="other@example.com",
+        )
+        TeamMember.objects.create(name="other report", manager_id=m2.id)
+
+        self._login_as(client, "todd@example.com")
+        resp = client.get("/dashboard/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Team members: 2" in body, body
+        assert "id=" + str(m.id) in body
+
+    def test_logout_invalidates_session(self, client):
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        self._login_as(client, "todd@example.com")
+        # Authenticated dashboard works
+        assert client.get("/dashboard/").status_code == 200
+        # Force-logout via the test client (mirrors what /accounts/logout/ does)
+        client.logout()
+        # Now blocked
+        resp = client.get("/dashboard/")
+        assert resp.status_code == 302
+        assert "/accounts/google/login/" in resp["Location"]

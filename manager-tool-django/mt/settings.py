@@ -63,6 +63,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "allauth.account.middleware.AccountMiddleware",
     "django_htmx.middleware.HtmxMiddleware",
+    "core.middleware.ManagerBridgeMiddleware",
 ]
 
 ROOT_URLCONF = "mt.urls"
@@ -113,8 +114,14 @@ SOCIALACCOUNT_PROVIDERS = {
         "AUTH_PARAMS": {"access_type": "online"},
     },
 }
-LOGIN_REDIRECT_URL = "/"
+LOGIN_REDIRECT_URL = "/dashboard/"
 LOGOUT_REDIRECT_URL = "/"
+# Google-only auth: @login_required redirects straight to the Google
+# OAuth flow rather than allauth's default email/password form. Set
+# SOCIALACCOUNT_LOGIN_ON_GET so Google flow starts on GET (no
+# intermediate "click to continue" page).
+LOGIN_URL = "/accounts/google/login/"
+SOCIALACCOUNT_LOGIN_ON_GET = True
 
 
 # --- Internationalization ----------------------------------------------
