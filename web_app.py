@@ -406,7 +406,12 @@ def page_dashboard():
     if _mid():
         next_step = coaching.next_step_for(_mid())
         if next_step is not None:
-            ns_text, ns_page = next_step
+            # PR 4 expanded the contract to 3-tuple (text, page, context).
+            # Defensive unpack so a stale 2-tuple from a partial deploy doesn't
+            # crash the dashboard — context defaults to empty dict.
+            ns_text = next_step[0]
+            ns_page = next_step[1]
+            ns_context = next_step[2] if len(next_step) >= 3 else {}
             with next_step_slot.container():
                 # html.escape is defense-in-depth: tertiary buttons don't
                 # render HTML in their label, but action item / delegation /
@@ -416,6 +421,12 @@ def page_dashboard():
                              key="next_step_btn",
                              type="tertiary",
                              use_container_width=True):
+                    # Apply context BEFORE navigation so the target page
+                    # picks it up on first render. Expiry warnings carry a
+                    # series_id the Schedule form pre-populates from.
+                    if ns_context.get("series_id"):
+                        st.session_state["prefill_series_id"] = \
+                            ns_context["series_id"]
                     if ns_page:
                         navigate(ns_page)
                         st.rerun()
@@ -577,6 +588,28 @@ def page_dashboard():
 
 # -- Activities -------------------------------------------------------------
 
+_RECURRENCE_LABELS = ["None", "Weekly", "Monthly", "Quarterly"]
+_RECURRENCE_RULE_FROM_LABEL = {"None": None, "Weekly": "weekly",
+                                "Monthly": "monthly", "Quarterly": "quarterly"}
+# Default until-date offsets when the user picks a recurring cadence
+# without setting an explicit end date.
+_RECURRENCE_DEFAULT_OFFSET_DAYS = {"weekly": 180, "monthly": 365,
+                                    "quarterly": 365}
+
+
+@st.cache_data(ttl=60)
+def _preview_recurrence_dates(start_iso: str, rule: str | None,
+                              until_iso: str | None) -> list[str]:
+    """Cached preview generator for the form's 'Next 4' line. Cache key
+    is (start_iso, rule, until_iso) — recomputes when any change."""
+    if not rule:
+        return []
+    start = date.fromisoformat(start_iso)
+    until = date.fromisoformat(until_iso) if until_iso else None
+    dates = db._expand_recurrence_dates(start, rule, until)
+    return [d.isoformat() for d in dates[:4]]
+
+
 def page_schedule_event():
     st.title("Schedule an Event")
 
@@ -584,20 +617,89 @@ def page_schedule_event():
     type_labels = [templates.EVENT_TYPES[t]["label"] for t in type_keys]
     names, name_map = member_options()
 
-    # Single-column form for mobile (#7)
+    # Prefill from "extend recurring series" — when next_step_for surfaced an
+    # expiry warning and the user clicked it, prefill_series_id is in session
+    # state. Look up the series template, set widget defaults via session
+    # state keys, and render a caption so the user knows they're extending.
+    prefill_series_id = st.session_state.pop("prefill_series_id", None)
+    prefill_template = None
+    if prefill_series_id is not None and _mid():
+        prefill_template = db.get_recurring_series_template(
+            manager_id=_mid(), series_id=prefill_series_id)
+        if prefill_template:
+            # The day after the latest existing child date — continues the
+            # cadence cleanly with no gap and no overlap.
+            # latest_date may be missing or malformed (column-NULL on a
+            # never-materialized series, or text-format drift). Fall back
+            # to today; the user can still pick the start date manually.
+            latest_iso = prefill_template.get("latest_date")
+            try:
+                latest = (date.fromisoformat(latest_iso) if latest_iso
+                          else None)
+            except (TypeError, ValueError):
+                latest = None
+            if latest is not None:
+                st.session_state["sched_start_date"] = latest + timedelta(days=1)
+            rule_pre = prefill_template.get("recurrence_rule")
+            label_for_rule = next(
+                (k for k, v in _RECURRENCE_RULE_FROM_LABEL.items() if v == rule_pre),
+                "None")
+            st.session_state["sched_rec_label"] = label_for_rule
+            st.info(f"Extending recurring series #{prefill_series_id}.  "
+                    f"Adjust dates as needed before submitting.")
+
+    # Read live form state OUTSIDE the form so the recurrence preview can
+    # update on each change. Streamlit forms only re-render on submit, so
+    # we widget-key the recurrence selector + start date OUTSIDE the form
+    # block; everything else lives inside the form for atomic submit.
+    rec_label = st.selectbox("Repeats", _RECURRENCE_LABELS,
+                             key="sched_rec_label")
+    rule = _RECURRENCE_RULE_FROM_LABEL[rec_label]
+    start_date_val = st.date_input("Date", value=datetime.now().date(),
+                                    key="sched_start_date")
+
+    until_date_val = None
+    if rule:
+        offset_days = _RECURRENCE_DEFAULT_OFFSET_DAYS[rule]
+        default_until = start_date_val + timedelta(days=offset_days)
+        until_date_val = st.date_input("Until", value=default_until,
+                                        min_value=start_date_val,
+                                        key="sched_until_date")
+        # Live preview — cached per (start, rule, until) tuple
+        try:
+            preview = _preview_recurrence_dates(
+                start_date_val.isoformat(), rule,
+                until_date_val.isoformat() if until_date_val else None)
+        except Exception:
+            preview = []
+        if preview:
+            preview_str = ", ".join(preview)
+            tail = "..." if len(preview) >= 4 else ""
+            st.caption(f"Next {len(preview)}: {preview_str}{tail}  "
+                       f"·  Edits to a recurring event apply to that event only.")
+
     with st.form("schedule_form"):
         event_label = st.selectbox("Event Type", type_labels)
         title = st.text_input("Title (leave blank for default)")
         participant = st.selectbox("Participant", ["(none)"] + names)
-        date = st.date_input("Date", value=datetime.now().date())
         time_val = st.time_input("Time",
                                  value=datetime.strptime("10:00", "%H:%M").time())
         duration = st.number_input("Duration (min)", value=30, min_value=5, step=5)
         location = st.text_input("Location / meeting link")
         gen_agenda = st.checkbox("Generate agenda from template")
-        submitted = st.form_submit_button("Schedule Event", use_container_width=True)
+        submitted = st.form_submit_button("Schedule Event",
+                                           use_container_width=True)
 
     if submitted:
+        # Server-side validation — the segmented_control selector and date_input
+        # widgets constrain client-side, but the writer must validate too.
+        if rec_label not in _RECURRENCE_LABELS:
+            st.error("Invalid recurrence option."); return
+        if rule and until_date_val and until_date_val < start_date_val:
+            st.error("End date must be on or after start date."); return
+        if not isinstance(start_date_val, date):
+            st.error("Start date is required."); return
+
         idx = type_labels.index(event_label)
         event_type = type_keys[idx]
         member_name = participant if participant != "(none)" else None
@@ -605,18 +707,39 @@ def page_schedule_event():
         final_title = title or templates.get_default_title(event_type, member_name)
         agenda = (templates.generate_agenda(event_type, member_name)
                   if gen_agenda else None)
+        time_str = time_val.strftime("%H:%M")
 
-        eid = db.create_event(
-            title=final_title, event_type=event_type,
-            scheduled_date=date.strftime("%Y-%m-%d"),
-            scheduled_time=time_val.strftime("%H:%M"),
-            team_member_id=member_id,
-            duration_minutes=duration,
-            location=location or None,
-            agenda=agenda,
-            manager_id=_mid(),
-        )
-        st.toast(f"Event #{eid} scheduled: {final_title}", icon="\U0001F4C5")
+        if rule:
+            try:
+                pid = db.create_recurring_events(
+                    title=final_title, event_type=event_type,
+                    start_date=start_date_val,
+                    scheduled_time=time_str,
+                    rule=rule,
+                    until_date=until_date_val,
+                    team_member_id=member_id,
+                    duration_minutes=duration,
+                    location=location or None,
+                    agenda=agenda,
+                    manager_id=_mid(),
+                )
+            except (ValueError, TypeError) as e:
+                st.error(f"Could not create recurring event: {e}"); return
+            st.toast(f"Recurring series #{pid} scheduled: {final_title}",
+                     icon="\U0001F4C5")
+        else:
+            eid = db.create_event(
+                title=final_title, event_type=event_type,
+                scheduled_date=start_date_val.strftime("%Y-%m-%d"),
+                scheduled_time=time_str,
+                team_member_id=member_id,
+                duration_minutes=duration,
+                location=location or None,
+                agenda=agenda,
+                manager_id=_mid(),
+            )
+            st.toast(f"Event #{eid} scheduled: {final_title}",
+                     icon="\U0001F4C5")
         st.rerun()
 
 

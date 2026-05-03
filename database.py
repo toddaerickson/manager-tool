@@ -6,6 +6,7 @@ Set DATABASE_URL env var or Streamlit secret to use PostgreSQL.
 
 from __future__ import annotations
 
+import calendar
 import sqlite3
 import os
 import re
@@ -398,6 +399,91 @@ def _sql_date_of_timestamp(col):
 
 
 # ---------------------------------------------------------------------------
+# Recurrence + transactional materialization helpers (PR 4)
+# ---------------------------------------------------------------------------
+#
+# These exist so the Schedule Event form can write a parent + N children
+# atomically across both backends. The naïve "loop _exec_returning_id" approach
+# is broken on both:
+#   - PG sets conn.autocommit = True (database.py:227); per-statement transactions
+#     mean conn.rollback() after a failed children-insert does NOT undo the parent.
+#   - SQLite path of _exec_returning_id calls conn.commit() (database.py:288);
+#     the parent commits before children even start.
+# Round-3 plan review caught this; the helpers below bypass both paths.
+
+_MATERIALIZE_MAX_CHILDREN = 32  # Hard cap. Form's natural max is 12 (weekly).
+
+
+def _materialize_in_txn(conn, parent_sql, parent_params,
+                       children_sql, children_rows):
+    """Insert one parent + N children atomically and return the parent's id.
+
+    PG: explicit BEGIN/COMMIT/ROLLBACK on the cursor — bypasses the
+        connection's autocommit=True so the two INSERTs share a transaction.
+    SQLite: sqlite3 connections start in "deferred" transaction mode; we
+        avoid _exec_returning_id (which auto-commits) by going to the raw
+        cursor and using cur.lastrowid. _commit / rollback are issued on
+        the connection at the end.
+
+    Both paths land both INSERTs or neither — no orphan parents.
+
+    Children rows are tuples WITHOUT the parent_event_id slot; this helper
+    appends parent_id as the last column of each tuple before executemany.
+    children_sql must therefore have placeholders for that trailing column.
+
+    Caps len(children_rows) at _MATERIALIZE_MAX_CHILDREN — defense-in-depth
+    against a crafted POST attempting to fan out further than the form's
+    natural ceiling."""
+    if len(children_rows) > _MATERIALIZE_MAX_CHILDREN:
+        raise ValueError(
+            f"refusing to materialize {len(children_rows)} children "
+            f"(cap={_MATERIALIZE_MAX_CHILDREN})")
+
+    cur = conn.cursor()
+    is_pg = _detect_pg()
+    if is_pg:
+        cur.execute("BEGIN")
+    try:
+        if is_pg:
+            cleaned = _q(parent_sql).rstrip().rstrip(";").rstrip()
+            cur.execute(cleaned + " RETURNING id", parent_params)
+            row = cur.fetchone()
+            parent_id = row["id"] if isinstance(row, dict) else row[0]
+        else:
+            cur.execute(parent_sql, parent_params)
+            parent_id = cur.lastrowid
+        full_rows = [(*row, parent_id) for row in children_rows]
+        if full_rows:
+            cur.executemany(_q(children_sql), full_rows)
+        if is_pg:
+            cur.execute("COMMIT")
+        else:
+            conn.commit()
+        return parent_id
+    except Exception:
+        if is_pg:
+            cur.execute("ROLLBACK")
+        else:
+            conn.rollback()
+        raise
+
+
+def _add_months_anchored(start: date, n: int) -> date:
+    """Return start + n months, clamped to last day if the target month
+    is shorter. Iterates from `start` (Algo A) so the cadence stays
+    anchored:  Jan 31 + 1mo = Feb 28, + 2mo = Mar 31 (anchor preserved).
+    NOT Algo B (advance from previous-clamped) which drifts permanently:
+       Jan 31 + 1mo = Feb 28, + 1mo + 1mo = Mar 28 (anchor lost)."""
+    if n == 0:
+        return start
+    y, m = start.year, start.month - 1 + n
+    y += m // 12
+    m = m % 12 + 1
+    last_day = calendar.monthrange(y, m)[1]
+    return date(y, m, min(start.day, last_day))
+
+
+# ---------------------------------------------------------------------------
 # Migration runner (P2.1)
 #
 # A small homegrown migration system: each entry in `_MIGRATIONS` is a
@@ -606,6 +692,64 @@ def _migration_goals_target_date(conn) -> None:
     _commit(conn)
 
 
+def _migration_events_recurrence(conn) -> None:
+    """PR 4: recurring events. Adds three columns to `events`:
+      - recurrence_rule TEXT NULL
+          One of 'weekly' / 'monthly' / 'quarterly' / NULL.
+      - parent_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL
+          Self-referential FK for joinable lineage between a recurring
+          parent and its materialized children. Round-3 plan review caught
+          that without ON DELETE SET NULL, deleting a parent fails with a
+          confusing FK error; SET NULL makes children survive standalone.
+      - recurrence_warned_at TEXT NULL
+          ISO timestamp set when the expiry banner has been shown for a
+          series so the dashboard doesn't spam warnings on every render.
+
+    Plus two indexes:
+      - ix_events_parent (parent_event_id) — speeds FK SET-NULL cascades
+        and 'find children of parent X' queries.
+      - ix_events_manager_parent (manager_id, parent_event_id) WHERE
+        parent_event_id IS NOT NULL — composite for the expiry-warning
+        query in next_step_for. The single-column ix_events_parent does
+        NOT cover `WHERE manager_id=? AND parent_event_id IS NOT NULL`.
+        On SQLite, partial-index WHERE is dropped (full composite still
+        works as a B-tree)."""
+    cols = _table_columns(conn, "events")
+    if "recurrence_rule" not in cols:
+        _exec(conn, "ALTER TABLE events ADD COLUMN recurrence_rule TEXT")
+        _commit(conn)
+    if "parent_event_id" not in cols:
+        if _detect_pg():
+            _exec(conn,
+                "ALTER TABLE events ADD COLUMN parent_event_id INTEGER "
+                "REFERENCES events(id) ON DELETE SET NULL")
+        else:
+            # SQLite cannot ALTER TABLE ADD COLUMN with a REFERENCES clause
+            # against a populated table; the FK is non-load-bearing for the
+            # contract (children are independent at creation time) and SQLite
+            # FK enforcement is off by default in this codebase. Add the
+            # column without the constraint.
+            _exec(conn,
+                "ALTER TABLE events ADD COLUMN parent_event_id INTEGER")
+        _commit(conn)
+    if "recurrence_warned_at" not in cols:
+        _exec(conn, "ALTER TABLE events ADD COLUMN recurrence_warned_at TEXT")
+        _commit(conn)
+    _exec(conn,
+        "CREATE INDEX IF NOT EXISTS ix_events_parent "
+        "ON events (parent_event_id)")
+    if _detect_pg():
+        _exec(conn,
+            "CREATE INDEX IF NOT EXISTS ix_events_manager_parent "
+            "ON events (manager_id, parent_event_id) "
+            "WHERE parent_event_id IS NOT NULL")
+    else:
+        _exec(conn,
+            "CREATE INDEX IF NOT EXISTS ix_events_manager_parent "
+            "ON events (manager_id, parent_event_id)")
+    _commit(conn)
+
+
 def _migration_hot_path_indexes(conn) -> None:
     """P4.1: btree indexes on hot WHERE columns (AUDIT M5). Idempotent via
     `IF NOT EXISTS`. Operators on Postgres prod should consider running
@@ -650,6 +794,7 @@ _MIGRATIONS: list[tuple[str, Any]] = [
     ("0006_save_uniqueness_constraints", _migration_save_uniqueness_constraints),
     ("0007_hot_path_indexes", _migration_hot_path_indexes),
     ("0008_goals_target_date", _migration_goals_target_date),
+    ("0009_events_recurrence", _migration_events_recurrence),
 ]
 
 
@@ -799,6 +944,9 @@ def init_db(*, force: bool = False):
                 ('scheduled', 'completed', 'cancelled', 'rescheduled')),
             notes TEXT,
             calendar_invite_sent INTEGER DEFAULT 0,
+            recurrence_rule TEXT,
+            parent_event_id INTEGER,
+            recurrence_warned_at TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (team_member_id) REFERENCES team_members(id),
@@ -1035,6 +1183,10 @@ def init_db(*, force: bool = False):
             ON coach_suggestions (manager_id, suggestion_date);
         CREATE INDEX IF NOT EXISTS ix_goals_manager_target
             ON goals (manager_id, target_date);
+        CREATE INDEX IF NOT EXISTS ix_events_parent
+            ON events (parent_event_id);
+        CREATE INDEX IF NOT EXISTS ix_events_manager_parent
+            ON events (manager_id, parent_event_id);
         """)
         conn.commit()
 
@@ -1494,6 +1646,196 @@ def create_event(title: str, event_type: str, scheduled_date: str, scheduled_tim
         )
         _commit(conn)
     return event_id
+
+
+_RECURRENCE_COUNTS = {"weekly": 12, "monthly": 12, "quarterly": 8}
+
+
+def _expand_recurrence_dates(start: date, rule: str,
+                             until: date | None = None) -> list[date]:
+    """Generate dates from `start` for the given rule. Stops at the rule's
+    max count (12 / 12 / 8) OR at `until` (inclusive), whichever is sooner.
+    `start` is the parent's date and is the first element of the returned
+    list. With `until` is None, the full max-count is generated."""
+    if rule not in _RECURRENCE_COUNTS:
+        raise ValueError(f"unknown recurrence rule: {rule}")
+    max_count = _RECURRENCE_COUNTS[rule]
+    dates = [start]
+    for i in range(1, max_count):
+        if rule == "weekly":
+            d = start + timedelta(weeks=i)
+        elif rule == "monthly":
+            d = _add_months_anchored(start, i)
+        else:  # quarterly
+            d = _add_months_anchored(start, 3 * i)
+        if until and d > until:
+            break
+        dates.append(d)
+    return dates
+
+
+def create_recurring_events(title: str, event_type: str,
+                            start_date: date, scheduled_time: str,
+                            rule: str,
+                            until_date: date | None = None,
+                            team_member_id: int | None = None,
+                            duration_minutes: int = 30,
+                            location: str | None = None,
+                            agenda: str | None = None,
+                            manager_id: int | None = None) -> int:
+    """Create a parent event + N concrete child rows atomically.
+    Returns the parent's id.
+
+    `rule` is one of 'weekly' / 'monthly' / 'quarterly'. The count is
+    server-controlled (12 / 12 / 8) — the form doesn't pass a count.
+    `start_date` MUST be a `date` instance (not iso string) — the form
+    submit branch enforces this so a stringly-typed callsite is caught
+    by isinstance, not silently passed through to _add_months_anchored
+    where it would TypeError.
+
+    Children are independent rows with status='scheduled' and
+    parent_event_id pointing back at the parent. Editing or completing
+    a single child does not propagate; deleting the parent leaves
+    children with parent_event_id=NULL (FK ON DELETE SET NULL on PG;
+    SQLite drops the FK clause and the column simply stays set to the
+    no-longer-existing parent's id — children survive either way)."""
+    if rule not in _RECURRENCE_COUNTS:
+        raise ValueError(f"unknown recurrence rule: {rule}")
+    if not isinstance(start_date, date):
+        raise TypeError("start_date must be a date instance")
+    if until_date is not None:
+        if not isinstance(until_date, date):
+            raise TypeError("until_date must be a date instance")
+        if until_date < start_date:
+            raise ValueError("until_date must be >= start_date")
+
+    dates = _expand_recurrence_dates(start_date, rule, until_date)
+    if len(dates) < 1:
+        raise ValueError("recurrence produced zero dates")
+    parent_iso = dates[0].isoformat()
+    child_isos = [d.isoformat() for d in dates[1:]]
+
+    parent_sql = (
+        "INSERT INTO events (title, event_type, team_member_id, scheduled_date, "
+        "scheduled_time, duration_minutes, location, agenda, manager_id, "
+        "recurrence_rule) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    parent_params = (title, event_type, team_member_id, parent_iso,
+                     scheduled_time, duration_minutes, location, agenda,
+                     manager_id, rule)
+
+    # children_sql expects parent_event_id as the LAST column —
+    # _materialize_in_txn appends it to each tuple before executemany.
+    children_sql = (
+        "INSERT INTO events (title, event_type, team_member_id, scheduled_date, "
+        "scheduled_time, duration_minutes, location, agenda, manager_id, "
+        "recurrence_rule, parent_event_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    children_rows = [
+        (title, event_type, team_member_id, d_iso, scheduled_time,
+         duration_minutes, location, agenda, manager_id, rule)
+        for d_iso in child_isos
+    ]
+
+    with _connect() as conn:
+        return _materialize_in_txn(conn, parent_sql, parent_params,
+                                   children_sql, children_rows)
+
+
+def find_expiring_recurring_series(*, manager_id: int,
+                                   lead_days: int = 14,
+                                   grace_days: int = 7) -> dict[str, Any] | None:
+    """Return the soonest-expiring recurring series whose latest child is
+    within `lead_days` and which hasn't been warned about in the last
+    `grace_days`. None if no series qualifies.
+
+    The expiry-warning is the canonical Next Step branch added in PR 4 —
+    a weekly 1:1 silently stops after 12 materialized occurrences (~3
+    months) without this. Multiplicity contract: surface ONE banner per
+    dashboard render (LIMIT 1, ordered by soonest expiry); next render
+    surfaces the next-soonest after the user acts on the first.
+
+    `recurrence_warned_at` is read via MIN across the series — if any
+    child is recently stamped, the whole series counts as 'warned.'"""
+    assert manager_id is not None, "manager_id required (no implicit cross-tenant)"
+    today = date.today().isoformat()
+    horizon = (date.today() + timedelta(days=lead_days)).isoformat()
+    grace_cutoff = (datetime.now() - timedelta(days=grace_days)).isoformat()
+
+    sql = """
+        SELECT
+            e.parent_event_id AS series_id,
+            MIN(tm.name) AS member_name,
+            MIN(e.recurrence_rule) AS recurrence_rule,
+            MIN(e.title) AS title,
+            MIN(e.scheduled_time) AS scheduled_time,
+            MIN(e.duration_minutes) AS duration_minutes,
+            MIN(e.location) AS location,
+            MIN(e.event_type) AS event_type,
+            MIN(e.team_member_id) AS team_member_id,
+            MAX(e.scheduled_date) AS latest_date
+        FROM events e
+        LEFT JOIN team_members tm ON e.team_member_id = tm.id
+        WHERE e.manager_id = ?
+          AND e.parent_event_id IS NOT NULL
+          AND e.status = 'scheduled'
+        GROUP BY e.parent_event_id
+        HAVING MAX(e.scheduled_date) BETWEEN ? AND ?
+           AND (MIN(COALESCE(e.recurrence_warned_at, '')) = ''
+                OR MIN(COALESCE(e.recurrence_warned_at, '')) < ?)
+        ORDER BY MAX(e.scheduled_date) ASC
+        LIMIT 1
+    """
+    with _connect() as conn:
+        return _fetchone(conn, sql,
+                         (manager_id, today, horizon, grace_cutoff))
+
+
+def get_recurring_series_template(*, manager_id: int,
+                                  series_id: int) -> dict[str, Any] | None:
+    """Return prefill data for extending a recurring series. Same shape as
+    find_expiring_recurring_series but keyed by an explicit series_id, used
+    by the Schedule form when the user clicks an expiry warning.
+
+    Aggregates with MIN/MAX so a missing parent (FK SET NULL) doesn't break
+    the lookup — children carry the same title/time/etc. so any of them
+    suffices to populate the form. Returns None when no children exist."""
+    assert manager_id is not None, "manager_id required (no implicit cross-tenant)"
+    sql = """
+        SELECT
+            MIN(e.title) AS title,
+            MIN(e.event_type) AS event_type,
+            MIN(e.team_member_id) AS team_member_id,
+            MIN(e.scheduled_time) AS scheduled_time,
+            MIN(e.duration_minutes) AS duration_minutes,
+            MIN(e.location) AS location,
+            MIN(e.recurrence_rule) AS recurrence_rule,
+            MAX(e.scheduled_date) AS latest_date
+        FROM events e
+        WHERE e.manager_id = ?
+          AND (e.id = ? OR e.parent_event_id = ?)
+    """
+    with _connect() as conn:
+        row = _fetchone(conn, sql, (manager_id, series_id, series_id))
+    if not row or row.get("title") is None:
+        return None
+    return row
+
+
+def stamp_recurrence_warning(*, manager_id: int, series_id: int) -> None:
+    """Set recurrence_warned_at = NOW() on every child of the given series.
+    Stamping every child (rather than just the parent) means the warning
+    state survives the parent being FK SET NULL'd via ON DELETE."""
+    assert manager_id is not None, "manager_id required (no implicit cross-tenant)"
+    now_iso = datetime.now().isoformat()
+    with _connect() as conn:
+        _exec(conn,
+            "UPDATE events SET recurrence_warned_at = ? "
+            "WHERE manager_id = ? AND parent_event_id = ?",
+            (now_iso, manager_id, series_id))
+        _commit(conn)
 
 
 def update_event(event_id: int, manager_id: int, **kwargs) -> None:

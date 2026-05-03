@@ -1554,3 +1554,263 @@ class TestUpcomingAggregator:
             "0008 migration must add goals.target_date"
 
 
+class TestAddMonthsAnchored:
+    """_add_months_anchored implements Algo A (anchor preserved). Round-2
+    review caught that Algo B (advance-from-previous-clamped) would silently
+    drift after the first short month, permanently losing the anchor day."""
+
+    def test_basic_addition(self):
+        from datetime import date
+        assert db._add_months_anchored(date(2026, 1, 15), 1) == date(2026, 2, 15)
+        assert db._add_months_anchored(date(2026, 1, 15), 12) == date(2027, 1, 15)
+
+    def test_zero_months_returns_start(self):
+        from datetime import date
+        assert db._add_months_anchored(date(2026, 5, 31), 0) == date(2026, 5, 31)
+
+    def test_jan_31_clamps_to_short_months_but_preserves_anchor(self):
+        """Jan 31 + 1mo → Feb 28, + 2mo → Mar 31 (back to 31st), + 3mo → Apr 30,
+        + 4mo → May 31. Algo A iterates from start, so the cadence keeps
+        finding the 31st whenever the target month has one."""
+        from datetime import date
+        start = date(2026, 1, 31)
+        assert db._add_months_anchored(start, 1) == date(2026, 2, 28)
+        assert db._add_months_anchored(start, 2) == date(2026, 3, 31)
+        assert db._add_months_anchored(start, 3) == date(2026, 4, 30)
+        assert db._add_months_anchored(start, 4) == date(2026, 5, 31)
+
+    def test_leap_year_feb_29(self):
+        """Jan 31, 2024 (leap year) + 1mo → Feb 29 (not 28)."""
+        from datetime import date
+        assert db._add_months_anchored(date(2024, 1, 31), 1) == date(2024, 2, 29)
+
+    def test_quarterly_aug_31_anchor_preserved(self):
+        """Quarterly = +3 months from start each iter. Aug 31 → Nov 30 → Feb 28 →
+        May 31 → Aug 31 → Nov 30. The cadence finds the 31st whenever it can."""
+        from datetime import date
+        start = date(2026, 8, 31)
+        assert db._add_months_anchored(start, 3) == date(2026, 11, 30)
+        assert db._add_months_anchored(start, 6) == date(2027, 2, 28)
+        assert db._add_months_anchored(start, 9) == date(2027, 5, 31)
+        assert db._add_months_anchored(start, 12) == date(2027, 8, 31)
+
+
+class TestMaterializeInTxn:
+    """_materialize_in_txn must land both INSERTs or neither. PR 4 round-3
+    review caught that the naïve loop-through-_exec_returning_id pattern
+    is broken on both backends — PG's autocommit makes per-statement
+    rollback meaningless; SQLite's _exec_returning_id auto-commits the
+    parent before children even start."""
+
+    def test_rollback_on_children_failure_no_orphan_parent(self):
+        """Force a NOT NULL violation on a child INSERT and assert the
+        parent did not commit. On SQLite this proves we don't go through
+        the auto-committing _exec_returning_id; on PG it proves the
+        explicit BEGIN/COMMIT works around autocommit=True."""
+        mid = db.create_manager("mat_mgr1", "Mat1", "pass1234")
+        # Title column is NOT NULL — child row with title=None must fail.
+        parent_sql = ("INSERT INTO events (title, event_type, scheduled_date, "
+                     "scheduled_time, manager_id) VALUES (?, ?, ?, ?, ?)")
+        parent_params = ("Parent", "one_on_one", "2026-06-01", "10:00", mid)
+        children_sql = ("INSERT INTO events (title, event_type, scheduled_date, "
+                       "scheduled_time, manager_id, parent_event_id) "
+                       "VALUES (?, ?, ?, ?, ?, ?)")
+        bad_children = [(None, "one_on_one", "2026-06-08", "10:00", mid)]
+
+        with db._connect() as conn:
+            try:
+                db._materialize_in_txn(conn, parent_sql, parent_params,
+                                       children_sql, bad_children)
+            except Exception:
+                pass
+            else:
+                raise AssertionError("expected children INSERT to fail")
+            # Assert no orphan parent landed.
+            cur = db._exec(conn, "SELECT COUNT(*) FROM events WHERE manager_id = ?",
+                          (mid,))
+            count = cur.fetchone()[0]
+        assert count == 0, f"orphan parent landed: {count} event(s) under manager"
+
+    def test_cap_refuses_too_many_children(self):
+        """Cap is 32. Generating 33 must raise ValueError before any DB write."""
+        mid = db.create_manager("mat_mgr2", "Mat2", "pass1234")
+        parent_sql = ("INSERT INTO events (title, event_type, scheduled_date, "
+                     "scheduled_time, manager_id) VALUES (?, ?, ?, ?, ?)")
+        parent_params = ("Parent", "one_on_one", "2026-06-01", "10:00", mid)
+        children_sql = ("INSERT INTO events (title, event_type, scheduled_date, "
+                       "scheduled_time, manager_id, parent_event_id) "
+                       "VALUES (?, ?, ?, ?, ?, ?)")
+        too_many = [("c", "one_on_one", "2026-06-08", "10:00", mid)
+                    for _ in range(33)]
+        with db._connect() as conn:
+            try:
+                db._materialize_in_txn(conn, parent_sql, parent_params,
+                                       children_sql, too_many)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("expected ValueError for >32 children")
+            cur = db._exec(conn, "SELECT COUNT(*) FROM events WHERE manager_id = ?",
+                          (mid,))
+            count = cur.fetchone()[0]
+        assert count == 0, f"cap must refuse before any write; got {count} rows"
+
+
+class TestRecurringEvents:
+    """create_recurring_events end-to-end: weekly + monthly + quarterly,
+    parent-delete leaves children, expiry-warning surfaces correctly."""
+
+    def test_weekly_creates_full_series(self):
+        from datetime import date
+        mid = db.create_manager("rec_mgr1", "Rec1", "pass1234")
+        member = db.add_team_member("Weekly Person", manager_id=mid)
+        pid = db.create_recurring_events(
+            title="Weekly 1:1", event_type="one_on_one",
+            start_date=date(2026, 6, 1), scheduled_time="10:00",
+            rule="weekly", team_member_id=member, manager_id=mid)
+        # 12 events total: 1 parent + 11 children
+        with db._connect() as conn:
+            cur = db._exec(conn,
+                "SELECT COUNT(*) FROM events WHERE manager_id = ?", (mid,))
+            count = cur.fetchone()[0]
+            cur = db._exec(conn,
+                "SELECT COUNT(*) FROM events WHERE parent_event_id = ?", (pid,))
+            child_count = cur.fetchone()[0]
+        assert count == 12, f"weekly series should have 12 events, got {count}"
+        assert child_count == 11
+
+    def test_monthly_on_31st_clamps_correctly(self):
+        from datetime import date
+        mid = db.create_manager("rec_mgr2", "Rec2", "pass1234")
+        pid = db.create_recurring_events(
+            title="Month-end review", event_type="quarterly_review",
+            start_date=date(2026, 1, 31), scheduled_time="14:00",
+            rule="monthly", manager_id=mid)
+        with db._connect() as conn:
+            cur = db._exec(conn,
+                "SELECT scheduled_date FROM events WHERE manager_id = ? "
+                "ORDER BY scheduled_date", (mid,))
+            dates = [r[0] for r in cur.fetchall()]
+        # Jan 31 → Feb 28 → Mar 31 → Apr 30 → May 31 → Jun 30 → Jul 31 → ...
+        assert "2026-01-31" in dates
+        assert "2026-02-28" in dates
+        assert "2026-03-31" in dates
+        assert "2026-04-30" in dates
+        assert "2026-05-31" in dates
+
+    def test_until_date_truncates_series(self):
+        from datetime import date
+        mid = db.create_manager("rec_mgr3", "Rec3", "pass1234")
+        # Weekly with until_date 3 weeks out → should produce 4 events
+        # (start + 3 weekly children).
+        db.create_recurring_events(
+            title="Truncated", event_type="check_in",
+            start_date=date(2026, 6, 1), scheduled_time="09:00",
+            rule="weekly", until_date=date(2026, 6, 22), manager_id=mid)
+        with db._connect() as conn:
+            cur = db._exec(conn,
+                "SELECT COUNT(*) FROM events WHERE manager_id = ?", (mid,))
+            count = cur.fetchone()[0]
+        assert count == 4, f"truncated weekly should be 4 events, got {count}"
+
+    def test_unknown_rule_raises(self):
+        from datetime import date
+        try:
+            db.create_recurring_events(
+                title="x", event_type="check_in",
+                start_date=date(2026, 6, 1), scheduled_time="09:00",
+                rule="bogus", manager_id=1)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unknown rule must raise ValueError")
+
+    def test_iso_string_start_raises_typeerror(self):
+        """Defense against a stringly-typed callsite that would silently
+        TypeError inside _add_months_anchored. Form passes a date object."""
+        try:
+            db.create_recurring_events(
+                title="x", event_type="check_in",
+                start_date="2026-06-01", scheduled_time="09:00",
+                rule="weekly", manager_id=1)
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("iso string start_date must raise TypeError")
+
+
+class TestExpiryWarning:
+    """find_expiring_recurring_series + stamp_recurrence_warning drive the
+    expiry-warning branch in next_step_for. Materialized series silently
+    end after 12 occurrences without this warning surfacing."""
+
+    def test_no_series_returns_none(self):
+        mid = db.create_manager("exp_mgr1", "Exp1", "pass1234")
+        assert db.find_expiring_recurring_series(manager_id=mid) is None
+
+    def test_fires_when_latest_child_within_lead(self):
+        from datetime import date, timedelta
+        mid = db.create_manager("exp_mgr2", "Exp2", "pass1234")
+        member = db.add_team_member("ExpMember", manager_id=mid)
+        # Series whose latest child is 7 days out — well within the
+        # default 14-day lead window.
+        start = date.today() - timedelta(days=70)  # weekly × 11 = 77 days ago
+        db.create_recurring_events(
+            title="Soon-Expiring", event_type="one_on_one",
+            start_date=start, scheduled_time="10:00",
+            rule="weekly", team_member_id=member, manager_id=mid)
+        result = db.find_expiring_recurring_series(manager_id=mid)
+        assert result is not None
+        assert result.get("title") == "Soon-Expiring"
+        assert result.get("recurrence_rule") == "weekly"
+
+    def test_does_not_fire_when_latest_child_too_far_out(self):
+        from datetime import date
+        mid = db.create_manager("exp_mgr3", "Exp3", "pass1234")
+        member = db.add_team_member("FarMember", manager_id=mid)
+        # Series starting today — latest child is ~11 weeks out, beyond
+        # the 14-day lead.
+        db.create_recurring_events(
+            title="Plenty of Time", event_type="one_on_one",
+            start_date=date.today(), scheduled_time="10:00",
+            rule="weekly", team_member_id=member, manager_id=mid)
+        assert db.find_expiring_recurring_series(manager_id=mid) is None
+
+    def test_warning_stamp_suppresses_until_grace_expires(self):
+        from datetime import date, timedelta
+        mid = db.create_manager("exp_mgr4", "Exp4", "pass1234")
+        member = db.add_team_member("StampMember", manager_id=mid)
+        start = date.today() - timedelta(days=70)
+        pid = db.create_recurring_events(
+            title="StampSeries", event_type="one_on_one",
+            start_date=start, scheduled_time="10:00",
+            rule="weekly", team_member_id=member, manager_id=mid)
+        # First detection succeeds.
+        first = db.find_expiring_recurring_series(manager_id=mid)
+        assert first is not None
+        # Stamp every child in the series.
+        db.stamp_recurrence_warning(manager_id=mid, series_id=pid)
+        # Within the 7-day grace period, the series is suppressed.
+        again = db.find_expiring_recurring_series(manager_id=mid)
+        assert again is None, "stamped series must be suppressed within grace window"
+
+    def test_parent_delete_leaves_children(self):
+        """ON DELETE SET NULL on PG; on SQLite the FK isn't enforced so the
+        column simply retains the no-longer-existing parent's id. Either
+        way, children survive."""
+        from datetime import date
+        mid = db.create_manager("exp_mgr5", "Exp5", "pass1234")
+        pid = db.create_recurring_events(
+            title="ParentDelete", event_type="check_in",
+            start_date=date(2026, 6, 1), scheduled_time="10:00",
+            rule="weekly", manager_id=mid)
+        with db._connect() as conn:
+            db._exec(conn, "DELETE FROM events WHERE id = ?", (pid,))
+            db._commit(conn)
+            cur = db._exec(conn,
+                "SELECT COUNT(*) FROM events WHERE manager_id = ?", (mid,))
+            count = cur.fetchone()[0]
+        # 11 children survive (parent gone, total is 11 not 12).
+        assert count == 11, f"children must survive parent delete; got {count} rows"
+
+

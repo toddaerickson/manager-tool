@@ -491,26 +491,74 @@ def generate_rule_based_suggestion(manager_id):
             "Goals")
 
 
+_RECURRENCE_CADENCE_WORD = {
+    "weekly": "weekly", "monthly": "monthly", "quarterly": "quarterly",
+}
+
+
+def _format_expiry_warning(series_info: dict) -> str:
+    """Render the imperative expiry-warning text for next_step_for."""
+    rule = series_info.get("recurrence_rule") or "recurring"
+    cadence = _RECURRENCE_CADENCE_WORD.get(rule, "recurring")
+    member = series_info.get("member_name")
+    if member:
+        return (f"Your {cadence} 1:1 with {member} is about to end — "
+                f"extend the series before it runs out.")
+    title = series_info.get("title") or "recurring event"
+    return (f"Your {cadence} '{title}' series is about to end — "
+            f"extend it before it runs out.")
+
+
 def next_step_for(manager_id):
     """Pick the single most-urgent action for the dashboard Next Step row.
 
-    Returns (text, action_page) or None when no recommendation should surface.
+    Returns (text, action_page, context) or None.
+      - text: imperative one-liner (user-controlled content escaped at render)
+      - action_page: nav target for the click handler
+      - context: dict with {'branch': str, ...optional metadata}.
+        For expiry warnings, context['series_id'] points at the parent
+        event so the Schedule form can pre-populate.
 
-    Today this is a thin wrapper over generate_rule_based_suggestion. PR 4
-    will insert a recurring-event expiry-warning branch ahead of the
-    delegation/event branches without touching the rule generator's
-    signature, so coaching's existing API stays stable for callers like
-    get_daily_suggestion.
+    Branch priority (the plan-stated order):
+        overdue > expiry-warning > delegation > event > baseline > nothing
 
-    Branch priority (declared so future additions slot in cleanly):
-      overdue > expiry-warning (PR 4) > delegation > event > nothing
-    """
+    The wrapper independently checks for a 'critical' nudge (which the
+    rule generator routes to its overdue branch) so that overdue beats
+    expiry-warning when both conditions are true. The user gets the
+    expiry banner on a later render after they handle the overdue
+    meeting — never both at once.
+
+    Stamps recurrence_warned_at on the surfaced series before returning
+    so the next render (or a multi-tab session) doesn't re-warn for the
+    same series within the grace window."""
     if manager_id is None:
         return None
+
+    # Branch 1: overdue (delegated to generate_rule_based_suggestion's
+    # critical-nudge branch). We probe nudges directly so we can correctly
+    # slot expiry-warning AFTER overdue but BEFORE delegation/event.
+    nudges = db.get_nudges(manager_id=manager_id) or []
+    has_critical = any(n.get("severity") == "critical" for n in nudges)
+
+    # Branch 2: expiry-warning. Fires only when no critical nudge is active.
+    if not has_critical:
+        expiring = db.find_expiring_recurring_series(manager_id=manager_id)
+        if expiring:
+            series_id = expiring.get("series_id")
+            if series_id:
+                db.stamp_recurrence_warning(manager_id=manager_id,
+                                            series_id=series_id)
+            return (_format_expiry_warning(expiring),
+                    "Schedule",
+                    {"branch": "expiry", "series_id": series_id})
+
+    # Branches 1 (critical/overdue) and 3+ (delegation, event, baseline)
+    # come from the rule generator.
     text, action_page = generate_rule_based_suggestion(manager_id)
     if not text:
         return None
-    return text, action_page
+    branch = "overdue" if has_critical else "rule"
+    return text, action_page, {"branch": branch}
 
 
 def generate_ai_suggestion(manager_id):
