@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import json
 import html
@@ -621,67 +621,100 @@ def page_schedule_event():
 
 
 def page_upcoming_events():
-    st.title("Upcoming Events (Next 14 Days)")
+    st.title("Upcoming")
 
-    events = db.get_upcoming_events(days=14, manager_id=_mid())
-    if events:
-        st.dataframe(
-            df_from(events, ["id", "title", "event_type", "scheduled_date",
-                             "scheduled_time", "participant_name", "status"]),
-            use_container_width=True, hide_index=True,
-        )
-        ev_left, ev_right = st.columns([3, 2])
-        with ev_left:
-            with st.form("complete_event"):
-                eid = st.number_input("Event ID to complete", min_value=1, step=1)
-                notes = st.text_area("Meeting notes", height=150,
-                    placeholder="What happened? What did you observe? What do you need to follow up on?")
-                if st.form_submit_button("Mark Complete"):
-                    event = db.get_event(int(eid), manager_id=_mid())
-                    if event:
-                        db.complete_event(int(eid), manager_id=_mid(), notes=notes or None)
-                        set_toast("success", f"Event #{eid} marked completed.")
-                    else:
-                        set_toast("error", f"Event #{eid} not found.")
-                    st.rerun()
-        with ev_right:
-            # Try to get context from selected event
-            ev_notes = st.session_state.get("ev_notes_text", "")
-            render_coaching_pane(notes if notes else "",
-                context_type="event_completion",
-                event_type="meeting",
-                key_suffix="event_complete")
-    else:
-        st.info("No upcoming events scheduled.")
+    overdue = db.get_overdue_aggregate(manager_id=_mid())
+    upcoming = db.get_upcoming_aggregate(manager_id=_mid(), days=7)
+
+    if not overdue and not upcoming:
+        st.info("Nothing in the next 7 days.")
         return
 
-    # Inline editing with data_editor (#3)
-    edit_df = pd.DataFrame(events)
-    edit_df["complete"] = False
-    display_cols = ["complete", "id", "title", "event_type", "scheduled_date",
-                    "scheduled_time", "participant_name"]
-    display_cols = [c for c in display_cols if c in edit_df.columns]
-    view = edit_df[display_cols].copy()
-    view.columns = [c.replace("_", " ").title() for c in view.columns]
+    chip_labels = {
+        "event": "EVENT",
+        "todo": "TODO",
+        "check-in": "CHECK-IN",
+        "goal": "GOAL",
+    }
 
-    edited = st.data_editor(
-        view,
-        use_container_width=True,
-        hide_index=True,
-        disabled=[c for c in view.columns if c != "Complete"],
-        column_config={
-            "Complete": st.column_config.CheckboxColumn("Done?", default=False),
-        },
-        key="upcoming_editor",
-    )
+    def _render_row(row):
+        chip = chip_labels.get(row["type"], row["type"].upper())
+        time_part = f"{row['time_str']}  " if row.get("time_str") else ""
+        member_part = f"  ·  {row['member_name']}" if row.get("member_name") else ""
+        # html.escape on user-controlled title — same defense pattern as Coach
+        # and Next Step. The chip and time strings are server-derived constants
+        # so they don't need escaping.
+        title_safe = html.escape(row.get("title") or "")
+        st.markdown(
+            f"<div style='padding:4px 0;'>"
+            f"<code style='background:#2d3748;color:#a0aec0;padding:2px 6px;"
+            f"border-radius:3px;font-size:0.75rem;'>{chip}</code> "
+            f"&nbsp;{time_part}{title_safe}{member_part}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
-    # Check for rows the user ticked
-    checked = edited[edited["Complete"]].reset_index(drop=True)
-    if not checked.empty:
-        row = checked.iloc[0]
-        eid = int(row["Id"])
-        title = row["Title"]
-        confirm_complete_event(eid, title)
+    today_iso = date.today().isoformat()
+    tomorrow_iso = (date.today() + timedelta(days=1)).isoformat()
+
+    def _group_header(iso_date):
+        if iso_date == today_iso:
+            return "Today"
+        if iso_date == tomorrow_iso:
+            return "Tomorrow"
+        try:
+            return date.fromisoformat(iso_date).strftime("%a %b %-d")
+        except ValueError:
+            return iso_date
+
+    if overdue:
+        st.subheader("Overdue")
+        # Group overdue rows by date too, oldest first.
+        overdue_by_date = {}
+        for r in overdue:
+            overdue_by_date.setdefault(r["due_date"], []).append(r)
+        for d in sorted(overdue_by_date.keys()):
+            st.caption(_group_header(d))
+            for r in overdue_by_date[d]:
+                _render_row(r)
+        st.divider()
+
+    if upcoming:
+        upcoming_by_date = {}
+        for r in upcoming:
+            upcoming_by_date.setdefault(r["due_date"], []).append(r)
+        for d in sorted(upcoming_by_date.keys()):
+            st.caption(_group_header(d))
+            for r in upcoming_by_date[d]:
+                _render_row(r)
+
+    # Event-completion form preserved as a sidebar affordance — keeps the
+    # existing workflow for users who land here to mark something done.
+    # Hidden when no event rows are visible in either group.
+    has_events = any(r["type"] == "event" for r in overdue + upcoming)
+    if has_events:
+        st.divider()
+        with st.expander("Mark an event complete"):
+            ev_left, ev_right = st.columns([3, 2])
+            with ev_left:
+                with st.form("complete_event"):
+                    eid = st.number_input("Event ID", min_value=1, step=1)
+                    notes = st.text_area("Meeting notes", height=120,
+                        placeholder="What happened? What did you observe? What do you need to follow up on?")
+                    if st.form_submit_button("Mark Complete"):
+                        event = db.get_event(int(eid), manager_id=_mid())
+                        if event:
+                            db.complete_event(int(eid), manager_id=_mid(),
+                                              notes=notes or None)
+                            set_toast("success", f"Event #{eid} marked completed.")
+                        else:
+                            set_toast("error", f"Event #{eid} not found.")
+                        st.rerun()
+            with ev_right:
+                render_coaching_pane(notes if notes else "",
+                    context_type="event_completion",
+                    event_type="meeting",
+                    key_suffix="event_complete")
 
 
 def page_event_history():
@@ -1041,6 +1074,9 @@ def page_quarterly_goals():
                         key=f"g_member_{nonce}")
                     quarter = st.text_input("Quarter", value=default_quarter,
                         key=f"g_quarter_{nonce}")
+                    target_date_in = st.date_input(
+                        "Target date (optional)",
+                        value=None, key=f"g_target_{nonce}")
                 with gc2:
                     description = st.text_input("Goal Description *",
                         key=f"g_desc_{nonce}")
@@ -1053,7 +1089,11 @@ def page_quarterly_goals():
                     elif not description:
                         st.error("Description is required.")
                     else:
-                        db.add_goal(mid_g, quarter, description, key_results or None)
+                        target_iso = (target_date_in.isoformat()
+                                      if target_date_in else None)
+                        db.add_goal(mid_g, quarter, description,
+                                    key_results or None,
+                                    target_date=target_iso)
                         st.session_state["add_goal_nonce"] = nonce + 1
                         set_toast("success", f"Goal added for {member_name}.")
                         st.rerun()

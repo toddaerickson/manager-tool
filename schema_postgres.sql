@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS goals (
     quarter TEXT NOT NULL,
     description TEXT NOT NULL,
     key_results TEXT,
+    target_date TEXT,
     status TEXT DEFAULT 'not_started' CHECK(status IN
         ('not_started', 'in_progress', 'met', 'exceeded',
          'partially_met', 'not_met')),
@@ -286,3 +287,5 @@ CREATE INDEX IF NOT EXISTS ix_delegations_manager_status_checkin
     ON delegations (manager_id, status, check_in_date);
 CREATE INDEX IF NOT EXISTS ix_coach_suggestions_manager_date
     ON coach_suggestions (manager_id, suggestion_date);
+CREATE INDEX IF NOT EXISTS ix_goals_manager_target
+    ON goals (manager_id, target_date);
