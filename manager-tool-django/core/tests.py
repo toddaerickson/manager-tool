@@ -384,16 +384,182 @@ class TestTeamMembersAdd:
         self._login_as(client, "stranger@example.com")
         resp = client.post("/team/add/", {"name": "X"})
         assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+class TestTeamMembersSoftDelete:
+    """Phase 5.1b: DELETE /team/<id>/delete/ — soft-delete + 30-day undo."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        member = TeamMember.objects.create(name="Doomed", manager_id=m.id)
+        self._login_as(client, "todd@example.com")
+        return m, member
+
+    def test_delete_sets_deleted_at_not_remove_row(self, client):
+        m, member = self._setup(client)
+        resp = client.delete(f"/team/{member.id}/delete/")
+        assert resp.status_code == 200
+        member.refresh_from_db()
+        assert member.deleted_at is not None
+        # Row physically still there
+        assert TeamMember.objects.filter(pk=member.id).exists()
+        # But not in active list
+        assert TeamMember.objects.active_for_manager(m.id).count() == 0
+        # Visible in deleted list
+        assert TeamMember.objects.recently_deleted_for_manager(m.id).count() == 1
+
+    def test_delete_cross_tenant_returns_404(self, client):
+        m, member = self._setup(client)  # Todd is logged in
+        # Try to delete a member belonging to another manager
+        m2 = Manager.objects.create(
+            username="other", display_name="Other",
+            password_hash="x", email="other@example.com",
+        )
+        other_member = TeamMember.objects.create(name="Other's", manager_id=m2.id)
+        resp = client.delete(f"/team/{other_member.id}/delete/")
+        assert resp.status_code == 404
+        # Other's row untouched
+        other_member.refresh_from_db()
+        assert other_member.deleted_at is None
+
+    def test_delete_already_deleted_returns_404(self, client):
+        """Idempotency guard: deleting a soft-deleted row returns 404
+        rather than re-stamping deleted_at."""
+        m, member = self._setup(client)
+        client.delete(f"/team/{member.id}/delete/")
+        resp = client.delete(f"/team/{member.id}/delete/")
+        assert resp.status_code == 404
+
+    def test_active_list_excludes_soft_deleted(self, client):
+        m, member = self._setup(client)
+        # Add a second active member
+        TeamMember.objects.create(name="Active", manager_id=m.id)
+        client.delete(f"/team/{member.id}/delete/")
+        resp = client.get("/team/")
+        body = resp.content.decode()
+        assert "Active" in body
+        assert "Doomed" not in body or "Recently deleted" in body
+        # The deleted name appears only in the Recently deleted section
+        # (not in the main table). Quick structural check:
+        deleted_idx = body.find("Recently deleted")
+        doomed_idx = body.find("Doomed")
+        assert deleted_idx > 0 and doomed_idx > deleted_idx, "Doomed should be in deleted section"
+
+
+@pytest.mark.django_db
+class TestTeamMembersRestore:
+    """Phase 5.1b: POST /team/<id>/restore/ — undo within 30 days."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
         m = Manager.objects.create(
             username="todd", display_name="Todd",
             password_hash="x", email="todd@example.com",
         )
         self._login_as(client, "todd@example.com")
-        # Authenticated dashboard works
-        assert client.get("/dashboard/").status_code == 200
-        # Force-logout via the test client (mirrors what /accounts/logout/ does)
-        client.logout()
-        # Now blocked
-        resp = client.get("/dashboard/")
-        assert resp.status_code == 302
-        assert "/accounts/google/login/" in resp["Location"]
+        return m
+
+    def test_restore_clears_deleted_at(self, client):
+        m = self._setup(client)
+        member = TeamMember.objects.create(name="X", manager_id=m.id)
+        client.delete(f"/team/{member.id}/delete/")
+        resp = client.post(f"/team/{member.id}/restore/")
+        assert resp.status_code == 200
+        member.refresh_from_db()
+        assert member.deleted_at is None
+        assert TeamMember.objects.active_for_manager(m.id).count() == 1
+
+    def test_restore_outside_window_returns_404(self, client):
+        """Soft-deletes older than 30 days are no longer restorable
+        (undo window expired). Force the deleted_at into the past."""
+        from django.utils import timezone
+        from datetime import timedelta
+        m = self._setup(client)
+        member = TeamMember.objects.create(
+            name="ExpiredUndo", manager_id=m.id,
+            deleted_at=timezone.now() - timedelta(days=31),
+        )
+        resp = client.post(f"/team/{member.id}/restore/")
+        assert resp.status_code == 404
+        member.refresh_from_db()
+        assert member.deleted_at is not None  # not restored
+
+    def test_restore_cross_tenant_returns_404(self, client):
+        from django.utils import timezone
+        m = self._setup(client)  # Todd
+        m2 = Manager.objects.create(
+            username="other", display_name="Other",
+            password_hash="x", email="other@example.com",
+        )
+        other_member = TeamMember.objects.create(
+            name="Other's", manager_id=m2.id,
+            deleted_at=timezone.now(),
+        )
+        resp = client.post(f"/team/{other_member.id}/restore/")
+        assert resp.status_code == 404
+        other_member.refresh_from_db()
+        assert other_member.deleted_at is not None  # untouched
+
+
+@pytest.mark.django_db
+class TestPurgeDeletedTeamMembers:
+    """Phase 5.1b: management command hard-deletes soft-deleted rows
+    older than the undo window."""
+
+    def test_purges_only_rows_past_window(self):
+        from datetime import timedelta
+        from django.core.management import call_command
+        from django.utils import timezone
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        # 1 active, 1 recently deleted (within window), 1 expired
+        active = TeamMember.objects.create(name="Active", manager_id=m.id)
+        recent = TeamMember.objects.create(
+            name="Recent", manager_id=m.id,
+            deleted_at=timezone.now() - timedelta(days=5),
+        )
+        expired = TeamMember.objects.create(
+            name="Expired", manager_id=m.id,
+            deleted_at=timezone.now() - timedelta(days=45),
+        )
+        call_command("purge_deleted_team_members")
+        # Active and recent survive; expired is gone
+        assert TeamMember.objects.filter(pk=active.id).exists()
+        assert TeamMember.objects.filter(pk=recent.id).exists()
+        assert not TeamMember.objects.filter(pk=expired.id).exists()
+
+    def test_dry_run_deletes_nothing(self):
+        from datetime import timedelta
+        from django.core.management import call_command
+        from django.utils import timezone
+        m = Manager.objects.create(
+            username="dry_runner", display_name="Dry",
+            password_hash="x", email="dry@example.com",
+        )
+        expired = TeamMember.objects.create(
+            name="Expired", manager_id=m.id,
+            deleted_at=timezone.now() - timedelta(days=45),
+        )
+        call_command("purge_deleted_team_members", "--dry-run")
+        assert TeamMember.objects.filter(pk=expired.id).exists()

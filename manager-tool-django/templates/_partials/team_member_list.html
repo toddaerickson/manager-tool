@@ -6,15 +6,27 @@
       <th class="px-4 py-3">Email</th>
       <th class="px-4 py-3">Role</th>
       <th class="px-4 py-3">Start date</th>
+      <th class="px-4 py-3 w-16"></th>
     </tr>
   </thead>
   <tbody class="divide-y divide-slate-100">
     {% for m in members %}
-    <tr>
+    <tr id="member-row-{{ m.id }}">
       <td class="px-4 py-3 font-medium">{{ m.name }}</td>
       <td class="px-4 py-3 text-slate-600">{{ m.email|default:"—" }}</td>
       <td class="px-4 py-3 text-slate-600">{{ m.role|default:"—" }}</td>
       <td class="px-4 py-3 text-slate-600 tabular-nums">{{ m.start_date|default:"—" }}</td>
+      <td class="px-4 py-3 text-right">
+        <button type="button"
+                hx-delete="{% url 'team-delete' m.id %}"
+                hx-target="#member-row-{{ m.id }}"
+                hx-swap="outerHTML"
+                hx-confirm="Delete {{ m.name }}? You can restore within 30 days from the Recently deleted section."
+                hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                class="text-xs text-red-600 hover:text-red-800">
+          Delete
+        </button>
+      </td>
     </tr>
     {% endfor %}
   </tbody>

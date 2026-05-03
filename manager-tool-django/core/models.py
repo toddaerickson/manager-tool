@@ -139,6 +139,32 @@ class Config(models.Model):
 # ============================================================
 
 
+class TeamMemberManager(TenantManager):
+    """Adds soft-delete-aware queries on top of TenantManager.
+
+    `for_manager(X)` keeps its original semantic (returns ALL rows for
+    the manager, including soft-deleted) so existing callers and
+    cross-tenant tests don't change shape. Use `active_for_manager(X)`
+    in views/services that should never see deleted rows; use
+    `recently_deleted_for_manager(X)` for the 30-day undo UI.
+    """
+
+    UNDO_WINDOW_DAYS = 30
+
+    def active_for_manager(self, manager_id):
+        return self.for_manager(manager_id).filter(deleted_at__isnull=True)
+
+    def recently_deleted_for_manager(self, manager_id):
+        from django.utils import timezone
+        from datetime import timedelta
+        cutoff = timezone.now() - timedelta(days=self.UNDO_WINDOW_DAYS)
+        return (
+            self.for_manager(manager_id)
+            .filter(deleted_at__isnull=False, deleted_at__gte=cutoff)
+            .order_by("-deleted_at")
+        )
+
+
 class TeamMember(models.Model):
     manager_id = models.IntegerField(blank=True, null=True, db_index=True)
     name = models.TextField()
@@ -148,8 +174,14 @@ class TeamMember(models.Model):
     notes = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
     updated_at = models.DateTimeField(blank=True, null=True)
+    # Soft-delete with 30-day undo window. NULL = active. Streamlit
+    # doesn't know about this column (it's Django-only); during the
+    # dual-run window Streamlit may show soft-deleted members.
+    # Hard-delete after the undo window happens via a management command
+    # wired to a Render Cron in Phase 6.
+    deleted_at = models.DateTimeField(blank=True, null=True, db_index=True)
 
-    objects = TenantManager()
+    objects = TeamMemberManager()
 
     class Meta:
         db_table = "team_members"
