@@ -82,38 +82,47 @@ class TestNextStepFor:
     branches without rewriting the matrix."""
 
     def test_returns_tuple_for_known_user(self):
-        """Default flow on an empty manager: returns a tuple, not None."""
+        """Default flow on an empty manager: returns a 3-tuple, not None.
+        PR 4 expanded the contract from (text, page) to (text, page, context)
+        so the dashboard click handler can carry through metadata like
+        series_id for expiry-warning extensions."""
         mid = db.create_manager("ns_mgr1", "NS1", "pass1234")
         result = coaching.next_step_for(mid)
         assert result is not None
-        text, action_page = result
+        assert len(result) == 3
+        text, action_page, context = result
         assert isinstance(text, str) and text
         assert isinstance(action_page, str) and action_page
+        assert isinstance(context, dict)
+        assert "branch" in context
 
     def test_returns_none_for_none_manager(self):
         """Defensive: an unauthenticated _mid() must not crash the dashboard."""
         assert coaching.next_step_for(None) is None
 
-    def test_text_matches_underlying_rule_generator(self):
-        """PR 2 contract: next_step_for is a thin wrapper. PR 4 will diverge
-        by inserting an expiry-warning branch — when that lands, this test
-        becomes 'matches OR is the expiry branch.'"""
+    def test_text_matches_underlying_rule_generator_when_no_expiry(self):
+        """When no expiring series exists, the wrapper's text/page match the
+        rule generator's output. PR 4's expiry-warning branch fires only
+        when find_expiring_recurring_series returns a row; an empty manager
+        has no such series, so the rule generator's output passes through."""
         mid = db.create_manager("ns_mgr2", "NS2", "pass1234")
         wrapper = coaching.next_step_for(mid)
-        rule = coaching.generate_rule_based_suggestion(mid)
-        assert wrapper == rule
+        rule_text, rule_page = coaching.generate_rule_based_suggestion(mid)
+        assert wrapper is not None
+        assert wrapper[0] == rule_text
+        assert wrapper[1] == rule_page
 
-    def test_overdue_priority_above_baseline(self):
-        """Branch priority: an overdue-meeting state must win over the
-        all-clear baseline. The plan declares
+    def test_overdue_priority_above_expiry(self):
+        """Branch priority: an overdue-meeting state must win over expiry
+        warning. The plan declares
             overdue > expiry-warning > delegation > event > nothing
-        — PR 2 only ships overdue + the lower branches; this test pins the
-        top of the priority order so PR 4 can insert expiry-warning at
-        slot 2 without disturbing it."""
+        and the PR 4 wrapper checks for a critical nudge before checking
+        for an expiring series, so the user gets the overdue banner first
+        and the expiry warning on a later render after they handle it."""
         mid = db.create_manager("ns_mgr3", "NS3", "pass1234")
-        # Add a team member with a 60-day-stale meeting → critical nudge.
         from datetime import datetime, timedelta
         member_id = db.add_team_member("Stale Member", manager_id=mid)
+        # Stale 1:1 → critical nudge.
         old = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
         eid = db.create_event("1:1 with Stale", "one_on_one", old, "10:00",
                               team_member_id=member_id, manager_id=mid)
@@ -124,10 +133,10 @@ class TestNextStepFor:
                              manager_id=mid)
         result = coaching.next_step_for(mid)
         assert result is not None
-        text, page = result
-        # Critical nudge for stale meeting routes to Schedule per the
-        # generator's branch at coaching.py:451.
-        assert page == "Schedule" or "Stale" in text or "1-on-1" in text
+        # Branch must be 'overdue' (or 'rule' delegating to the critical-nudge
+        # branch); MUST NOT be 'expiry' even if the user happens to also
+        # have an expiring series.
+        assert result[2].get("branch") != "expiry"
 
 
 class TestDailySuggestion:

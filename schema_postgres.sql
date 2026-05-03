@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS events (
         ('scheduled', 'completed', 'cancelled', 'rescheduled')),
     notes TEXT,
     calendar_invite_sent INTEGER DEFAULT 0,
+    recurrence_rule TEXT,
+    parent_event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+    recurrence_warned_at TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -289,3 +292,8 @@ CREATE INDEX IF NOT EXISTS ix_coach_suggestions_manager_date
     ON coach_suggestions (manager_id, suggestion_date);
 CREATE INDEX IF NOT EXISTS ix_goals_manager_target
     ON goals (manager_id, target_date);
+CREATE INDEX IF NOT EXISTS ix_events_parent
+    ON events (parent_event_id);
+CREATE INDEX IF NOT EXISTS ix_events_manager_parent
+    ON events (manager_id, parent_event_id)
+    WHERE parent_event_id IS NOT NULL;

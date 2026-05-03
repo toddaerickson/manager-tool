@@ -25,6 +25,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 
+def _count_events_for(db, manager_id: int) -> int:
+    """Count event rows scoped to manager_id. Used by the forced-failure
+    no-orphan assertion to verify _materialize_in_txn rolled back."""
+    with db._connect() as conn:
+        cur = db._exec(conn,
+            "SELECT COUNT(*) AS n FROM events WHERE manager_id = ?",
+            (manager_id,))
+        row = cur.fetchone()
+    if row is None:
+        return 0
+    return row["n"] if isinstance(row, dict) else row[0]
+
+
 def _seed_second_manager(db, soon: str) -> int:
     """Seed manager B via the same app helpers manager A used. Going through
     add_action_item / add_delegation / add_goal (NOT raw SQL) is what makes
@@ -70,6 +83,12 @@ def main() -> int:
 
     db.init_db(force=True)
     print("[ok] init_db (migration runner) succeeded")
+
+    # Migration idempotency — re-running must be a no-op. Catches a regression
+    # where any migration entry forgets the IF NOT EXISTS / column-existence
+    # guard and would re-attempt the ALTER on the second run.
+    db.init_db(force=True)
+    print("[ok] init_db second run (idempotency)")
 
     mid = db.create_manager(
         username="smoketest",
@@ -164,6 +183,48 @@ def main() -> int:
               file=sys.stderr)
         return 1
     print("[ok] cross-tenant: manager B sees own rows, no manager-A rows")
+
+    # -- Recurring events end-to-end (PR 4) --------------------------------
+    # Materializes a monthly-on-31st series that exercises _add_months_anchored
+    # clamp behavior on real PG, then forces a synthetic mid-materialization
+    # failure to assert _materialize_in_txn doesn't leave an orphan parent.
+    pid_monthly = db.create_recurring_events(
+        title="Month-end review (smoke)",
+        event_type="quarterly_review",
+        start_date=date(2026, 1, 31),
+        scheduled_time="14:00",
+        rule="monthly",
+        manager_id=mid,
+    )
+    print(f"[ok] create_recurring_events (monthly-on-31st) → parent #{pid_monthly}")
+
+    # Forced-failure no-orphan assertion: NULL title violates NOT NULL on
+    # the child INSERT. _materialize_in_txn must roll back the parent.
+    parent_count_before = _count_events_for(db, mid)
+    parent_sql = ("INSERT INTO events (title, event_type, scheduled_date, "
+                  "scheduled_time, manager_id) VALUES (?, ?, ?, ?, ?)")
+    parent_params = ("Should not commit", "one_on_one", "2026-12-31", "10:00", mid)
+    children_sql = ("INSERT INTO events (title, event_type, scheduled_date, "
+                    "scheduled_time, manager_id, parent_event_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?)")
+    bad_children = [(None, "one_on_one", "2026-12-31", "10:00", mid)]
+    with db._connect() as conn:
+        try:
+            db._materialize_in_txn(conn, parent_sql, parent_params,
+                                   children_sql, bad_children)
+        except Exception:
+            pass
+        else:
+            print("error: forced-failure materialize did not raise",
+                  file=sys.stderr)
+            return 1
+    parent_count_after = _count_events_for(db, mid)
+    if parent_count_after != parent_count_before:
+        print(f"error: orphan parent landed — count went from "
+              f"{parent_count_before} to {parent_count_after}",
+              file=sys.stderr)
+        return 1
+    print("[ok] forced-failure no-orphan: parent rolled back correctly")
 
     db.revoke_session(token)
     after_revoke = db.validate_session(token, user_agent_hash="ua-hash")
