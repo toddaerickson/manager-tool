@@ -897,18 +897,12 @@ def page_team_roster():
             # Stale id (member deleted, or wrong tenant) — clear and re-render.
             st.session_state.pop("team_member_id", None)
             st.rerun()
-        bt_col, st_col = st.columns([1, 1])
-        with bt_col:
-            if st.button("←  Back to team", key="back_to_team"):
-                st.session_state.pop("team_member_id", None)
-                st.rerun()
-        with st_col:
-            if st.button(f"Start 1:1 with {member['name']}",
-                         key="start_1on1", type="primary"):
-                st.session_state["one_on_one_member_id"] = detail_id
-                st.session_state.pop("one_on_one_session_id", None)
-                st.session_state["nav_page"] = "1:1 Meeting"
-                st.rerun()
+        if st.button("←  Back to team", key="back_to_team"):
+            st.session_state.pop("team_member_id", None)
+            st.rerun()
+        # "Start 1:1" lives on the 1:1 Notes page where the selectbox
+        # already names the direct — that's one click from the sidebar
+        # vs three clicks (Team → select → detail → button) here.
         _render_member_timeline(detail_id, member["name"])
         return
 
@@ -1999,6 +1993,17 @@ def page_running_notes():
 
     selected = st.selectbox("Team member", names, key="rn_member")
     member_id = mapping[selected]
+
+    # -- Start 1:1 — primary entry point. Surfaced here (1:1 Notes is the
+    # natural home) rather than buried under Team → select member → detail
+    # → Start 1:1 button. The selectbox above already chose the member.
+    if st.button(f"Start 1:1 with {selected}",
+                 key="rn_start_1on1", type="primary",
+                 use_container_width=True):
+        st.session_state["one_on_one_member_id"] = member_id
+        st.session_state.pop("one_on_one_session_id", None)
+        st.session_state["nav_page"] = "1:1 Meeting"
+        st.rerun()
 
     # -- Add note --
     with st.form("add_running_note"):
