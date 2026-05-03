@@ -8,6 +8,8 @@ urlpatterns = [
     path("", core_views.hello, name="hello"),
     path("dashboard/", core_views.dashboard, name="dashboard"),
     path("dashboard/panels/overview/", core_views.dashboard_overview, name="dashboard-overview"),
+    path("team/", core_views.team_members_list, name="team"),
+    path("team/add/", core_views.team_members_add, name="team-add"),
     path("sentry-debug/", core_views.sentry_debug, name="sentry-debug"),
     # Force Google-only by short-circuiting allauth's default form. The
     # email/password page exists in allauth but we never want users to

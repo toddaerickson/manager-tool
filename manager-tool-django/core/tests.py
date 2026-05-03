@@ -241,7 +241,149 @@ class TestDashboardView:
         assert ">2<" in body, body
         assert "id=" + str(m.id) in body
 
-    def test_logout_invalidates_session(self, client):
+    def test_logout_invalidates_session_with_setup(self, client):
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        self._login_as(client, "todd@example.com")
+        # Authenticated dashboard works
+        assert client.get("/dashboard/").status_code == 200
+        # Force-logout via the test client
+        client.logout()
+        # Now blocked
+        resp = client.get("/dashboard/")
+        assert resp.status_code == 302
+        assert "/accounts/google/login/" in resp["Location"]
+
+
+# ============================================================
+# Phase 5.1: Team Members CRUD
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestTeamMembersList:
+    """Phase 5.1: GET /team/ — per-tenant list, anon redirect, no-manager 403."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="testpw",
+        )
+        client.force_login(u)
+        return u
+
+    def test_anonymous_redirects_to_google_login(self, client):
+        resp = client.get("/team/")
+        assert resp.status_code == 302
+        assert "/accounts/google/login/" in resp["Location"]
+
+    def test_logged_in_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger@example.com")
+        assert client.get("/team/").status_code == 403
+
+    def test_lists_only_own_members(self, client):
+        m1 = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        m2 = Manager.objects.create(
+            username="other", display_name="Other",
+            password_hash="x", email="other@example.com",
+        )
+        TeamMember.objects.create(name="Todd report", manager_id=m1.id)
+        TeamMember.objects.create(name="Other report", manager_id=m2.id)
+
+        self._login_as(client, "todd@example.com")
+        resp = client.get("/team/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Todd report" in body
+        assert "Other report" not in body, "cross-tenant leak"
+
+
+@pytest.mark.django_db
+class TestTeamMembersAdd:
+    """Phase 5.1: POST /team/add/ — HTMX endpoint."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="testpw",
+        )
+        client.force_login(u)
+        return u
+
+    def test_get_not_allowed(self, client):
+        Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        self._login_as(client, "todd@example.com")
+        assert client.get("/team/add/").status_code == 405
+
+    def test_create_persists_with_correct_manager_id(self, client):
+        m = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        self._login_as(client, "todd@example.com")
+        resp = client.post("/team/add/", {
+            "name": "New Hire",
+            "email": "new@example.com",
+            "role": "PM",
+            "start_date": "2026-05-10",
+            "notes": "from PR test",
+        })
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "New Hire" in body  # appears in returned list partial
+
+        # Verify DB: row created, manager_id set, start_date is ISO string
+        members = TeamMember.objects.for_manager(m.id)
+        assert members.count() == 1
+        nh = members.first()
+        assert nh.name == "New Hire"
+        assert nh.start_date == "2026-05-10"  # TextField, not DateField
+
+    def test_validation_error_returns_form_with_422(self, client):
+        Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        self._login_as(client, "todd@example.com")
+        # Missing required name
+        resp = client.post("/team/add/", {"email": "x@example.com"})
+        assert resp.status_code == 422
+        body = resp.content.decode()
+        # Form re-rendered with error
+        assert "form" in body.lower()
+        assert TeamMember.objects.count() == 0
+
+    def test_other_managers_data_unaffected(self, client):
+        m1 = Manager.objects.create(
+            username="todd", display_name="Todd",
+            password_hash="x", email="todd@example.com",
+        )
+        m2 = Manager.objects.create(
+            username="other", display_name="Other",
+            password_hash="x", email="other@example.com",
+        )
+        TeamMember.objects.create(name="Other existing", manager_id=m2.id)
+
+        self._login_as(client, "todd@example.com")
+        client.post("/team/add/", {"name": "Todd new"})
+
+        assert TeamMember.objects.for_manager(m1.id).count() == 1
+        assert TeamMember.objects.for_manager(m2.id).count() == 1
+        assert TeamMember.objects.for_manager(m1.id).first().name == "Todd new"
+        assert TeamMember.objects.for_manager(m2.id).first().name == "Other existing"
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger@example.com")
+        resp = client.post("/team/add/", {"name": "X"})
+        assert resp.status_code == 403
         m = Manager.objects.create(
             username="todd", display_name="Todd",
             password_hash="x", email="todd@example.com",

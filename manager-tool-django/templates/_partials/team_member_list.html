@@ -1,0 +1,26 @@
+{% if members %}
+<table class="min-w-full bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+  <thead class="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+    <tr>
+      <th class="px-4 py-3">Name</th>
+      <th class="px-4 py-3">Email</th>
+      <th class="px-4 py-3">Role</th>
+      <th class="px-4 py-3">Start date</th>
+    </tr>
+  </thead>
+  <tbody class="divide-y divide-slate-100">
+    {% for m in members %}
+    <tr>
+      <td class="px-4 py-3 font-medium">{{ m.name }}</td>
+      <td class="px-4 py-3 text-slate-600">{{ m.email|default:"—" }}</td>
+      <td class="px-4 py-3 text-slate-600">{{ m.role|default:"—" }}</td>
+      <td class="px-4 py-3 text-slate-600 tabular-nums">{{ m.start_date|default:"—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
+  No team members yet — add one above.
+</div>
+{% endif %}
