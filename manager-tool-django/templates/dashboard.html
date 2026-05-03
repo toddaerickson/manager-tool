@@ -9,9 +9,11 @@
     <p class="text-sm text-slate-500 mt-1">Signed in as {{ request.user.email }}</p>
   </header>
 
-  {# HTMX-driven lazy panel — mirrors the Streamlit _dashboard_bundle
-     pattern but loads via a separate request so the shell renders fast
-     and the panel can be cached/refreshed independently. #}
+  {% comment %}
+  HTMX-driven lazy panel — mirrors the Streamlit _dashboard_bundle
+  pattern but loads via a separate request so the shell renders fast
+  and the panel can be cached/refreshed independently.
+  {% endcomment %}
   <div id="overview-panel"
        hx-get="{% url 'dashboard-overview' %}"
        hx-trigger="load"

@@ -20,8 +20,10 @@
       </div>
 
       <nav class="flex-1 px-2 py-4 space-y-6 text-sm">
-        {# Sidebar IA mirrors CLAUDE.md. Only Dashboard is implemented in
-           Phase 4; others are visible placeholders for Phase 5 builds. #}
+        {% comment %}
+        Sidebar IA mirrors CLAUDE.md. Only Dashboard is implemented in
+        Phase 4; others are visible placeholders for Phase 5 builds.
+        {% endcomment %}
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Manager</div>
           <a href="{% url 'dashboard' %}"
