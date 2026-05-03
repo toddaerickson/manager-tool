@@ -1125,16 +1125,14 @@ class TestHotPathIndexes:
                     f"{ix_name}: expected {expected_cols}, got {actual}"
 
 
-class TestProductionFallbackGate:
-    """Regression for AUDIT H5 / P2.5 — SQLite fallback is disabled when
-    MANAGER_TOOL_ENV=prod; outside production the fallback behaves as before."""
+class TestPgOutageBehaviour:
+    """A configured-but-unreachable Postgres always raises
+    DatabaseUnavailableError — the SQLite fallback is disabled whenever
+    DATABASE_URL is set, regardless of MANAGER_TOOL_ENV. Silent fallback
+    would orphan writes when the real database returned."""
 
     def _force_pg_failure(self, monkeypatch):
-        """Pretend Postgres is configured and raises on connect.
-
-        We deliberately do NOT monkeypatch _detect_pg — the real implementation
-        consults _USE_PG, which the fallback path flips to False, so the next
-        get_connection() call naturally takes the SQLite branch."""
+        """Pretend Postgres is configured and raises on connect."""
         monkeypatch.setattr(db, "_USE_PG", True)
         monkeypatch.setattr(db, "_get_pg_url", lambda: "postgres://x/y")
 
@@ -1160,8 +1158,6 @@ class TestProductionFallbackGate:
         assert db._is_production() is False
 
     def test_prod_fails_loud_on_pg_outage(self, monkeypatch):
-        """In prod, a Postgres outage must raise — never fall through to
-        SQLite (which would silently route writes to ephemeral storage)."""
         monkeypatch.setenv("MANAGER_TOOL_ENV", "prod")
         self._force_pg_failure(monkeypatch)
         try:
@@ -1169,26 +1165,30 @@ class TestProductionFallbackGate:
         except db.DatabaseUnavailableError:
             return
         raise AssertionError(
-            "get_connection must raise DatabaseUnavailableError in prod "
-            "when Postgres is unreachable; SQLite fallback is disallowed"
+            "get_connection must raise DatabaseUnavailableError when "
+            "Postgres is unreachable; SQLite fallback is disallowed"
         )
 
-    def test_non_prod_falls_back_to_sqlite(self, monkeypatch):
-        """Outside prod, the fallback still kicks in so dev laptops and CI
-        keep working when Postgres isn't configured."""
+    def test_non_prod_also_fails_loud_on_pg_outage(self, monkeypatch):
+        """The fallback used to kick in when MANAGER_TOOL_ENV != prod, but
+        that produced split-brain data (writes during the outage landed in
+        an ephemeral SQLite file and were orphaned when PG returned). Now
+        the rule is simpler: DATABASE_URL set + PG unreachable always raises."""
         monkeypatch.delenv("MANAGER_TOOL_ENV", raising=False)
         self._force_pg_failure(monkeypatch)
-        # Should NOT raise — should fall through to SQLite.
-        conn = db.get_connection()
         try:
-            row = conn.execute("SELECT 1").fetchone()
-            assert row is not None
-        finally:
-            conn.close()
+            db.get_connection()
+        except db.DatabaseUnavailableError:
+            return
+        raise AssertionError(
+            "get_connection must raise even outside prod — silent SQLite "
+            "fallback splits writes across two backends"
+        )
 
     def test_pg_failed_flags_set_after_outage(self, monkeypatch):
-        """The status flags consumed by the UI are set in both prod and dev
-        outage paths — operators see the failure either way."""
+        """Status flags are set before the exception unwinds, so any
+        diagnostic surface that reads pg_connection_failed() still gets
+        the redacted error message."""
         monkeypatch.delenv("MANAGER_TOOL_ENV", raising=False)
         self._force_pg_failure(monkeypatch)
         try:

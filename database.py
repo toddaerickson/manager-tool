@@ -192,23 +192,32 @@ class DatabaseUnavailableError(RuntimeError):
 def _is_production() -> bool:
     """A deploy is production when MANAGER_TOOL_ENV is set to 'prod'.
 
-    Anywhere else (dev laptops, CI, ephemeral preview deploys) we keep the
-    SQLite fallback so the app stays runnable when Postgres isn't configured.
-    """
+    Used to enforce stricter handling of secrets (e.g. CONFIG_ENCRYPTION_KEY
+    must be supplied via env, not auto-generated to a key file). The choice
+    of database backend itself is no longer gated on this — see
+    get_connection()."""
     return os.environ.get("MANAGER_TOOL_ENV", "").strip().lower() == "prod"
 
 
 def get_connection():
-    """Get a database connection (PostgreSQL direct or SQLite fallback).
+    """Get a database connection.
+
+    Backend selection is determined entirely by DATABASE_URL:
+      - DATABASE_URL set    → PostgreSQL via psycopg2; failure raises
+                              DatabaseUnavailableError (no SQLite fallback).
+      - DATABASE_URL unset  → local SQLite at DB_PATH (dev / tests / CI).
+
+    Earlier versions silently fell back to SQLite when DATABASE_URL was set
+    but Postgres was unreachable, gated on MANAGER_TOOL_ENV=prod. That
+    behaviour is removed: a configured-but-unreachable Postgres always
+    fails loud, regardless of environment. Silent fallback split data
+    between the SQLite file and the real database — writes during the
+    outage were orphaned the moment Postgres returned, and the SQLite
+    file was queried as if it held authoritative state.
 
     Uses direct psycopg2 connections rather than a pool because Neon's
-    serverless proxy handles connection pooling and scales compute to zero
-    after idle periods — app-side pools would hold stale connections.
-
-    In production (MANAGER_TOOL_ENV=prod), a PostgreSQL connection failure
-    raises DatabaseUnavailableError. Outside production we fall back to
-    SQLite so dev laptops and CI don't hard-fail when Postgres is absent.
-    """
+    serverless proxy handles pooling and scales compute to zero after idle
+    periods — app-side pools would hold stale connections."""
     global _PG_FAILED, _PG_ERROR
     if _detect_pg():
         try:
@@ -224,27 +233,16 @@ def get_connection():
             # Scrub any user:password@ embedded in psycopg2's error message
             # before we store it for UI display (AUDIT M8).
             _PG_ERROR = _redact_db_credentials(str(e))
-            if _is_production():
-                # Fail loud: routing writes to SQLite in prod silently
-                # corrupts the deployment (subsequent restarts revert to
-                # Postgres and the SQLite writes are orphaned).
-                logger.exception(
-                    "PostgreSQL connection failed in production "
-                    "(MANAGER_TOOL_ENV=prod); refusing SQLite fallback")
-                raise DatabaseUnavailableError(
-                    "PostgreSQL is unreachable and the SQLite fallback is "
-                    "disabled in production. Investigate the database "
-                    "connectivity issue before continuing. "
-                    f"Original error: {_PG_ERROR}"
-                ) from e
-            logger.warning(
-                "PostgreSQL connection failed, falling back to SQLite "
-                "(non-production): %s", e)
-            global _USE_PG
-            _USE_PG = False
-            # Initialize SQLite tables since init_db() may have been
-            # skipped when PostgreSQL was expected to be available
-            init_db()
+            logger.exception(
+                "PostgreSQL connection failed; DATABASE_URL is set so "
+                "refusing to silently fall back to SQLite")
+            raise DatabaseUnavailableError(
+                "PostgreSQL is unreachable. The SQLite fallback is "
+                "intentionally disabled whenever DATABASE_URL is set — "
+                "silently switching backends would orphan any writes "
+                "made during the outage. Investigate connectivity before "
+                f"continuing. Original error: {_PG_ERROR}"
+            ) from e
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
