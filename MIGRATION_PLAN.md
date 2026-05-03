@@ -3,7 +3,8 @@
 **Source app:** `manager-tool` (current Streamlit + Python on Neon Postgres, audit-closed, 220 tests)
 **Target app:** Django 5 + HTMX + Tailwind, hosted on Render, Postgres on Neon (kept)
 **Audience:** Solo novice programmer + Claude Code as pair, working in VS Code WSL Ubuntu
-**Estimated effort:** 3-4 weeks calendar time, ~15-20 days of focused work
+**Estimated effort:** 5-7 weeks calendar time, ~25-35 days of focused work (revised from initial 3-4 week estimate after senior-PM review — novice + first-encounter Django/HTMX/Render/allauth gotchas eat 2-4 hours each)
+**Phase gates:** see `PHASE_GATES.md` for hard transition criteria. Definition-of-done in this file is the *narrative*; gates are the *checklist* that must be true before advancing.
 
 ---
 
@@ -90,7 +91,8 @@ pip install \
   "cryptography>=42" \
   "bcrypt>=4" \
   "gunicorn>=22" \
-  "whitenoise>=6"
+  "whitenoise>=6" \
+  "sentry-sdk>=2.0"
 
 # Dev tools
 pip install pytest pytest-django pytest-mock freezegun ruff
@@ -103,9 +105,13 @@ python manage.py startapp coaching  # ports coaching.py logic
 ```
 
 ### Key files to create
-- `.env` (gitignored) — `DATABASE_URL=postgres://...neon-dev-branch.../db`, `CONFIG_ENCRYPTION_KEY=...`, `DJANGO_SECRET_KEY=...`
-- `mt/settings.py` — pull from `.env` via `django-environ`; use `psycopg` driver.
+- `.env` (gitignored) — `DATABASE_URL=postgres://...neon-dev-branch.../db`, `CONFIG_ENCRYPTION_KEY=...`, `DJANGO_SECRET_KEY=...`, `SENTRY_DSN=...`
+- `.env.template` (committed, no secrets) — every var in `.env` listed with empty values, so deploy-time env-var inventory has a source of truth.
+- `mt/settings.py` — pull from `.env` via `django-environ`; use `psycopg` driver; `sentry_sdk.init()` at module load with `DJANGO_INTEGRATION` and traces sampled at 0.1.
 - `.gitignore` — add `.venv/`, `.env`, `__pycache__/`, `db.sqlite3`.
+
+### Observability (wire NOW, not later)
+Sentry goes in at Phase 1 because every later phase generates errors that you want to see in one place — not in 3 different terminal scrollbacks. The free tier is sufficient for this app's volume. Phase gate requires a deliberate test exception to appear in the Sentry dashboard before advancing.
 
 ### What Claude Code is best at here
 > "Generate a Django 5 settings.py that reads DATABASE_URL from .env, configures django-allauth for Google OAuth, registers django-htmx and django-tailwind, and sets the security headers (HSTS, X-Frame-Options, etc.) from `.streamlit/config.toml`'s comment block."
@@ -121,10 +127,25 @@ python manage.py startapp coaching  # ports coaching.py logic
 
 ---
 
-## Phase 2 — Schema + models (2 days)
+## Phase 2 — Schema + models (2-3 days)
 
 ### Goal
-Django models that exactly match the existing Neon schema, with `python manage.py migrate --fake-initial` accepting reality.
+Django models that exactly match the existing Neon schema, with `python manage.py migrate --fake-initial` accepting reality AND `python manage.py makemigrations --dry-run` reporting "No changes detected" — the second check is what catches the silent column-drift `--fake-initial` ignores.
+
+### Pre-decision: composite PK on `config(manager_id, key)`
+
+**Resolution: drop the composite PK, add an autoincrement `id` PK, keep `unique_together = ('manager_id', 'key')`.** Use Django `update_or_create(manager_id=X, key=Y, defaults={'value': Z})` — semantically identical to today's `INSERT ... ON CONFLICT(manager_id, key) DO UPDATE` ([database.py:1665](database.py#L1665)).
+
+Why this option (vs `django-composite-pk` library): only three callers (`set_config` / `get_config` / `get_all_config`), no FKs reference `config`, and `update_or_create` is the Django-idiomatic replacement. Adding a library for one table is overhead. The one-time SQL migration to add `id` runs against the Neon dev branch *before* `inspectdb`:
+
+```sql
+ALTER TABLE config ADD COLUMN id BIGSERIAL;
+ALTER TABLE config DROP CONSTRAINT config_pkey;
+ALTER TABLE config ADD PRIMARY KEY (id);
+CREATE UNIQUE INDEX ux_config_manager_key ON config (manager_id, key);
+```
+
+After this runs on the dev branch, `inspectdb` will pick up the new shape cleanly. Production keeps the composite PK until the cutover migration applies the same `ALTER` against prod (Phase 7).
 
 ### Approach
 Use `inspectdb` to generate models from the live schema, then hand-clean them.
@@ -157,17 +178,35 @@ class TeamMember(models.Model):
 
 Then every view does `TeamMember.objects.for_manager(request.user.id)` and never bare `.all()`. Audit-closed C1 stays closed.
 
+### Date-shape gotcha (read this before writing any model)
+Streamlit's `_normalize_row()` ([database.py](database.py)) converts psycopg2's `datetime`/`date` returns to ISO strings so callers see uniform `'YYYY-MM-DD'` text. **Django ORM does not do this** — it returns `datetime.date` and `datetime.datetime` objects. Every template, helper, and JSON serializer that assumes string dates will break silently (string compares against `date` objects raise `TypeError` in Python 3, but `==` returns False without raising).
+
+Two options, pick one in Phase 2 and stick with it:
+1. **Let Django return native objects, fix every consumer** — preferred for new Django code; `{{ obj.date|date:"Y-m-d" }}` in templates handles it.
+2. **Add a project-wide model mixin or `to_dict()` that ISO-stringifies on the way out** — preserves the existing data shape; less Django-idiomatic but smaller blast radius if you're porting helpers verbatim.
+
+Whichever you pick, write a one-paragraph decision note in the new Django app's README and link it from any service module that touches dates.
+
+### Django PG smoke job (the SQLite suite is not the safety net)
+`tests/conftest.py` pins `_USE_PG=False` (per CLAUDE.md). The Streamlit codebase has shipped four PG-only bugs that pytest missed; `scripts/smoke_pg.py` is what catches them. Django needs the equivalent.
+
+Create `manager-tool-django/scripts/smoke_pg_django.py` and a CI job that runs it against a `postgres:16` service container on every PR. Minimum coverage: bootstrap the schema, exercise allauth login + session creation, run `for_manager()` filters across three tenant tables, run `update_or_create` against `config`, and assert cross-tenant isolation bidirectionally (manager A → 0 of B's rows AND vice versa). **No PR in Phase 5+ merges without this job green.**
+
 ### Definition of done
 - `python manage.py migrate --fake-initial` succeeds.
-- A `python manage.py shell` query like `TeamMember.objects.for_manager(1).count()` returns the same count as the old Streamlit app shows.
+- `python manage.py makemigrations --dry-run` reports "No changes detected" (silent column-drift check).
+- A `python manage.py shell` query like `TeamMember.objects.for_manager(1).count()` returns the same count as the old Streamlit app shows. Verify on three different tenant tables, not one.
 - `pytest` passes for at least one model-level test (port `tests/test_database.py::TestCrossManagerScoping` to Django ORM).
+- `smoke_pg_django.py` runs green locally and in CI.
+- Date-shape decision (option 1 or 2 above) is documented in the Django app's README.
 
 ### Where Claude Code shines
 > "Convert `schema_postgres.sql` and this `inspectdb` output into clean Django models grouped by app, with TenantManager on every tenant-scoped table, and a Meta.indexes block matching the ix_* indexes from P4.1."
 
 ### Common pitfalls
-- Composite PK on `config` (manager_id, key) — Django doesn't love composite PKs. Use `unique_together` + auto `id` PK, or `django-composite-pk`.
+- Composite PK on `config` (manager_id, key) — **resolved above** via `id` autoincrement + `unique_together` + the one-shot `ALTER TABLE`. Don't re-litigate.
 - `schema_migrations` table — Django manages its own migrations. Leave the existing rows in place; ignore the table from Django (`Meta.managed = False`).
+- `inspectdb` will not preserve partial indexes or expression indexes from M5. Diff the generated `Meta.indexes` against `schema_postgres.sql` by hand.
 
 ---
 
@@ -240,6 +279,8 @@ Each page = one branch + one PR. Same audit-then-merge cadence the audit work us
 - Use HTMX for partial swaps (e.g., "Add team member" form submits and swaps the list without a full reload).
 - Port any Python logic from `web_app.py` into a service module (don't put logic in the view).
 - Port any tests from `tests/test_*.py` into Django tests (`pytest-django`).
+- **Date-shape check:** any helper ported from `web_app.py` that does string ops on a date field (BETWEEN, lex compare, `.startswith("2026-")`, etc.) is a landmine — Django returns `date` objects, not strings. Per Phase 2 decision, either let the ORM return natives and fix the helper, or run it through the ISO-stringify shim. Grep your ported code for `BETWEEN`, `startswith(`, and `[:10]` on date columns before opening the PR.
+- **Smoke check:** the Django PG smoke job (`scripts/smoke_pg_django.py`) gets a new assertion for any aggregator-style helper added in this PR. Mirrors the Streamlit cadence — every new aggregator gets cross-tenant coverage.
 
 ### Where Claude Code shines
 > "Port `web_app.py:page_team_members` to a Django ListView + HTMX-driven create form. Match the existing Streamlit UX (toast on success, member detail link). Use my `TenantManager.for_manager` pattern."
@@ -276,10 +317,44 @@ Production traffic flips from Streamlit to Django.
 - [ ] Django app is feature-complete vs Streamlit (check page-by-page).
 - [ ] Render service is on a paid plan (no cold starts).
 - [ ] Custom domain configured on Render (if applicable).
-- [ ] All test cases pass: `pytest manager-tool-django/`.
+- [ ] All test cases pass: `pytest manager-tool-django/` AND `smoke_pg_django.py` green in CI.
 - [ ] Run a final smoke through every page in prod.
-- [ ] Migrate the Neon dev branch's data drift back to main, OR point Django at the production Neon main branch and re-run `migrate --fake-initial`. Pick one approach and commit; the safer one is "just point Django at prod Neon" since all the schema changes match what Streamlit's migration runner already applied.
-- [ ] Take a Postgres backup (`scripts/backup.sh`) immediately before cutover.
+- [ ] **Cutover schema strategy locked in Phase 2** (see Phase 2 composite-PK section): point Django at production Neon main, run the one-shot `ALTER TABLE config` migration, re-run `migrate --fake-initial`. The dev-branch-drift-back path was rejected as higher-risk.
+- [ ] **Backup taken AND test-restored to a throwaway Neon branch within last 24h.** A backup never restored is a wish. Procedure: `scripts/backup.sh` → create temp Neon branch from prod → `psql` the dump in → run a row-count diff against prod. Document the timing (5 minutes? 30?) so cutover-window planning is real.
+- [ ] **Data-validation diff script reports zero discrepancies** (see below).
+- [ ] **Rollback rehearsed against dev branch** (DNS-flip simulated — see below).
+
+### Data-validation diff script (`scripts/cutover_diff.py`)
+Before flipping DNS, prove Django reads match Streamlit reads against the same Neon database. The script does this for every tenant-scoped table:
+
+```python
+# Pseudocode — implement in scripts/cutover_diff.py
+for manager_id in active_manager_ids:
+    for table in TENANT_TABLES:  # team_members, events, journal_entries, ...
+        streamlit_count = streamlit_db.count(table, manager_id)
+        django_count = DjangoModel.objects.for_manager(manager_id).count()
+        assert streamlit_count == django_count, f"DRIFT: {table} mgr={manager_id}"
+
+    # Spot-check a few rows for shape parity (config decryption, date round-trip)
+    for key in SAMPLE_CONFIG_KEYS:
+        assert streamlit_get_config(key, manager_id) == django_get_config(key, manager_id)
+```
+
+Script must exit non-zero on any drift. Run it twice: once against dev branch (proves the script works), then against prod immediately before cutover. Zero discrepancies on prod is the go/no-go signal.
+
+### Rollback rehearsal
+"Point DNS back to Streamlit" is not a rollback plan until you've done it once. Procedure:
+1. On the Neon dev branch, deploy both Streamlit and Django pointing at it.
+2. Switch DNS (or Render custom domain) to Django.
+3. Make a write through Django (add a team member).
+4. Switch DNS back to Streamlit.
+5. Verify Streamlit can read the row Django wrote AND can write a new row of its own.
+6. If step 5 fails, you have a column-shape divergence Django introduced — fix before real cutover.
+
+Rehearse this once in Phase 7 prep, not on cutover day.
+
+### Backup taken (mechanical, separate from rehearsal above)
+- [ ] Take a Postgres backup (`scripts/backup.sh`) immediately before cutover. Confirm the file exists and `pg_restore --list` parses it before proceeding.
 
 ### Cutover sequence
 1. Put Streamlit in read-only / maintenance mode (or just stop the process — there's no real-time concurrency).
