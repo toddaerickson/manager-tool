@@ -168,6 +168,47 @@ def _dashboard_bundle(manager_id: int) -> dict:
     }
 
 
+_SELF_DELEG_PROMPT_THRESHOLD = 5
+
+
+def _iso_week_dismiss_key(today=None) -> tuple[str, str]:
+    """Return (week_start_iso, dismiss_config_key) for the current ISO week.
+    The config key is keyed by ISO year + week so it auto-clears when the
+    next week starts — no cleanup required."""
+    today = today or date.today()
+    iso_year, iso_week, iso_weekday = today.isocalendar()
+    week_start = today - timedelta(days=iso_weekday - 1)
+    dismiss_key = f"self_deleg_prompt_dismissed_{iso_year}_{iso_week:02d}"
+    return week_start.isoformat(), dismiss_key
+
+
+def _render_weekly_self_delegation_prompt(manager_id: int) -> None:
+    """Once-per-ISO-week soft prompt: nudge the manager to consider whether
+    any self-assigned to-do this week could have been delegated. Per the
+    adversarial agent: this is the surviving mitigation after the verb-shape
+    prompt and gameable ratio tile were cut. NOT a per-create nag —
+    frequency-bounded, dismissable, non-judgmental.
+
+    Threshold (_SELF_DELEG_PROMPT_THRESHOLD = 5) is chosen to avoid firing
+    for managers who genuinely keep little personal work."""
+    week_start_iso, dismiss_key = _iso_week_dismiss_key()
+    if db.get_config(dismiss_key, manager_id=manager_id) == "1":
+        return
+    count = db.count_self_assigned_action_items_since(
+        manager_id=manager_id, since_iso=week_start_iso)
+    if count < _SELF_DELEG_PROMPT_THRESHOLD:
+        return
+    cols = st.columns([6, 1])
+    with cols[0]:
+        st.info(
+            f"\U0001F4AC You created {count} self-assigned to-dos this week. "
+            "Anything a direct could own — even imperfectly?")
+    with cols[1]:
+        if st.button("Dismiss", key="self_deleg_dismiss"):
+            db.set_config(dismiss_key, "1", manager_id=manager_id)
+            st.rerun()
+
+
 def _current_user_agent_hash() -> str | None:
     """Best-effort User-Agent hash for binding a session token to its origin.
     Returns None if the User-Agent is not exposed to Streamlit."""
@@ -462,6 +503,15 @@ def page_dashboard():
                 if st.button("Got it", key="coach_dismiss", use_container_width=True):
                     db.dismiss_todays_suggestion(_mid())
                     st.rerun()
+
+    # -- Once-per-ISO-week self-delegation prompt --
+    # Soft mirror, NOT a per-create nag. Adversarial agent specifically
+    # killed the verb-shape prompt and the gameable ratio tile; this is
+    # the surviving mitigation. Frequency-bounded (one per ISO week,
+    # dismissable). Backed by the manager-scoped config table so dismiss
+    # state auto-clears when the next ISO week starts.
+    if _mid():
+        _render_weekly_self_delegation_prompt(_mid())
 
     # -- Daily Wisdom (variable reward — different every day) --
     wisdom = templates.get_daily_wisdom()
@@ -1063,7 +1113,11 @@ def _render_member_timeline(member_id, member_name):
 # -- Tracking ---------------------------------------------------------------
 
 def page_action_items():
-    st.title("Action Items")
+    st.title("To Do")
+    st.caption(
+        "Your own task list — work you're holding. "
+        "(For work you're entrusting to a direct, see Delegations.)"
+    )
 
     # -- Inline Add form --
     with st.expander("Add Action Item"):
@@ -1137,6 +1191,11 @@ def page_action_items():
 
 def page_record_feedback():
     st.title("Record Feedback (SBI Framework)")
+    st.caption(
+        "Structured feedback (SBI) — what you've delivered or are about "
+        "to deliver to a direct. (For raw observations or things to "
+        "remember, see 1:1 Notes.)"
+    )
 
     names, name_map = member_options()
     if not names:
@@ -1879,12 +1938,54 @@ def page_my_profile():
 # Delegation Tracker
 # ---------------------------------------------------------------------------
 
+_AUTONOMY_OPTIONS = [
+    ("directed",
+     "**Directed** — you specify the approach and review steps."),
+    ("guided",
+     "**Guided** — they propose the approach; you review before execution."),
+    ("autonomous",
+     "**Autonomous** — they own approach and execution; you see results."),
+]
+_AUTONOMY_KEYS = [k for k, _ in _AUTONOMY_OPTIONS]
+
+
+_DEVELOPING_PREFIX = "Developing: "
+
+
+def _extract_developing(notes: str | None) -> tuple[str, str]:
+    """Split a `notes` value into (developing_goal, remaining_notes).
+    Convention: when present, the developing line is the FIRST line and
+    starts with `Developing: `. Stored in `delegations.notes` for v1
+    (no schema change); a future cleanup PR can split into a column."""
+    if not notes:
+        return "", ""
+    first, _, rest = (notes or "").partition("\n")
+    if first.startswith(_DEVELOPING_PREFIX):
+        return first[len(_DEVELOPING_PREFIX):].strip(), rest.strip()
+    return "", notes
+
+
+def _combine_developing(developing: str, notes: str) -> str | None:
+    """Inverse of _extract_developing. Returns the combined notes string,
+    or None when both are empty."""
+    dev = (developing or "").strip()
+    rest = (notes or "").strip()
+    if not dev and not rest:
+        return None
+    if not dev:
+        return rest
+    if not rest:
+        return f"{_DEVELOPING_PREFIX}{dev}"
+    return f"{_DEVELOPING_PREFIX}{dev}\n{rest}"
+
+
 def page_delegations():
     st.title("Delegation Tracker")
     show_toast()
     st.caption(
-        '*"Delegate results, not methods. Prescribing methods removes '
-        'accountability."* — Dellanna'
+        "Work you've entrusted to a direct. They own the outcome; "
+        "you set the autonomy level. "
+        '*"Delegate results, not methods."* — Dellanna'
     )
 
     names, name_map = member_options()
@@ -1901,15 +2002,18 @@ def page_delegations():
         for d in active:
             is_overdue = d in overdue
             icon = "\U0001F534" if is_overdue else "\U0001F7E2"
+            developing, plain_notes = _extract_developing(d.get("notes"))
             label = (f"{icon} {d['task'][:60]} — "
                      f"{d.get('member_name', 'Unassigned')} "
                      f"[{d['autonomy_level']}]")
             with st.expander(label):
                 st.markdown(f"**Expected Outcome:** {d.get('outcome_expected', 'N/A')}")
                 st.markdown(f"**Autonomy Level:** {d['autonomy_level'].title()} "
-                           f"&nbsp; **Check-in:** {d.get('check_in_date', 'Not set')}")
-                if d.get("notes"):
-                    st.markdown(f"**Notes:** {d['notes']}")
+                           f"&nbsp; **Next check-in:** {d.get('check_in_date', 'Not set')}")
+                if developing:
+                    st.markdown(f"**Developing:** {developing}")
+                if plain_notes:
+                    st.markdown(f"**Notes:** {plain_notes}")
                 dc1, dc2, dc3 = st.columns(3)
                 with dc1:
                     if st.button("Complete", key=f"del_done_{d['id']}"):
@@ -1919,7 +2023,19 @@ def page_delegations():
                 with dc2:
                     if st.button("Stalled", key=f"del_stall_{d['id']}"):
                         db.update_delegation(d["id"], manager_id=_mid(), status="stalled")
-                        set_toast("warning", f"Delegation marked as stalled.")
+                        # Wisdom-quote conditional surfacing — stalled trigger.
+                        # Per leadership agent: redirect from "they dropped
+                        # the ball" to "I miscalibrated the rope."
+                        wisdoms = templates.match_wisdom_to_text(
+                            "stalled delegation maturity mismatch motivation",
+                            count=1)
+                        if wisdoms:
+                            set_toast("warning",
+                                f"Marked stalled. \U0001F4A1 "
+                                f"“{wisdoms[0]['text'][:120]}”")
+                        else:
+                            set_toast("warning",
+                                      "Delegation marked as stalled.")
                         st.rerun()
                 with dc3:
                     if st.button("Delete", key=f"del_rm_{d['id']}"):
@@ -1931,37 +2047,90 @@ def page_delegations():
 
     # -- Add delegation form --
     st.subheader("Delegate a Task")
+
+    # Autonomy lives OUTSIDE the form so picking it can drive what fields
+    # show below (the "Development goal" field is hidden on autonomous).
+    # Same reactivity pattern as the recurrence selector on Schedule Event.
+    # Anchoring autonomy first reframes the decision: pick the coaching
+    # posture before describing the task.
+    autonomy_key = st.radio(
+        "Autonomy level — how much rope?",
+        options=_AUTONOMY_KEYS,
+        format_func=lambda k: dict(_AUTONOMY_OPTIONS)[k],
+        index=1,  # default: guided
+        horizontal=True,
+        key="deleg_autonomy",
+    )
+
+    # Wisdom-quote conditional surfacing — autonomous trigger.
+    # Per leadership agent: pre-loads the discomfort so the manager
+    # doesn't snatch the work back at the first divergence.
+    if autonomy_key == "autonomous":
+        wisdoms = templates.match_wisdom_to_text(
+            "autonomous trust outcome tolerate methodology delegate", count=1)
+        if wisdoms:
+            st.caption(f"\U0001F4A1 “{wisdoms[0]['text'][:200]}”")
+
     with st.form("add_delegation"):
         task = st.text_input("What are you delegating? *")
         member = st.selectbox("Delegated to", ["(none)"] + names)
-        outcome = st.text_area("Expected outcome (results, not methods)", height=80)
+        outcome = st.text_area(
+            "Expected outcome (results, not methods) *",
+            height=80,
+            help="The result you'll accept as done. Distinct from the task itself.")
+
+        # Optional Development goal — visible-but-optional unless autonomous.
+        # Stored in delegations.notes via the _DEVELOPING_PREFIX convention
+        # for v1; a future cleanup PR can split into its own column.
+        developing = ""
+        if autonomy_key != "autonomous":
+            developing = st.text_input(
+                "Development goal (optional)",
+                placeholder="e.g. Judgment on vendor trade-offs",
+                help=("What is this delegation developing in them? "
+                      "One sentence. Optional but recommended."))
+
         dc1, dc2 = st.columns(2)
         with dc1:
-            autonomy = st.selectbox("Autonomy level", [
-                ("directed", "Directed — step-by-step guidance"),
-                ("guided", "Guided — check in at milestones"),
-                ("autonomous", "Autonomous — deliver the result"),
-            ], format_func=lambda x: x[1])
+            check_in = st.date_input(
+                "Next check-in", value=None,
+                help="When will you ask how it's going? (not a deadline)")
         with dc2:
-            check_in = st.date_input("Check-in date", value=None)
-        notes = st.text_input("Notes (optional)")
+            extra_notes = st.text_input("Additional notes (optional)")
+
         if st.form_submit_button("Delegate", use_container_width=True):
             if not task:
                 st.error("Describe what you're delegating.")
             else:
                 member_id = name_map.get(member) if member != "(none)" else None
+                combined_notes = _combine_developing(developing, extra_notes)
                 try:
                     db.add_delegation(
                         task=task, team_member_id=member_id,
                         outcome_expected=outcome or None,
-                        autonomy_level=autonomy[0],
+                        autonomy_level=autonomy_key,
                         check_in_date=check_in.isoformat() if check_in else None,
-                        notes=notes or None, manager_id=_mid(),
+                        notes=combined_notes, manager_id=_mid(),
                     )
                 except ValueError as e:
                     st.error(str(e))
                 else:
-                    set_toast("success", f"Delegated: {task[:40]}")
+                    # Wisdom-quote conditional surfacing — first delegation
+                    # for this direct trigger. Per leadership agent: protects
+                    # against applying the manager's default autonomy level
+                    # to someone whose maturity they haven't yet read.
+                    suffix = ""
+                    if member_id is not None:
+                        prior_for_member = db.list_delegations(
+                            manager_id=_mid(), team_member_id=member_id)
+                        if len(prior_for_member) <= 1:
+                            wisdoms = templates.match_wisdom_to_text(
+                                "delegation matching style task-relevant "
+                                "maturity person", count=1)
+                            if wisdoms:
+                                suffix = (f"  \U0001F4A1 "
+                                          f"“{wisdoms[0]['text'][:140]}”")
+                    set_toast("success", f"Delegated: {task[:40]}{suffix}")
                     st.rerun()
 
     # -- History --
@@ -1986,8 +2155,9 @@ def page_running_notes():
     st.title("Running 1:1 Notes")
     show_toast()
     st.caption(
-        "Persistent notes per team member — visible at every meeting prep. "
-        "Not tied to a single event."
+        "Your raw material — observations, prep, follow-ups. "
+        "When you're ready to deliver, promote to Feedback (SBI). "
+        "Persistent per team member, visible at every meeting prep."
     )
 
     names, mapping = member_options()
@@ -2371,15 +2541,36 @@ def page_one_on_one():
         else:
             st.caption("No feedback recorded for this member yet.")
 
-    # Read-only delegations list for this member
+    # Read-only delegations list for this member.
+    # Per the leadership agent: autonomy + days-since-started + the
+    # developing line are what turn a status update into a coaching
+    # conversation. Without them the 1:1 becomes a project review.
     delegs = db.list_delegations(manager_id=mid, team_member_id=member_id)
     with st.expander(f"Outstanding delegations ({len(delegs)})"):
         active = [d for d in delegs if d.get("status") == "active"]
         if active:
+            today_date = date.today()
             for d in active:
                 task = html.escape(d.get("task") or "")
-                checkin = d.get("check_in_date") or "no check-in date"
-                st.markdown(f"- **{task}** · check-in: {checkin}")
+                checkin = d.get("check_in_date") or "no check-in"
+                autonomy = (d.get("autonomy_level") or "guided").title()
+                # Days since started — created_at is ISO via _normalize_row.
+                created_at = d.get("created_at") or ""
+                days_str = ""
+                if created_at:
+                    try:
+                        started = date.fromisoformat(created_at[:10])
+                        days = (today_date - started).days
+                        days_str = f" · {days}d"
+                    except (TypeError, ValueError):
+                        days_str = ""
+                developing, _plain = _extract_developing(d.get("notes"))
+                line = (f"- **[{autonomy}{days_str}] {task}** · "
+                        f"check-in {checkin}")
+                st.markdown(line)
+                if developing:
+                    dev_safe = html.escape(developing)
+                    st.markdown(f"  &nbsp;&nbsp;_Developing: {dev_safe}_")
         else:
             st.caption("No active delegations for this member.")
 
@@ -2543,6 +2734,17 @@ def main():
         todo_label = (f"\u2705  To Do  \u00B7  {overdue_actions} overdue"
                       if overdue_actions else "\u2705  To Do")
 
+        # Delegations badge \u2014 counts overdue check-ins + stalled. Different
+        # threshold from To Do's "overdue" badge because a missed check-in
+        # is a coaching gap, not a deadline failure. Per the UI agent's
+        # asymmetric-wording recommendation: "to revisit," not "overdue."
+        _overdue_dels = db.get_overdue_delegations(manager_id=_mid()) or []
+        _stalled_dels = db.list_delegations(
+            manager_id=_mid(), status="stalled") or []
+        _to_revisit = len(_overdue_dels) + len(_stalled_dels)
+        deleg_label = (f"\U0001F4E4  Delegations  \u00B7  {_to_revisit} to revisit"
+                       if _to_revisit else "\U0001F4E4  Delegations")
+
         st.caption("MANAGER")
         _nav_button("\U0001F4CA  Dashboard", "Dashboard", current_page)
         _nav_button("\U0001F4C6  Upcoming", "Upcoming", current_page)
@@ -2553,7 +2755,7 @@ def main():
 
         st.caption("DIRECTS")
         _nav_button("\U0001F4DD  1:1 Notes", "1:1 Notes", current_page)
-        _nav_button("\U0001F4E4  Delegations", "Delegations", current_page)
+        _nav_button(deleg_label, "Delegations", current_page)
         _nav_button("\U0001F4AC  Feedback", "Feedback", current_page)
         _nav_button("\U0001F3AF  Goals", "Goals", current_page)
         _nav_button("\U0001F680  Career Dev", "Career Dev", current_page)
