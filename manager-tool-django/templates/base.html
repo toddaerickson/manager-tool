@@ -1,0 +1,66 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Manager Tool{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"
+          integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
+          crossorigin="anonymous"></script>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div class="flex min-h-screen">
+    <aside class="w-56 bg-slate-900 text-slate-100 flex flex-col">
+      <div class="px-4 py-5 border-b border-slate-800">
+        <div class="text-lg font-semibold">Manager Tool</div>
+        {% if request.manager %}
+          <div class="text-xs text-slate-400 mt-1 truncate">{{ request.manager.display_name }}</div>
+        {% endif %}
+      </div>
+
+      <nav class="flex-1 px-2 py-4 space-y-6 text-sm">
+        {# Sidebar IA mirrors CLAUDE.md. Only Dashboard is implemented in
+           Phase 4; others are visible placeholders for Phase 5 builds. #}
+        <div>
+          <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Manager</div>
+          <a href="{% url 'dashboard' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'dashboard' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Dashboard</a>
+          {% for label in "Upcoming,Manager Journal,Schedule Event,To Do,Decisions"|cut:" "|cut:" "|slice:":0" %}{% endfor %}
+          <div class="block px-2 py-1.5 text-slate-500">Upcoming <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">Manager Journal <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">Schedule Event <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">To Do <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">Decisions <span class="text-xs">(Phase 5)</span></div>
+        </div>
+
+        <div>
+          <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Directs</div>
+          <div class="block px-2 py-1.5 text-slate-500">1:1 Notes <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">Delegations <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">Feedback <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">Goals <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">Career Dev <span class="text-xs">(Phase 5)</span></div>
+        </div>
+
+        <div>
+          <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Reference</div>
+          <div class="block px-2 py-1.5 text-slate-500">Analytics <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">History <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">Resources <span class="text-xs">(Phase 5)</span></div>
+          <div class="block px-2 py-1.5 text-slate-500">Team <span class="text-xs">(Phase 5)</span></div>
+          <hr class="border-slate-800 my-2">
+          <div class="block px-2 py-1.5 text-slate-500">Settings <span class="text-xs">(Phase 5)</span></div>
+          {% if request.user.is_authenticated %}
+            <a href="{% url 'account_logout' %}" class="block px-2 py-1.5 rounded hover:bg-slate-800">Log Out</a>
+          {% endif %}
+        </div>
+      </nav>
+    </aside>
+
+    <main class="flex-1 px-8 py-6">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>

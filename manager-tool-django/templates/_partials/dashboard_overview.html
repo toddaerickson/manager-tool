@@ -1,0 +1,16 @@
+{# HTMX partial — returned by core.views.dashboard_overview. #}
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+  <div>
+    <div class="text-xs uppercase tracking-wider text-slate-500">Team members</div>
+    <div class="text-3xl font-semibold mt-1">{{ team_member_count }}</div>
+  </div>
+  <div>
+    <div class="text-xs uppercase tracking-wider text-slate-500">Manager</div>
+    <div class="text-lg font-medium mt-1">{{ request.manager.display_name }}</div>
+    <div class="text-xs text-slate-400">id={{ request.manager.id }}</div>
+  </div>
+  <div>
+    <div class="text-xs uppercase tracking-wider text-slate-500">Phase</div>
+    <div class="text-lg font-medium mt-1">4 — first deploy</div>
+  </div>
+</div>

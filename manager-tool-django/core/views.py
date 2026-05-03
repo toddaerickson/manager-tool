@@ -1,5 +1,6 @@
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, HttpResponseForbidden
+from django.shortcuts import render
 
 from .models import TeamMember
 
@@ -31,25 +32,27 @@ def sentry_debug(request):
 
 @login_required
 def dashboard(request):
-    """Phase 3 gate-verification view.
-
-    Demonstrates the bridge from request.user (allauth-managed) to
-    request.manager (the existing Manager row, attached by
-    ManagerBridgeMiddleware) to a per-tenant query via TenantManager.
-    """
+    """Phase 3 → 4: template-rendered dashboard with a Tailwind sidebar
+    layout. The overview panel loads via HTMX (see dashboard.html)."""
     if request.manager is None:
-        # Logged in via Google but no Manager row matches the email.
-        # Phase 5 will add an onboarding flow; for now this is a 403.
         return HttpResponseForbidden(
             f"No manager profile is linked to {request.user.email}. "
             "Ask an administrator to create one."
         )
+    return render(request, "dashboard.html")
 
-    member_count = TeamMember.objects.for_manager(request.manager.id).count()
-    body = (
-        f"Signed in as: {request.user.email}\n"
-        f"Manager: {request.manager.display_name} (id={request.manager.id})\n"
-        f"Team members: {member_count}\n"
-        f"Sign out: /accounts/logout/\n"
-    )
-    return HttpResponse(body, content_type="text/plain")
+
+@login_required
+def dashboard_overview(request):
+    """HTMX partial — returns the overview panel HTML fragment.
+
+    Mirrors the Streamlit `_dashboard_bundle` pattern (one cached call per
+    manager_id) but with lazy loading so the page shell renders before
+    any DB work happens.
+    """
+    if request.manager is None:
+        return HttpResponseForbidden("No manager profile.")
+    ctx = {
+        "team_member_count": TeamMember.objects.for_manager(request.manager.id).count(),
+    }
+    return render(request, "_partials/dashboard_overview.html", ctx)

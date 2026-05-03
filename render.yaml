@@ -1,0 +1,51 @@
+# Render IaC: defines the Django web service.
+# When the user connects the repo to Render and Render reads this file,
+# the service is created automatically. Secrets still need to be pasted
+# into the Render dashboard (sync: false).
+#
+# Phase 4: deploy points at the Neon dev-django branch via DATABASE_URL.
+# Phase 7 cutover: swap DATABASE_URL to point at production Neon.
+
+services:
+  - type: web
+    name: manager-tool-django
+    runtime: python
+    rootDir: manager-tool-django
+    plan: starter  # $7/mo — avoids cold starts (per MIGRATION_PLAN.md)
+    region: oregon  # closest to most US clients; change if Neon dev is elsewhere
+    branch: main
+    autoDeploy: true
+
+    buildCommand: |
+      pip install -r requirements.txt && \
+      python manage.py collectstatic --noinput && \
+      python manage.py migrate --fake-initial
+
+    startCommand: gunicorn mt.wsgi:application --bind 0.0.0.0:$PORT
+
+    healthCheckPath: /
+
+    envVars:
+      # Secrets — paste values in Render dashboard:
+      - key: DATABASE_URL
+        sync: false
+      - key: DJANGO_SECRET_KEY
+        generateValue: true  # Render generates a strong random value
+      - key: CONFIG_ENCRYPTION_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+
+      # Static config — committed values:
+      - key: MANAGER_TOOL_ENV
+        value: prod
+      - key: DJANGO_ALLOWED_HOSTS
+        # RENDER_EXTERNAL_HOSTNAME is auto-added at runtime by settings.py;
+        # add custom domain here if/when one is configured.
+        value: ""
+      - key: PYTHON_VERSION
+        value: "3.11"
