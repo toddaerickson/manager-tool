@@ -3,6 +3,60 @@
 **Source:** `AUDIT.md` (2026-05-02)
 **Owner:** Engineering
 **Planning date:** 2026-05-02
+**Status:** ✅ **Complete (P0 → P6 all shipped, 2026-05-03)**
+
+> **Update 2026-05-03:** Every priority below shipped. The audit-driven hardening series merged across PRs #5 through #23, and a follow-on sidebar/UX series (PRs #32 → #35) added the Manager/Directs/Reference IA, Next Step row, Upcoming aggregator, and recurring events on top of the audit work. See the **Completion Record** below for the mapping. The original plan text follows it, kept verbatim for history because the dependency reasoning and risk notes are still useful when reading old commits.
+
+---
+
+## Completion Record
+
+| Priority | Item | Shipped In |
+|---|---|---|
+| **P0** | Stop the bleeding (C5 destructive migration, C4 fail-open encryption, H4 password-change verification) | PRs #5–#7 (audit response) |
+| **P1.1** | Add `manager_id` columns to orphan tables | Migration `0002_orphan_table_manager_id` |
+| **P1.2** | Scope every reader and mutator by `manager_id` | Migration + helper signatures across `database.py` |
+| **P1.3** | Per-tenant config table | Migration `0003_partition_config_table` |
+| **P2.1** | Migration system (homegrown `_MIGRATIONS` ledger) | `database.py:631` + `_run_migrations` |
+| **P2.2** | Connection-leak refactor (every helper through `with _connect()`) | Mechanical pass across `database.py` |
+| **P2.3** | Server-side sessions + persistent rate limiting | Migration `0005_sessions_and_login_attempts` |
+| **P2.4** | Backup hardening (GPG, no-creds-on-argv, S3) | `scripts/backup.sh` rewrite |
+| **P2.5** | SQLite fallback gate (later widened to "no fallback when DATABASE_URL set") | `database.py:get_connection` |
+| **P2.6** | Race-condition fixes (`ON CONFLICT DO UPDATE`) | Migration `0006_save_uniqueness_constraints` |
+| **P3.1** | XSS escape on Coach suggestion | `web_app.py` daily-coach render |
+| **P3.2** | Prompt-injection mitigation (`<user_input>` tags) | `coaching.py:_build_context` |
+| **P3.3** | ICS / email header injection | `calendar_service.py` |
+| **P4.1** | Hot-path indexes (8 of them) | Migration `0007_hot_path_indexes` |
+| **P4.2** | Streamlit caching + connection batching | Dashboard render path |
+| **P5** | Polish (M6–M9, L-series) | Audit-response PRs |
+| **P6** | Test coverage (T#1–T#10) | Various; see `tests/` (251 tests as of 2026-05-03) |
+
+### Follow-on work after the audit
+
+These weren't in the original audit plan but built on the same foundation:
+
+| Theme | Detail | Shipped In |
+|---|---|---|
+| PG-only regressions surfaced post-Neon-cutover | `init_db AttributeError`, `validate_session TypeError`, `LEFT(timestamp, 10)` on member timeline, `text BETWEEN date` on analytics | PRs #25–#30 |
+| CI for PG safety | `scripts/smoke_pg.py` running against a `postgres:16` service in `.github/workflows/test.yml` | PR #27 |
+| Sidebar IA + Next Step + Upcoming + recurring events | Manager/Directs/Reference grouping, Timeline folded into Team, dashboard Next Step row, four-stream Upcoming aggregator with Overdue group, weekly/monthly/quarterly recurring events with anchored end-of-month clamp and transactional materialization | PRs #32–#35 |
+| Schema migrations added on top of the original 0001–0007 | `0008_goals_target_date`, `0009_events_recurrence` | PRs #34, #35 |
+
+### Lessons that didn't make it into the audit but bit us
+
+- **psycopg2 connections do not have `.execute()`** — only cursors do. SQLite connections do, which is why the bug class slips past pytest. The codebase now routes everything through `_exec()` and friends; the `code-validator` skill in `CLAUDE.md` calls this out.
+- **`text BETWEEN date AND date` is `UndefinedFunction` on PG.** Compute date bounds in Python and pass as TEXT params; never inline `_sql_current_date()`.
+- **PG `conn.autocommit = True` makes per-statement rollback meaningless.** SQLite's `_exec_returning_id` auto-commits on the parent insert. Multi-INSERT atomicity needs the explicit-BEGIN-COMMIT-ROLLBACK pattern in `_materialize_in_txn`.
+- **Schema changes need three-location dual-write** (migration entry, `schema_postgres.sql`, SQLite block in `database.py`). Skipping one breaks one of {existing prod, fresh deploy, pytest}.
+
+---
+
+## Original plan text (kept for history)
+
+The text below is the original 2026-05-02 plan as written. Don't act on its sequencing — it's complete. The reasoning is still useful when reading old commits or onboarding someone who needs to understand why the codebase is shaped the way it is.
+
+---
+
 **Approach:** Ranked by impact × exploitability × blast-radius, with dependencies respected. Each milestone is independently shippable.
 
 ---
