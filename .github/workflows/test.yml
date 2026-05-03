@@ -49,3 +49,55 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run smoke test
         run: python scripts/smoke_pg.py
+
+  tests-django-sqlite:
+    name: pytest (Django, SQLite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: manager-tool-django
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: manager-tool-django/requirements.txt
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Run pytest
+        run: pytest -v
+
+  smoke-pg-django:
+    name: Postgres smoke test (Django)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: smoke
+          POSTGRES_PASSWORD: smoke
+          POSTGRES_DB: smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://smoke:smoke@localhost:5432/smoke
+    defaults:
+      run:
+        working-directory: manager-tool-django
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: manager-tool-django/requirements.txt
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Run Django PG smoke
+        run: python scripts/smoke_pg_django.py
