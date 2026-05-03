@@ -1,0 +1,8 @@
+{# Returned by team-add on success.
+   - Replaces #member-form-wrap with the cleared form
+   - Out-of-band swap updates #member-list with the new row #}
+{% include "_partials/team_member_form.html" %}
+
+<div id="member-list" hx-swap-oob="true">
+  {% include "_partials/team_member_list.html" %}
+</div>
