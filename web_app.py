@@ -1179,6 +1179,51 @@ def page_action_items():
         row = checked.iloc[0]
         confirm_complete_action(int(row["Id"]), row["Description"])
 
+    # Promote to delegation — when an action_item's assignee maps to a known
+    # team member for this manager, the manager can promote it across the
+    # stage boundary (raw assignment → empowerment delegation). Pre-fills
+    # the Delegation form via session_state; never auto-creates; the source
+    # action_item stays put. One-way only — see plan: reverse promotion is
+    # data loss.
+    with st.expander("Promote a to-do to a delegation"):
+        st.caption(
+            "If you decide a to-do is really developmental work, promote "
+            "it: Delegations carry an autonomy level + outcome that this "
+            "list doesn't. Requires the assignee to match a team member's "
+            "name (case-insensitive)."
+        )
+        promote_id = st.number_input(
+            "Action item ID to promote", min_value=1, step=1,
+            key="promote_to_deleg_id")
+        if st.button("Promote to Delegation", key="promote_to_deleg_btn"):
+            target = next((a for a in actions if a["id"] == int(promote_id)),
+                          None)
+            if target is None:
+                st.error(f"No pending action item with ID #{int(promote_id)}.")
+            else:
+                assignee = (target.get("assignee") or "").strip().lower()
+                if not assignee:
+                    st.error("This action item has no assignee — set one to "
+                             "a team member's name first.")
+                else:
+                    members = db.list_team_members(manager_id=_mid()) or []
+                    match = db.match_assignee_to_team_member(
+                        target.get("assignee"), members)
+                    if match is None:
+                        st.error(
+                            f"Assignee “{target.get('assignee')}” doesn't "
+                            f"match any team member. Update the assignee to "
+                            f"a team member's name and retry.")
+                    else:
+                        st.session_state["prefill_delegation_from_action"] = {
+                            "task": target.get("description") or "",
+                            "team_member_id": match["id"],
+                            "team_member_name": match.get("name", ""),
+                            "source_action_id": target["id"],
+                        }
+                        navigate("Delegations")
+                        st.rerun()
+
     # Delete action item
     with st.expander("Delete an action item"):
         del_id = st.number_input("Action item ID to delete", min_value=1, step=1,
@@ -1202,6 +1247,26 @@ def page_record_feedback():
         st.warning("No team members yet. Add one first.")
         return
 
+    # Prefill consumption — when the user clicked "→ Feedback" on a
+    # running_notes row, page_running_notes stashed the source note in
+    # session_state and navigated here. Pop it now (one-shot) and seed
+    # the form widget keys BEFORE widgets render. praise → positive;
+    # observation → constructive (mapped at promotion time, not here).
+    prefill_note = st.session_state.pop("prefill_feedback_from_note", None)
+    if prefill_note:
+        st.info(
+            f"Promoting from 1:1 Note #{prefill_note['source_note_id']} — "
+            "review SBI before saving. The note text seeded **Behavior**; "
+            "fill in Situation and Impact for a complete SBI.")
+        member_name_pref = prefill_note.get("team_member_name") or ""
+        if member_name_pref in names:
+            st.session_state["fb_member_select"] = member_name_pref
+        st.session_state["fb_type_radio"] = (
+            "Positive"
+            if prefill_note.get("feedback_type") == "positive"
+            else "Constructive")
+        st.session_state["fb_behavior_input"] = prefill_note.get("behavior", "")
+
     fb_left, fb_right = st.columns([3, 2])
 
     with fb_left:
@@ -1212,11 +1277,15 @@ def page_record_feedback():
             "**Impact:** What was the result/effect?"
         )
         with st.form("feedback_form"):
-            member_name = st.selectbox("Team Member", names)
-            fb_type = st.radio("Feedback Type", ["Positive", "Constructive"], horizontal=True)
-            situation = st.text_input("Situation")
-            behavior = st.text_input("Behavior")
-            impact = st.text_input("Impact")
+            member_name = st.selectbox("Team Member", names,
+                                       key="fb_member_select")
+            fb_type = st.radio("Feedback Type",
+                               ["Positive", "Constructive"],
+                               horizontal=True,
+                               key="fb_type_radio")
+            situation = st.text_input("Situation", key="fb_situation_input")
+            behavior = st.text_input("Behavior", key="fb_behavior_input")
+            impact = st.text_input("Impact", key="fb_impact_input")
             submitted = st.form_submit_button("Save Feedback")
 
         if submitted:
@@ -1990,6 +2059,22 @@ def page_delegations():
 
     names, name_map = member_options()
 
+    # Prefill consumption — when the user clicked "Promote to Delegation"
+    # on a To Do row, page_action_items stashed the source action_item
+    # in session_state and navigated here. Pop it now (one-shot) and seed
+    # the form widget keys BEFORE widgets render.
+    prefill_action = st.session_state.pop(
+        "prefill_delegation_from_action", None)
+    if prefill_action:
+        st.info(
+            f"Promoting from To Do #{prefill_action['source_action_id']} — "
+            "pick autonomy level + write a real outcome before saving.")
+        st.session_state["deleg_task_input"] = prefill_action["task"]
+        # Pre-select the team member in the selectbox.
+        member_name = prefill_action.get("team_member_name") or ""
+        if member_name in names:
+            st.session_state["deleg_member_select"] = member_name
+
     # -- Active delegations --
     active = db.list_delegations(manager_id=_mid(), status="active")
     overdue = db.get_overdue_delegations(manager_id=_mid())
@@ -2072,8 +2157,10 @@ def page_delegations():
             st.caption(f"\U0001F4A1 “{wisdoms[0]['text'][:200]}”")
 
     with st.form("add_delegation"):
-        task = st.text_input("What are you delegating? *")
-        member = st.selectbox("Delegated to", ["(none)"] + names)
+        task = st.text_input("What are you delegating? *",
+                             key="deleg_task_input")
+        member = st.selectbox("Delegated to", ["(none)"] + names,
+                              key="deleg_member_select")
         outcome = st.text_area(
             "Expected outcome (results, not methods) *",
             height=80,
@@ -2212,12 +2299,38 @@ def page_running_notes():
         }
         for n in notes:
             icon = category_icons.get(n.get("category", ""), "\U0001F4DD")
-            col_note, col_del = st.columns([6, 1])
+            cat = n.get("category", "general")
+            # Promote button shows only for observation/praise notes — those
+            # are the categories that map cleanly to SBI feedback. praise →
+            # positive feedback; observation → constructive feedback. The
+            # source note stays put after promotion.
+            promotable = cat in ("observation", "praise")
+            if promotable:
+                col_note, col_promote, col_del = st.columns([5, 1, 1])
+            else:
+                col_note, col_del = st.columns([6, 1])
+                col_promote = None
             with col_note:
                 st.markdown(
-                    f"{icon} **{n['note_date']}** [{n.get('category', 'general')}]  \n"
+                    f"{icon} **{n['note_date']}** [{cat}]  \n"
                     f"{n['content']}"
                 )
+            if col_promote is not None:
+                with col_promote:
+                    if st.button("→ Feedback", key=f"promote_rn_{n['id']}",
+                                 help="Promote this note to a structured "
+                                      "SBI feedback record."):
+                        st.session_state["prefill_feedback_from_note"] = {
+                            "team_member_id": member_id,
+                            "team_member_name": selected,
+                            "feedback_type": ("positive"
+                                              if cat == "praise"
+                                              else "constructive"),
+                            "behavior": n.get("content") or "",
+                            "source_note_id": n["id"],
+                        }
+                        navigate("Feedback")
+                        st.rerun()
             with col_del:
                 if st.button("X", key=f"del_rn_{n['id']}"):
                     db.delete_running_note(n["id"], manager_id=_mid())

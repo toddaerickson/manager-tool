@@ -2211,6 +2211,28 @@ def get_pending_action_items(manager_id: int | None = None) -> list[dict[str, An
         status=("pending", "in_progress"), manager_id=manager_id)
 
 
+def match_assignee_to_team_member(assignee_text: str | None,
+                                  members: list[dict]) -> dict | None:
+    """Resolve a free-text `assignee` (from action_items.assignee) to a
+    known team_member dict via case-insensitive trim match. Returns the
+    matched member dict or None.
+
+    Used by the 'Promote to Delegation' flow: the action_items table
+    stores `assignee` as free-text (un-normalized), but a delegation
+    requires a real `team_member_id` FK. This helper bridges the two.
+    Pure function — testable without Streamlit; Django-portable."""
+    if not assignee_text:
+        return None
+    needle = assignee_text.strip().lower()
+    if not needle:
+        return None
+    for m in members or []:
+        name = (m.get("name") or "").strip().lower()
+        if name and name == needle:
+            return m
+    return None
+
+
 def count_self_assigned_action_items_since(*, manager_id: int,
                                            since_iso: str) -> int:
     """Count action_items this manager created since `since_iso` (YYYY-MM-DD)

@@ -108,6 +108,68 @@ def test_one_on_one_past_records_escape_preview():
         "Past 1:1 records must escape direct_notes preview"
 
 
+# ---------------------------------------------------------------------------
+# PR γ: stage-of-delivery promotion — source-text assertions for the
+# session_state hand-off shape. The promote logic lives inside Streamlit
+# click handlers (not extractable as a pure function without ripping the
+# pages apart), so these tests pin the contract via the source.
+# ---------------------------------------------------------------------------
+
+
+def test_promote_to_delegation_sets_expected_session_state_shape():
+    """page_action_items's 'Promote to Delegation' button must stash a
+    dict containing task, team_member_id, team_member_name, source_action_id
+    so page_delegations can pre-seed the form. The keys are the contract."""
+    src = _src()
+    assert "prefill_delegation_from_action" in src, \
+        "promote-to-delegation button must use prefill_delegation_from_action key"
+    # The dict shape — assert each key appears alongside the prefill set.
+    for key in ("\"task\":", "\"team_member_id\":",
+                "\"team_member_name\":", "\"source_action_id\":"):
+        assert key in src, \
+            f"promote-to-delegation prefill must carry {key} field"
+
+
+def test_promote_to_feedback_sets_expected_session_state_shape():
+    """page_running_notes's '→ Feedback' button must stash a dict with
+    team_member_id, team_member_name, feedback_type, behavior,
+    source_note_id so page_record_feedback can pre-seed the SBI form."""
+    src = _src()
+    assert "prefill_feedback_from_note" in src, \
+        "promote-to-feedback button must use prefill_feedback_from_note key"
+    for key in ("\"team_member_id\":", "\"team_member_name\":",
+                "\"feedback_type\":", "\"behavior\":", "\"source_note_id\":"):
+        assert key in src, \
+            f"promote-to-feedback prefill must carry {key} field"
+
+
+def test_promote_to_feedback_maps_praise_to_positive():
+    """Per the plan: `praise` notes → `positive` feedback;
+    `observation` notes → `constructive`. The mapping lives in the
+    promote button handler."""
+    src = _src()
+    # Match the conditional that picks "positive" iff the category is "praise".
+    import re
+    match = re.search(
+        r'"feedback_type":\s*\(?\s*"positive"\s+if\s+(\w+)\s*==\s*"praise"',
+        src)
+    assert match is not None, \
+        "promote-to-feedback must map cat=='praise' → 'positive'"
+
+
+def test_promote_buttons_consume_prefill_one_shot():
+    """Both prefill keys must be POPPED (not just read) from session_state
+    by the consuming page so the prefill is one-shot and doesn't re-fire
+    on the next render after the user navigates back."""
+    src = _src()
+    assert "st.session_state.pop(\n        \"prefill_delegation_from_action\"" in src \
+        or "st.session_state.pop(\"prefill_delegation_from_action\"" in src, \
+        "page_delegations must POP prefill_delegation_from_action (not just .get)"
+    assert "st.session_state.pop(\"prefill_feedback_from_note\"" in src \
+        or "st.session_state.pop(\n        \"prefill_feedback_from_note\"" in src, \
+        "page_record_feedback must POP prefill_feedback_from_note (not just .get)"
+
+
 def test_html_escape_neutralises_canonical_xss_payloads():
     """Sanity-check the underlying escape function — guards against someone
     swapping in a partial replacement. The contract: the output must contain

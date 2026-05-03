@@ -546,6 +546,56 @@ class TestDelegationManagerScoping:
                 "get_overdue_delegations(manager_id=None) must raise")
 
 
+class TestMatchAssigneeToTeamMember:
+    """Pure-function helper that resolves a free-text action_items.assignee
+    to a known team_member dict for the 'Promote to Delegation' flow.
+    Case-insensitive trim match. Used in PR γ; testable without Streamlit
+    so the cross-stage promotion logic stays portable for the Django
+    migration."""
+
+    def _members(self):
+        return [
+            {"id": 1, "name": "Sarah Smith"},
+            {"id": 2, "name": "Tom Brown"},
+            {"id": 3, "name": "Pat O'Brien"},
+        ]
+
+    def test_exact_match(self):
+        m = db.match_assignee_to_team_member("Sarah Smith", self._members())
+        assert m is not None
+        assert m["id"] == 1
+
+    def test_case_insensitive(self):
+        m = db.match_assignee_to_team_member("sarah smith", self._members())
+        assert m is not None
+        assert m["id"] == 1
+        m = db.match_assignee_to_team_member("SARAH SMITH", self._members())
+        assert m is not None
+        assert m["id"] == 1
+
+    def test_whitespace_stripped(self):
+        m = db.match_assignee_to_team_member("  Tom Brown  ", self._members())
+        assert m is not None
+        assert m["id"] == 2
+
+    def test_no_match_returns_none(self):
+        assert db.match_assignee_to_team_member("Unknown", self._members()) is None
+
+    def test_partial_does_not_match(self):
+        """Match is exact (modulo case + whitespace), not substring.
+        'Sarah' != 'Sarah Smith' — would otherwise match the wrong person
+        when two team members share a first name."""
+        assert db.match_assignee_to_team_member("Sarah", self._members()) is None
+
+    def test_empty_inputs_return_none(self):
+        members = self._members()
+        assert db.match_assignee_to_team_member(None, members) is None
+        assert db.match_assignee_to_team_member("", members) is None
+        assert db.match_assignee_to_team_member("   ", members) is None
+        assert db.match_assignee_to_team_member("Sarah", []) is None
+        assert db.match_assignee_to_team_member("Sarah", None) is None
+
+
 class TestRunningNotes:
     def test_add_and_list(self):
         mid = db.create_manager("mgr", "Mgr", "pass1234")
