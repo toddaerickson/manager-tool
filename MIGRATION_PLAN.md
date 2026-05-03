@@ -18,31 +18,27 @@
 
 ---
 
-## Phase 0 — Prerequisites (2-3 hours)
+## Phase 0 — Prerequisites (1-2 hours)
 
 ### Goal
-WSL Ubuntu has everything you need. VS Code talks to it. Claude extension is configured. You can `git push`.
+The dev environment has everything you need. VS Code talks to it. Claude extension is configured. You can `git push`. You can `psql` to a Neon dev branch.
 
-### Commands (in WSL Ubuntu shell)
+### Commands
+
+The audit-hardened Streamlit app already runs in this devcontainer (Debian 12 bookworm) on Python 3.11.13, with `build-essential` and `libpq-dev` already present. **Phase 0 was simplified vs. the original draft:** dropped pyenv (Django 5 supports 3.11; bookworm doesn't ship 3.12 in main repos so installing it would mean a ~10 min pyenv build for no real gain) and dropped fnm (we only need one Node version). NodeSource apt is the standard install path.
 
 ```bash
-sudo apt update
-sudo apt install -y build-essential libpq-dev postgresql-client
+# psql client for Neon dev-branch verification
+sudo apt-get install -y postgresql-client
 
-# Python 3.12 via pyenv
-curl -fsSL https://pyenv.run | bash
-echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
-echo '[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
-echo 'eval "$(pyenv init -)"' >> ~/.bashrc
-exec bash
-pyenv install 3.12.7
-pyenv global 3.12.7
-
-# Node 22 (for Tailwind)
-curl -fsSL https://fnm.vercel.app/install | bash
-exec bash
-fnm install 22
-fnm default 22
+# Node 22 LTS via NodeSource (one Node version, no version manager needed)
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | \
+  sudo gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
+echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | \
+  sudo tee /etc/apt/sources.list.d/nodesource.list > /dev/null
+sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/nodesource.list" \
+  -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+sudo apt-get install -y nodejs
 ```
 
 ### VS Code setup
