@@ -8,7 +8,7 @@ The gates exist because the Streamlit codebase has shipped four PG-only bugs tha
 
 ## Phase 0 → 1 (Prerequisites complete)
 
-- [ ] `python --version` returns `3.12.7`
+- [ ] `python3 --version` returns 3.11+ (Django 5.0/5.1/5.2 all support 3.10/3.11/3.12; the existing devcontainer's 3.11.13 is fine — pyenv was dropped from Phase 0 to save build time)
 - [ ] `node --version` returns `22.x`
 - [ ] `psql "$NEON_DEV_URL" -c "SELECT count(*) FROM team_members;"` returns the same number the Streamlit app shows for the same `manager_id`
 - [ ] `git push` succeeds against the repo on a throwaway branch (proves SSH/HTTPS auth works in WSL)
