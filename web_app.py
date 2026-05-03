@@ -1950,15 +1950,19 @@ def page_delegations():
                 st.error("Describe what you're delegating.")
             else:
                 member_id = name_map.get(member) if member != "(none)" else None
-                db.add_delegation(
-                    task=task, team_member_id=member_id,
-                    outcome_expected=outcome or None,
-                    autonomy_level=autonomy[0],
-                    check_in_date=check_in.isoformat() if check_in else None,
-                    notes=notes or None, manager_id=_mid(),
-                )
-                set_toast("success", f"Delegated: {task[:40]}")
-                st.rerun()
+                try:
+                    db.add_delegation(
+                        task=task, team_member_id=member_id,
+                        outcome_expected=outcome or None,
+                        autonomy_level=autonomy[0],
+                        check_in_date=check_in.isoformat() if check_in else None,
+                        notes=notes or None, manager_id=_mid(),
+                    )
+                except ValueError as e:
+                    st.error(str(e))
+                else:
+                    set_toast("success", f"Delegated: {task[:40]}")
+                    st.rerun()
 
     # -- History --
     with st.expander("Completed / Past Delegations"):
