@@ -55,6 +55,18 @@ def test_html_module_is_imported():
     assert re.search(r"^import html\b", src, re.MULTILINE)
 
 
+def test_next_step_row_escapes_button_label():
+    """The Next Step row on Dashboard renders the rule-based suggestion as
+    a tertiary button label. Tertiary buttons don't render HTML in labels
+    today, but the suggestion text incorporates user-controlled content
+    (action item descriptions, delegation tasks, event titles) and would
+    surface raw HTML if Streamlit's button label rendering ever changes.
+    Defense-in-depth — mirrors the Coach card escape at web_app.py:413."""
+    src = _src()
+    assert "html.escape(ns_text)" in src, \
+        "Next Step button label must wrap rule-based suggestion in html.escape()"
+
+
 def test_html_escape_neutralises_canonical_xss_payloads():
     """Sanity-check the underlying escape function — guards against someone
     swapping in a partial replacement. The contract: the output must contain
