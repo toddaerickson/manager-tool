@@ -1,0 +1,49 @@
+{% if pending %}
+<table class="min-w-full bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+  <thead class="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+    <tr>
+      <th class="px-4 py-3">Description</th>
+      <th class="px-4 py-3">Assignee</th>
+      <th class="px-4 py-3">Due</th>
+      <th class="px-4 py-3 w-24"></th>
+    </tr>
+  </thead>
+  <tbody class="divide-y divide-slate-100">
+    {% for t in pending %}
+    <tr id="todo-row-{{ t.id }}">
+      <td class="px-4 py-3 break-words">{{ t.description }}</td>
+      <td class="px-4 py-3 text-sm text-slate-600">{{ t.assignee|default:"—" }}</td>
+      <td class="px-4 py-3 text-sm tabular-nums {% if t.due_date and t.due_date < today_iso %}text-red-600 font-medium{% else %}text-slate-600{% endif %}">
+        {{ t.due_date|default:"—" }}
+        {% if t.due_date and t.due_date < today_iso %}<span class="text-xs"> (overdue)</span>{% endif %}
+      </td>
+      <td class="px-4 py-3 text-right text-sm">
+        <div class="flex flex-col items-end gap-1">
+          <button type="button"
+                  hx-post="{% url 'todos-complete' t.id %}"
+                  hx-target="#todo-row-{{ t.id }}"
+                  hx-swap="outerHTML"
+                  hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                  class="text-slate-700 hover:text-slate-900 underline">
+            Complete
+          </button>
+          <button type="button"
+                  hx-delete="{% url 'todos-delete' t.id %}"
+                  hx-target="#todo-row-{{ t.id }}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete this to-do? Cannot be undone."
+                  hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                  class="text-xs text-slate-400 hover:text-red-600 underline">
+            Delete
+          </button>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
+  No pending to-dos. You're caught up.
+</div>
+{% endif %}

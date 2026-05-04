@@ -1,0 +1,10 @@
+{% comment %}
+Returned by todos-uncomplete on success.
+- HTMX target is #todo-completed; this is its body
+- OOB swap updates #todo-list with the restored row
+{% endcomment %}
+{% include "_partials/todo_completed_list.html" %}
+
+<div id="todo-list" hx-swap-oob="true">
+  {% include "_partials/todo_list.html" %}
+</div>
