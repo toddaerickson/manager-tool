@@ -3,7 +3,6 @@
   <thead class="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
     <tr>
       <th class="px-4 py-3">Description</th>
-      <th class="px-4 py-3">Assignee</th>
       <th class="px-4 py-3">Due</th>
       <th class="px-4 py-3 w-24"></th>
     </tr>
@@ -12,10 +11,11 @@
     {% for t in pending %}
     <tr id="todo-row-{{ t.id }}">
       <td class="px-4 py-3 break-words">{{ t.description }}</td>
-      <td class="px-4 py-3 text-sm text-slate-600">{{ t.assignee|default:"—" }}</td>
       <td class="px-4 py-3 text-sm tabular-nums {% if t.due_date and t.due_date < today_iso %}text-red-600 font-medium{% else %}text-slate-600{% endif %}">
-        {{ t.due_date|default:"—" }}
-        {% if t.due_date and t.due_date < today_iso %}<span class="text-xs"> (overdue)</span>{% endif %}
+        {% if t.due_date %}
+          {{ t.due_date }}{% if t.due_time %} <span class="text-slate-500">·</span> {{ t.due_time }}{% endif %}
+          {% if t.due_date < today_iso %}<span class="text-xs"> (overdue)</span>{% endif %}
+        {% else %}—{% endif %}
       </td>
       <td class="px-4 py-3 text-right text-sm">
         <div class="flex flex-col items-end gap-1">
