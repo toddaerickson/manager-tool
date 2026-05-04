@@ -6,7 +6,7 @@ Status legend: 🔴 open · 🟡 partially addressed · 🟢 closed
 
 ---
 
-## D1 · 🔴 Scheduled events have no edit function
+## D1 · 🟡 Scheduled events have no edit function (unblocked by D2 contract)
 
 **Deficit.** Once a Manager Tool event is created, the only state transitions available are Cancel (status → cancelled, kept for history), Complete (status → completed), and Delete (hard remove). There is no path to edit fields like title, agenda, location, date/time, or duration after creation. Streamlit's page didn't have full edit either, but this is a clear gap relative to user expectations of any modern scheduling tool.
 
@@ -19,17 +19,25 @@ A. **Edit-anything modal** — Django form pre-populated with the row, POST upda
 B. **Edit-cosmetic-only** — title / agenda / location / notes editable; date/time/duration immutable (if Outlook is source of truth, force the reschedule via Outlook).
 C. **Edit-with-warning on date/time** — full edit, but date/time changes show "Outlook isn't notified — update there too" inline.
 
-### Recommendation
-**Start with option B** for date/time *if* Outlook integration (D2) lands first. Otherwise option C — full edit with a warning. Option A unconditionally is the wrong call because it creates the silent-drift trap.
+### Resolution path (per D2 contract)
+
+With D2 decided (Outlook owns *when*, MT owns *context*), D1's design is now clear: **option C — full edit with a warning on date/time changes that Outlook isn't notified.**
+
+- Editable freely: title, agenda, location, duration, notes
+- Editable with warning: scheduled_date, scheduled_time (Outlook isn't notified — update there too)
+- Per CLAUDE.md, recurring child edits do NOT propagate to siblings; the edit UI must make this obvious
 
 ### Acceptance criteria when this is closed
 - Click "Edit" on any row in Upcoming → form pre-populated → save updates the row
-- Tests: edit own event, cross-tenant rejected, recurring child edit doesn't propagate to siblings (per CLAUDE.md "Editing or completing a single child does not propagate")
-- D2 decision applied to whether date/time is editable
+- Tests: edit own event, cross-tenant rejected, recurring child edit doesn't propagate to siblings
+- Date/time edit shows the inline warning
 
 ---
 
-## D2 · 🔴 Manager Tool events vs. Outlook calendar — where do scheduled events really fit?
+## D2 · 🟢 Manager Tool events vs. Outlook calendar — where do scheduled events really fit?
+
+**DECIDED 2026-05-04 (user-confirmed):** Outlook owns *when* (date / time / reminders); Manager Tool owns *context* (agenda / notes / action items / coaching). See "Recommendation" below for the implementation track. Implementation work is tracked per-PR in Phase 6.
+
 
 **Question (from user).** "Outlook is how we manage our calendars, not this tool. Where do these scheduled events really fit? Should these scheduled events create an ICS for Outlook? Or should we just copy a manager-tool hyperlink into the Outlook calendar entry that we are creating?"
 
