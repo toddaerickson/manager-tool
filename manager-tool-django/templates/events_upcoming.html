@@ -23,7 +23,7 @@
     <div class="space-y-6">
       {% for label, events in groups %}
       <section>
-        <h2 class="text-xs uppercase tracking-wider text-slate-500 mb-2">{{ label }}</h2>
+        <h2 class="text-sm font-medium text-slate-700 mb-2">{{ label }}</h2>
         <div class="bg-white rounded-lg shadow-sm border border-slate-200 divide-y divide-slate-100">
           {% for ev in events %}
             {% include "_partials/event_row.html" with ev=ev %}
