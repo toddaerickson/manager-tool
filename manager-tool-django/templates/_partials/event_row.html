@@ -25,10 +25,19 @@
             hx-post="{% url 'events-cancel' ev.id %}"
             hx-target="#event-row-{{ ev.id }}"
             hx-swap="outerHTML"
-            hx-confirm="Cancel {{ ev.title }}? This can't be undone."
+            hx-confirm="Cancel {{ ev.title }}? Marks it cancelled (kept for history)."
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            class="text-amber-600 hover:text-amber-800 underline">
+      Cancel
+    </button>
+    <button type="button"
+            hx-delete="{% url 'events-delete' ev.id %}"
+            hx-target="#event-row-{{ ev.id }}"
+            hx-swap="outerHTML"
+            hx-confirm="Permanently delete {{ ev.title }}? Use this to clean up duplicates. Cancel keeps history; delete does not."
             hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
             class="text-red-600 hover:text-red-800 underline">
-      Cancel
+      Delete
     </button>
   </div>
 </div>

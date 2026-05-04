@@ -211,6 +211,32 @@ def events_upcoming(request):
     })
 
 
+_NEAR_DUP_WINDOW_SECONDS = 30
+
+
+def _recently_created_dup(*, manager_id, scheduled_date, scheduled_time,
+                          title, team_member):
+    """Defense against double-submit: returns True if an event with the
+    same (manager, date, time, title, team_member) was created within
+    the last _NEAR_DUP_WINDOW_SECONDS. The window is short enough that
+    intentional resubmits (user changed their mind, hits Schedule again
+    for the same slot) succeed; long enough to catch double-clicks and
+    refresh-resubmits.
+
+    For recurring series we only check the parent's row — if the parent
+    is a near-dup the whole series is a near-dup."""
+    from datetime import timedelta
+    from django.utils import timezone
+    cutoff = timezone.now() - timedelta(seconds=_NEAR_DUP_WINDOW_SECONDS)
+    return Event.objects.for_manager(manager_id).filter(
+        scheduled_date=scheduled_date,
+        scheduled_time=scheduled_time,
+        title=title,
+        team_member=team_member,
+        created_at__gte=cutoff,
+    ).exists()
+
+
 @login_required
 def events_schedule(request):
     """Phase 5.2b — branches on recurrence_rule:
@@ -218,7 +244,13 @@ def events_schedule(request):
       - weekly/monthly/quarterly → create_recurring_events service
         (parent + N children, atomic via transaction.atomic; the
         no-orphan guarantee is asserted by smoke_pg_django.py)
-    Both paths redirect to /events/ on success."""
+    Both paths redirect to /events/ on success.
+
+    Pre-create dedupe: if an identical event was created within the
+    last _NEAR_DUP_WINDOW_SECONDS, treat the request as a duplicate
+    submit and redirect WITHOUT creating. Defense against double-click
+    and browser-refresh-resubmit. Per-row Delete in /events/ cleans up
+    older duplicates the user wants to remove."""
     manager, err = _require_manager(request)
     if err:
         return err
@@ -226,6 +258,19 @@ def events_schedule(request):
         form = EventForm(request.POST, manager_id=manager.id)
         if form.is_valid():
             rule = form.cleaned_data.get("recurrence_rule") or ""
+
+            if _recently_created_dup(
+                manager_id=manager.id,
+                scheduled_date=form.cleaned_data["scheduled_date"],
+                scheduled_time=form.cleaned_data["scheduled_time"],
+                title=form.cleaned_data["title"],
+                team_member=form.cleaned_data.get("team_member"),
+            ):
+                # Silent dedupe — the user already got their event; no
+                # error message needed (would be confusing if it was a
+                # genuine refresh on slow network).
+                return redirect("events-upcoming")
+
             if rule:
                 # cleaned_data["scheduled_date"] is iso string after
                 # clean_scheduled_date; the service expects a date.
@@ -250,9 +295,16 @@ def events_schedule(request):
                 else:
                     return redirect("events-upcoming")
             else:
+                from django.utils import timezone
                 ev = form.save(commit=False)
                 ev.manager_id = manager.id
                 ev.status = "scheduled"
+                # Populate created_at explicitly. Schema gives PG a
+                # DB-level DEFAULT CURRENT_TIMESTAMP, but Django models
+                # don't know that, so SQLite (and any code path that
+                # reads back the value before re-fetching) sees NULL.
+                # Setting here makes the dedupe check backend-agnostic.
+                ev.created_at = timezone.now()
                 ev.save()
                 return redirect("events-upcoming")
     else:
@@ -294,6 +346,29 @@ def events_complete(request, event_id: int):
         .update(status="completed")
     )
     if updated == 0:
+        return HttpResponse(status=404)
+    return HttpResponse(status=200)
+
+
+@login_required
+@require_http_methods(["DELETE"])
+def events_delete(request, event_id: int):
+    """Hard-delete an event row. Different from `events_cancel` which
+    sets status='cancelled' and keeps the row for history. Use Delete
+    for cleaning up duplicates / mistakes you don't want recorded.
+
+    On a recurring-series PARENT, deleting the parent leaves children
+    with parent_event_id NULL (FK ON DELETE SET NULL); siblings of a
+    deleted CHILD are unaffected.
+
+    Cross-tenant attempts return 404 (audit C1 pattern)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    deleted, _ = (
+        Event.objects.for_manager(manager.id).filter(pk=event_id).delete()
+    )
+    if deleted == 0:
         return HttpResponse(status=404)
     return HttpResponse(status=200)
 
