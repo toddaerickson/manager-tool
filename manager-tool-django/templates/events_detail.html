@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}{{ ev.title }} — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <div class="mb-3">
+    <a href="{% url 'events-upcoming' %}" class="text-sm text-slate-500 hover:text-slate-700">← Back to Upcoming</a>
+  </div>
+
+  <header class="mb-6">
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <h1 class="text-2xl font-semibold">{{ ev.title }}</h1>
+        <p class="text-sm text-slate-500 mt-1">
+          {{ ev.scheduled_date }} at {{ ev.scheduled_time }}
+          {% if ev.duration_minutes %} · {{ ev.duration_minutes }} min{% endif %}
+          {% if ev.status != "scheduled" %}
+            · <span class="font-medium">{{ ev.status }}</span>
+          {% endif %}
+        </p>
+      </div>
+      <a href="{% url 'events-edit' ev.id %}"
+         class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700 shrink-0">
+        Edit
+      </a>
+    </div>
+  </header>
+
+  <dl class="bg-white rounded-lg shadow-sm border border-slate-200 divide-y divide-slate-100">
+    <div class="px-4 py-3 grid grid-cols-3 gap-3">
+      <dt class="text-sm text-slate-500">Type</dt>
+      <dd class="col-span-2 text-sm">{{ ev.get_event_type_display|default:ev.event_type }}</dd>
+    </div>
+    {% if ev.team_member %}
+    <div class="px-4 py-3 grid grid-cols-3 gap-3">
+      <dt class="text-sm text-slate-500">Participant</dt>
+      <dd class="col-span-2 text-sm">{{ ev.team_member.name }}</dd>
+    </div>
+    {% endif %}
+    {% if ev.location %}
+    <div class="px-4 py-3 grid grid-cols-3 gap-3">
+      <dt class="text-sm text-slate-500">Location</dt>
+      <dd class="col-span-2 text-sm break-words">{{ ev.location }}</dd>
+    </div>
+    {% endif %}
+    {% if ev.recurrence_rule %}
+    <div class="px-4 py-3 grid grid-cols-3 gap-3">
+      <dt class="text-sm text-slate-500">Series</dt>
+      <dd class="col-span-2 text-sm">{{ ev.recurrence_rule|capfirst }}{% if ev.parent_event %} (one of N){% endif %}</dd>
+    </div>
+    {% endif %}
+    {% if ev.agenda %}
+    <div class="px-4 py-3">
+      <dt class="text-sm text-slate-500 mb-1">Agenda</dt>
+      <dd class="text-sm whitespace-pre-wrap break-words">{{ ev.agenda }}</dd>
+    </div>
+    {% endif %}
+    {% if ev.notes %}
+    <div class="px-4 py-3">
+      <dt class="text-sm text-slate-500 mb-1">Notes</dt>
+      <dd class="text-sm whitespace-pre-wrap break-words">{{ ev.notes }}</dd>
+    </div>
+    {% endif %}
+  </dl>
+
+  {% comment %}
+  D2 contract: Outlook owns "when". This page IS the canonical URL the
+  user pastes into the Outlook invite. The button copies the absolute
+  URL to clipboard. Phase 6+ extends this with notes / action items /
+  coaching pane (the "context" half of the contract).
+  {% endcomment %}
+  <div class="mt-4 flex items-center gap-3">
+    <button type="button" id="copy-link"
+            data-url="{{ request.scheme }}://{{ request.get_host }}{% url 'events-detail' ev.id %}"
+            class="bg-white border border-slate-300 text-sm px-4 py-2 rounded hover:bg-slate-50">
+      Copy link for Outlook
+    </button>
+    <span id="copy-link-feedback" class="text-xs text-emerald-600 hidden">Copied!</span>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const btn = document.getElementById("copy-link");
+    const feedback = document.getElementById("copy-link-feedback");
+    if (!btn) return;
+    btn.addEventListener("click", async function () {
+      const url = btn.getAttribute("data-url");
+      try {
+        await navigator.clipboard.writeText(url);
+        feedback.classList.remove("hidden");
+        setTimeout(() => feedback.classList.add("hidden"), 1500);
+      } catch (e) {
+        // Fallback: select-and-copy via temporary input
+        const tmp = document.createElement("input");
+        tmp.value = url;
+        document.body.appendChild(tmp);
+        tmp.select();
+        document.execCommand("copy");
+        document.body.removeChild(tmp);
+        feedback.classList.remove("hidden");
+        setTimeout(() => feedback.classList.add("hidden"), 1500);
+      }
+    });
+  })();
+</script>
+{% endblock %}

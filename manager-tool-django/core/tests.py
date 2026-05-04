@@ -754,9 +754,10 @@ class TestEventsSchedule:
 
 
 @pytest.mark.django_db
-class TestEventsCancelComplete:
-    """POST /events/<id>/cancel/ + /events/<id>/complete/ — HTMX status
-    transitions, cross-tenant rejection."""
+class TestEventsComplete:
+    """POST /events/<id>/complete/ — HTMX status transition.
+    Cancel was removed (Phase 6) — functionally redundant with Delete
+    once D2's source-of-truth contract puts Outlook in charge of *when*."""
 
     def _login_as(self, client, email):
         from django.contrib.auth import get_user_model
@@ -779,37 +780,6 @@ class TestEventsCancelComplete:
             scheduled_time="10:00", status="scheduled",
         )
         return m, ev
-
-    def test_cancel_sets_status_cancelled(self, client):
-        m, ev = self._setup(client)
-        resp = client.post(f"/events/{ev.id}/cancel/")
-        assert resp.status_code == 200
-        ev.refresh_from_db()
-        assert ev.status == "cancelled"
-
-    def test_cancel_already_non_scheduled_returns_404(self, client):
-        m, ev = self._setup(client)
-        ev.status = "completed"
-        ev.save()
-        resp = client.post(f"/events/{ev.id}/cancel/")
-        assert resp.status_code == 404
-
-    def test_cancel_cross_tenant_returns_404(self, client):
-        m, _ = self._setup(client)  # Todd
-        m2 = Manager.objects.create(
-            username="other", display_name="Other",
-            password_hash="x", email="other@example.com",
-        )
-        from datetime import date
-        other = Event.objects.create(
-            manager_id=m2.id, title="Other", event_type="other",
-            scheduled_date=date.today().isoformat(),
-            scheduled_time="10:00", status="scheduled",
-        )
-        resp = client.post(f"/events/{other.id}/cancel/")
-        assert resp.status_code == 404
-        other.refresh_from_db()
-        assert other.status == "scheduled"  # untouched
 
     def test_complete_sets_status_completed(self, client):
         m, ev = self._setup(client)
@@ -835,10 +805,14 @@ class TestEventsCancelComplete:
         other.refresh_from_db()
         assert other.status == "scheduled"
 
-    def test_get_not_allowed_on_status_endpoints(self, client):
+    def test_get_not_allowed_on_complete(self, client):
         m, ev = self._setup(client)
-        assert client.get(f"/events/{ev.id}/cancel/").status_code == 405
         assert client.get(f"/events/{ev.id}/complete/").status_code == 405
+
+    def test_cancel_url_is_removed(self, client):
+        m, ev = self._setup(client)
+        # Phase 6: cancel feature removed. URL should no longer exist.
+        assert client.post(f"/events/{ev.id}/cancel/").status_code == 404
 
 
 # ============================================================
@@ -1307,3 +1281,228 @@ class TestEventsScheduleRecurringForm:
         events = Event.objects.for_manager(m.id)
         assert events.count() == 1
         assert events.first().recurrence_rule in (None, "")
+
+
+# ============================================================
+# Phase 6 D1+D2 — events_detail + events_edit
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestEventsDetail:
+    """GET /events/<id>/ — canonical URL for the Outlook-link contract."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd_d1", display_name="Todd",
+            password_hash="x", email="todd_d1@example.com",
+        )
+        self._login_as(client, "todd_d1@example.com")
+        ev = Event.objects.create(
+            manager_id=m.id, title="My Quarterly", event_type="quarterly_review",
+            scheduled_date=(date.today() + timedelta(days=7)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+            agenda="Discuss roadmap", location="Zoom",
+        )
+        return m, ev
+
+    def test_anonymous_redirects(self, client):
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="x", display_name="X", password_hash="x",
+            email="x@example.com",
+        )
+        ev = Event.objects.create(
+            manager_id=m.id, title="X", event_type="other",
+            scheduled_date=(date.today() + timedelta(days=1)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+        )
+        resp = client.get(f"/events/{ev.id}/")
+        assert resp.status_code == 302
+        assert "/accounts/google/login/" in resp["Location"]
+
+    def test_renders_event_with_copy_link_button(self, client):
+        m, ev = self._setup(client)
+        resp = client.get(f"/events/{ev.id}/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "My Quarterly" in body
+        assert "Discuss roadmap" in body
+        # The copy-link button contains the absolute URL for Outlook paste
+        assert "Copy link for Outlook" in body
+        assert f"/events/{ev.id}/" in body
+
+    def test_cross_tenant_returns_404(self, client):
+        from datetime import date
+        m, _ = self._setup(client)  # Todd
+        m2 = Manager.objects.create(
+            username="other_d1", display_name="Other",
+            password_hash="x", email="other_d1@example.com",
+        )
+        other = Event.objects.create(
+            manager_id=m2.id, title="Other", event_type="other",
+            scheduled_date=date.today().isoformat(),
+            scheduled_time="10:00", status="scheduled",
+        )
+        resp = client.get(f"/events/{other.id}/")
+        assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+class TestEventsEdit:
+    """GET/POST /events/<id>/edit/ — D1 resolution per D2 contract."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd_d2", display_name="Todd",
+            password_hash="x", email="todd_d2@example.com",
+        )
+        self._login_as(client, "todd_d2@example.com")
+        ev = Event.objects.create(
+            manager_id=m.id, title="orig title", event_type="one_on_one",
+            scheduled_date=(date.today() + timedelta(days=7)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+            duration_minutes=30, location="orig location",
+            agenda="orig agenda",
+        )
+        return m, ev
+
+    def test_get_renders_form_with_warning_when_recurring(self, client):
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd_d2r", display_name="Todd",
+            password_hash="x", email="todd_d2r@example.com",
+        )
+        self._login_as(client, "todd_d2r@example.com")
+        # Series child
+        parent = Event.objects.create(
+            manager_id=m.id, title="series", event_type="one_on_one",
+            scheduled_date=(date.today() + timedelta(days=1)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+            recurrence_rule="weekly",
+        )
+        child = Event.objects.create(
+            manager_id=m.id, title="series", event_type="one_on_one",
+            scheduled_date=(date.today() + timedelta(days=8)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+            recurrence_rule="weekly", parent_event=parent,
+        )
+        body = client.get(f"/events/{child.id}/edit/").content.decode()
+        assert "recurring series" in body
+        assert "siblings are unaffected" in body
+
+    def test_post_updates_title_agenda_etc(self, client):
+        from datetime import date, timedelta
+        m, ev = self._setup(client)
+        resp = client.post(f"/events/{ev.id}/edit/", {
+            "event_type": ev.event_type,
+            "title": "new title",
+            "scheduled_date": (date.today() + timedelta(days=7)).isoformat(),
+            "scheduled_time": ev.scheduled_time,
+            "duration_minutes": "45",
+            "location": "new location",
+            "agenda": "new agenda",
+        })
+        assert resp.status_code == 302
+        assert resp["Location"].endswith(f"/events/{ev.id}/")
+        ev.refresh_from_db()
+        assert ev.title == "new title"
+        assert ev.agenda == "new agenda"
+        assert ev.location == "new location"
+        assert ev.duration_minutes == 45
+
+    def test_post_updates_date_and_time(self, client):
+        """Per D2 contract: date/time IS editable (with the warning),
+        not immutable."""
+        from datetime import date, timedelta
+        m, ev = self._setup(client)
+        new_date = (date.today() + timedelta(days=14)).isoformat()
+        client.post(f"/events/{ev.id}/edit/", {
+            "event_type": ev.event_type,
+            "title": ev.title,
+            "scheduled_date": new_date,
+            "scheduled_time": "14:30",
+            "duration_minutes": str(ev.duration_minutes),
+            "location": ev.location,
+            "agenda": ev.agenda,
+        })
+        ev.refresh_from_db()
+        assert ev.scheduled_date == new_date
+        assert ev.scheduled_time == "14:30"
+
+    def test_edit_does_not_propagate_to_recurring_siblings(self, client):
+        """CLAUDE.md: editing one occurrence does NOT propagate to
+        siblings. The edit view operates on the single row."""
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd_d2s", display_name="Todd",
+            password_hash="x", email="todd_d2s@example.com",
+        )
+        self._login_as(client, "todd_d2s@example.com")
+        parent = Event.objects.create(
+            manager_id=m.id, title="series", event_type="one_on_one",
+            scheduled_date=(date.today() + timedelta(days=1)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+            recurrence_rule="weekly",
+        )
+        child_a = Event.objects.create(
+            manager_id=m.id, title="series", event_type="one_on_one",
+            scheduled_date=(date.today() + timedelta(days=8)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+            recurrence_rule="weekly", parent_event=parent,
+        )
+        child_b = Event.objects.create(
+            manager_id=m.id, title="series", event_type="one_on_one",
+            scheduled_date=(date.today() + timedelta(days=15)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+            recurrence_rule="weekly", parent_event=parent,
+        )
+
+        # Edit child_a's title to something different
+        client.post(f"/events/{child_a.id}/edit/", {
+            "event_type": "one_on_one",
+            "title": "child_a only",
+            "scheduled_date": child_a.scheduled_date,
+            "scheduled_time": child_a.scheduled_time,
+            "duration_minutes": "30",
+        })
+
+        child_a.refresh_from_db()
+        child_b.refresh_from_db()
+        parent.refresh_from_db()
+        assert child_a.title == "child_a only"
+        assert child_b.title == "series"  # unchanged
+        assert parent.title == "series"   # unchanged
+
+    def test_cross_tenant_returns_404(self, client):
+        from datetime import date
+        m, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_d2", display_name="Other",
+            password_hash="x", email="other_d2@example.com",
+        )
+        other = Event.objects.create(
+            manager_id=m2.id, title="Other", event_type="other",
+            scheduled_date=date.today().isoformat(),
+            scheduled_time="10:00", status="scheduled",
+        )
+        assert client.get(f"/events/{other.id}/edit/").status_code == 404
+        assert client.post(f"/events/{other.id}/edit/", {}).status_code == 404

@@ -1,12 +1,13 @@
 {% comment %}
 Three-column layout per user spec:
-  | left (time / duration) | center (title, wraps) | right (Complete / Cancel) |
-Delete sits as a smaller tertiary link below the right column — kept
-because it's needed to clean up duplicates, but visually de-emphasized.
+  | left (time / duration) | center (title link, wraps) | right (Edit / Complete / Delete) |
+Cancel was removed per user feedback — functionally redundant with Delete
+once Outlook owns "when" (D2 contract). Title is a link to the event
+detail page (the canonical URL the user pastes into Outlook invites).
 {% endcomment %}
 <div id="event-row-{{ ev.id }}"
      class="grid grid-cols-12 gap-3 px-4 py-3 items-start">
-  {# Left column: start time + duration, stacked #}
+  {# Left: start time + duration #}
   <div class="col-span-2 sm:col-span-2 text-sm text-slate-700">
     <div class="font-medium tabular-nums">{{ ev.scheduled_time }}</div>
     {% if ev.duration_minutes %}
@@ -14,9 +15,11 @@ because it's needed to clean up duplicates, but visually de-emphasized.
     {% endif %}
   </div>
 
-  {# Center column: title (wraps if needed) + meta on a second line #}
+  {# Center: title (link to detail) + meta #}
   <div class="col-span-7 sm:col-span-7 min-w-0">
-    <div class="font-medium break-words">{{ ev.title }}</div>
+    <a href="{% url 'events-detail' ev.id %}" class="font-medium break-words hover:underline">
+      {{ ev.title }}
+    </a>
     {% if ev.team_member or ev.location or ev.event_type %}
       <div class="text-xs text-slate-500 mt-0.5 break-words">
         {{ ev.get_event_type_display|default:ev.event_type }}
@@ -26,8 +29,11 @@ because it's needed to clean up duplicates, but visually de-emphasized.
     {% endif %}
   </div>
 
-  {# Right column: Complete + Cancel stacked; Delete as small tertiary link #}
+  {# Right: Edit / Complete / Delete (Delete tertiary) #}
   <div class="col-span-3 sm:col-span-3 flex flex-col items-end gap-1 text-sm">
+    <a href="{% url 'events-edit' ev.id %}" class="text-slate-700 hover:text-slate-900 underline">
+      Edit
+    </a>
     <button type="button"
             hx-post="{% url 'events-complete' ev.id %}"
             hx-target="#event-row-{{ ev.id }}"
@@ -37,19 +43,10 @@ because it's needed to clean up duplicates, but visually de-emphasized.
       Complete
     </button>
     <button type="button"
-            hx-post="{% url 'events-cancel' ev.id %}"
-            hx-target="#event-row-{{ ev.id }}"
-            hx-swap="outerHTML"
-            hx-confirm="Cancel {{ ev.title }}? Marks it cancelled (kept for history)."
-            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-            class="text-amber-600 hover:text-amber-800 underline">
-      Cancel
-    </button>
-    <button type="button"
             hx-delete="{% url 'events-delete' ev.id %}"
             hx-target="#event-row-{{ ev.id }}"
             hx-swap="outerHTML"
-            hx-confirm="Permanently delete {{ ev.title }}? Use this to clean up duplicates. Cancel keeps history; delete does not."
+            hx-confirm="Permanently delete {{ ev.title }}?"
             hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
             class="text-xs text-slate-400 hover:text-red-600 underline mt-1">
       Delete

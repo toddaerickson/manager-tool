@@ -182,3 +182,74 @@ class EventForm(forms.ModelForm):
             cleaned["until_date"] = None
 
         return cleaned
+
+
+class EventEditForm(forms.ModelForm):
+    """Phase 6 (D1 resolution) — edit an existing event.
+
+    Per the D2 contract (Outlook owns *when*, MT owns *context*),
+    title / agenda / location / duration are MT's domain and edit
+    cleanly. scheduled_date / scheduled_time are editable but the
+    template shows an "Outlook isn't notified" warning.
+
+    Recurrence is intentionally NOT a field here — editing one
+    occurrence in a series does not propagate to siblings (CLAUDE.md).
+    To extend or stop a series, use the schedule flow.
+    """
+
+    scheduled_date = forms.DateField(
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+    scheduled_time = forms.ChoiceField(
+        choices=TIME_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+    )
+    event_type = forms.ChoiceField(
+        choices=EVENT_TYPE_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+    )
+
+    class Meta:
+        model = Event
+        fields = [
+            "title", "event_type",
+            "scheduled_date", "scheduled_time",
+            "team_member", "duration_minutes", "location", "agenda",
+        ]
+        widgets = {
+            "title": forms.TextInput(attrs={"class": _INPUT_CLS}),
+            "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
+            "duration_minutes": forms.NumberInput(attrs={
+                "class": _INPUT_CLS, "min": 5, "step": 5,
+            }),
+            "location": forms.TextInput(attrs={
+                "class": _INPUT_CLS,
+                "placeholder": "Office / meeting link",
+            }),
+            "agenda": forms.Textarea(attrs={"class": _INPUT_CLS, "rows": 4}),
+        }
+
+    def __init__(self, *args, manager_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager_id is not None:
+            self.fields["team_member"].queryset = (
+                TeamMember.objects.active_for_manager(manager_id).order_by("name")
+            )
+            self.fields["team_member"].required = False
+            self.fields["team_member"].empty_label = "(none)"
+        # Pre-populate the native date/time choices from the existing
+        # values (stored as TEXT, roundtrip as strings).
+        if self.instance and self.instance.pk:
+            from datetime import date as _date
+            try:
+                self.initial["scheduled_date"] = _date.fromisoformat(
+                    self.instance.scheduled_date
+                )
+            except (TypeError, ValueError):
+                pass
+            self.initial["scheduled_time"] = self.instance.scheduled_time
+
+    def clean_scheduled_date(self):
+        d = self.cleaned_data["scheduled_date"]
+        return d.isoformat()
+    # scheduled_time is already "HH:MM" string from the ChoiceField.

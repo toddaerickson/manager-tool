@@ -5,7 +5,9 @@ from django.http import HttpResponse, HttpResponseForbidden
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
-from .forms import EventForm, TeamMemberForm
+from django.shortcuts import get_object_or_404
+
+from .forms import EventEditForm, EventForm, TeamMemberForm
 from .models import Event, TeamMember
 from .services.events import create_recurring_events
 
@@ -314,26 +316,6 @@ def events_schedule(request):
 
 @login_required
 @require_http_methods(["POST"])
-def events_cancel(request, event_id: int):
-    """HTMX: set status='cancelled' if currently scheduled. Returns an
-    empty 200 — HTMX hx-target removes the row via outerHTML swap.
-    Cross-tenant or already-non-scheduled returns 404 (audit C1
-    pattern)."""
-    manager, err = _require_manager(request)
-    if err:
-        return err
-    updated = (
-        Event.objects.for_manager(manager.id)
-        .filter(pk=event_id, status="scheduled")
-        .update(status="cancelled")
-    )
-    if updated == 0:
-        return HttpResponse(status=404)
-    return HttpResponse(status=200)
-
-
-@login_required
-@require_http_methods(["POST"])
 def events_complete(request, event_id: int):
     """HTMX: set status='completed'. Notes-on-complete UI deferred to
     a follow-up sub-PR; this PR does status-only."""
@@ -348,6 +330,51 @@ def events_complete(request, event_id: int):
     if updated == 0:
         return HttpResponse(status=404)
     return HttpResponse(status=200)
+
+
+@login_required
+def events_detail(request, event_id: int):
+    """Phase 6 (D2 link contract) — minimal event-detail page. The
+    canonical URL the user pastes into their Outlook invite. Shows
+    title / date / time / participant / agenda / status. Phase 6+
+    fleshes this out with notes, action items, coaching pane.
+
+    Cross-tenant returns 404 (audit C1)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    ev = get_object_or_404(
+        Event.objects.for_manager(manager.id).select_related("team_member"),
+        pk=event_id,
+    )
+    return render(request, "events_detail.html", {"ev": ev})
+
+
+@login_required
+def events_edit(request, event_id: int):
+    """Phase 6 (D1 resolution) — edit any event field. Title / agenda /
+    location / duration / notes are MT's domain and edit cleanly.
+    scheduled_date and scheduled_time are editable but Outlook isn't
+    notified — the template shows a warning banner.
+
+    Per CLAUDE.md: editing one occurrence in a recurring series does
+    NOT propagate to siblings. The edit form operates on the single
+    row regardless of parent_event_id."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    ev = get_object_or_404(
+        Event.objects.for_manager(manager.id),
+        pk=event_id,
+    )
+    if request.method == "POST":
+        form = EventEditForm(request.POST, instance=ev, manager_id=manager.id)
+        if form.is_valid():
+            form.save()
+            return redirect("events-detail", event_id=ev.id)
+    else:
+        form = EventEditForm(instance=ev, manager_id=manager.id)
+    return render(request, "events_edit.html", {"form": form, "ev": ev})
 
 
 @login_required
