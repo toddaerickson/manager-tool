@@ -217,6 +217,14 @@ class Event(models.Model):
 
     objects = TenantManager()
 
+    def __str__(self):
+        # Used by ModelChoiceField in dropdowns (e.g., the To Do form's
+        # "Related event" picker). Without this, options render as
+        # "Event object (1)".
+        date = self.scheduled_date or "?"
+        title = self.title or "(untitled)"
+        return f"{title} ({date})"
+
     class Meta:
         db_table = "events"
         indexes = [
@@ -238,8 +246,15 @@ class ActionItem(models.Model):
     manager_id = models.IntegerField(blank=True, null=True, db_index=True)
     event = models.ForeignKey(Event, models.DO_NOTHING, blank=True, null=True)
     description = models.TextField()
+    # `assignee` stays in DB for back-compat with existing rows but is
+    # no longer exposed in the form — to-dos are the manager's own list,
+    # work entrusted to a direct goes in Delegations. Dropped in Phase 8.
     assignee = models.TextField(blank=True, null=True)
     due_date = models.TextField(blank=True, null=True)
+    # Optional time-of-day for due_date. NULL = date-only ("by end of
+    # day"). Format "HH:MM" — same as Event.scheduled_time. Added Phase
+    # 5.3.1 per user feedback.
+    due_time = models.TextField(blank=True, null=True)
     status = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
     completed_at = models.DateTimeField(blank=True, null=True)

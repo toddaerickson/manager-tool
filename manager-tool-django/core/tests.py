@@ -1616,8 +1616,8 @@ class TestTodosAdd:
         m = self._setup(client)
         resp = client.post("/todos/add/", {
             "description": "Send the report",
-            "assignee": "Me",
             "due_date": "2026-06-01",
+            "due_time": "15:00",
         })
         assert resp.status_code == 200
         items = ActionItem.objects.for_manager(m.id)
@@ -1625,8 +1625,29 @@ class TestTodosAdd:
         i = items.first()
         assert i.description == "Send the report"
         assert i.due_date == "2026-06-01"  # iso text
+        assert i.due_time == "15:00"
         assert i.status == "pending"
         assert i.manager_id == m.id
+
+    def test_create_with_no_due_time_stores_null(self, client):
+        from core.models import ActionItem
+        m = self._setup(client)
+        client.post("/todos/add/", {
+            "description": "No specific time",
+            "due_date": "2026-06-02",
+            "due_time": "",  # "(no time)" sentinel
+        })
+        i = ActionItem.objects.for_manager(m.id).first()
+        assert i.due_time is None
+
+    def test_assignee_field_is_not_in_form(self, client):
+        """Phase 5.3.1 — assignee was removed; ensure the form HTML
+        no longer contains an assignee input."""
+        self._setup(client)
+        body = client.get("/todos/").content.decode()
+        assert 'name="assignee"' not in body
+        # The Due time field IS present
+        assert 'name="due_time"' in body
 
     def test_blank_description_is_validation_error(self, client):
         from core.models import ActionItem
