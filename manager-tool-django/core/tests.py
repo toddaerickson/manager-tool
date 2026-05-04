@@ -842,6 +842,222 @@ class TestEventsCancelComplete:
 
 
 # ============================================================
+# Dedupe fix — events_delete + near-duplicate check
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestEventsDelete:
+    """DELETE /events/<id>/delete/ — hard delete (different from cancel)."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from datetime import date
+        m = Manager.objects.create(
+            username="todd_del", display_name="Todd",
+            password_hash="x", email="todd_del@example.com",
+        )
+        self._login_as(client, "todd_del@example.com")
+        ev = Event.objects.create(
+            manager_id=m.id, title="dupe", event_type="quarterly_review",
+            scheduled_date=date(2026, 5, 29).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+        )
+        return m, ev
+
+    def test_delete_removes_row(self, client):
+        m, ev = self._setup(client)
+        resp = client.delete(f"/events/{ev.id}/delete/")
+        assert resp.status_code == 200
+        assert not Event.objects.filter(pk=ev.id).exists()
+
+    def test_delete_completed_event_works(self, client):
+        """Cancel only works on status='scheduled' — Delete works on
+        any status (used to clean up dupes regardless of state)."""
+        m, ev = self._setup(client)
+        ev.status = "completed"
+        ev.save()
+        resp = client.delete(f"/events/{ev.id}/delete/")
+        assert resp.status_code == 200
+
+    def test_delete_cross_tenant_returns_404(self, client):
+        from datetime import date
+        m, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_del", display_name="Other",
+            password_hash="x", email="other_del@example.com",
+        )
+        other = Event.objects.create(
+            manager_id=m2.id, title="other", event_type="other",
+            scheduled_date=date.today().isoformat(),
+            scheduled_time="10:00", status="scheduled",
+        )
+        resp = client.delete(f"/events/{other.id}/delete/")
+        assert resp.status_code == 404
+        assert Event.objects.filter(pk=other.id).exists()
+
+    def test_delete_parent_leaves_children(self, client):
+        """Recurring-series ON DELETE SET NULL: deleting the parent must
+        not cascade — children survive (their parent_event_id becomes
+        NULL via the FK constraint on PG; on SQLite the FK clause is
+        omitted at create time so the column simply stays referencing a
+        no-longer-existing id, but the children remain)."""
+        from datetime import date
+        from core.services.events import create_recurring_events
+        m, _ = self._setup(client)  # _setup creates one extra event we'll ignore
+        parent = create_recurring_events(
+            manager_id=m.id, title="series",
+            event_type="one_on_one", start_date=date(2026, 7, 1),
+            scheduled_time="10:00", rule="weekly",
+            until_date=date(2026, 7, 22),  # 4 occurrences
+        )
+        children_ids = list(
+            Event.objects.filter(parent_event=parent).values_list("id", flat=True)
+        )
+        assert len(children_ids) == 3
+
+        resp = client.delete(f"/events/{parent.id}/delete/")
+        assert resp.status_code == 200
+        assert not Event.objects.filter(pk=parent.id).exists()
+        # All 3 children survive
+        assert Event.objects.filter(id__in=children_ids).count() == 3
+
+    def test_get_and_post_not_allowed(self, client):
+        m, ev = self._setup(client)
+        assert client.get(f"/events/{ev.id}/delete/").status_code == 405
+        assert client.post(f"/events/{ev.id}/delete/").status_code == 405
+
+
+@pytest.mark.django_db
+class TestEventsScheduleNearDuplicateCheck:
+    """events_schedule rejects near-duplicate POSTs (within 30s) silently
+    with a redirect — defense against double-click + refresh-resubmit."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_dup", display_name="Todd",
+            password_hash="x", email="todd_dup@example.com",
+        )
+        self._login_as(client, "todd_dup@example.com")
+        return m
+
+    def _payload(self, **overrides):
+        from datetime import date, timedelta
+        base = {
+            "event_type": "quarterly_review",
+            "title": "Quarterly Review: PG",
+            "scheduled_date": (date.today() + timedelta(days=7)).isoformat(),
+            "scheduled_time": "10:00",
+            "duration_minutes": "30",
+            "recurrence_rule": "",
+        }
+        base.update(overrides)
+        return base
+
+    def test_first_post_creates_event(self, client):
+        m = self._setup(client)
+        client.post("/events/schedule/", self._payload())
+        assert Event.objects.for_manager(m.id).count() == 1
+
+    def test_second_identical_post_within_window_is_silent_dedupe(self, client):
+        """The bug the user reported: double-clicking Schedule produced
+        duplicate events. The dedupe check rejects the second submit
+        without creating, returning a normal redirect."""
+        m = self._setup(client)
+        client.post("/events/schedule/", self._payload())
+        resp = client.post("/events/schedule/", self._payload())
+        assert resp.status_code == 302
+        assert resp["Location"].endswith("/events/")
+        assert Event.objects.for_manager(m.id).count() == 1, (
+            "second identical POST within window should NOT create another row"
+        )
+
+    def test_different_title_creates_separate_event(self, client):
+        """Dedupe must NOT block legitimate different events at the
+        same slot."""
+        m = self._setup(client)
+        client.post("/events/schedule/", self._payload(title="A"))
+        client.post("/events/schedule/", self._payload(title="B"))
+        assert Event.objects.for_manager(m.id).count() == 2
+
+    def test_different_time_creates_separate_event(self, client):
+        m = self._setup(client)
+        client.post("/events/schedule/", self._payload(scheduled_time="10:00"))
+        client.post("/events/schedule/", self._payload(scheduled_time="11:00"))
+        assert Event.objects.for_manager(m.id).count() == 2
+
+    def test_outside_window_creates_separate_event(self, client):
+        """Past-the-window resubmits succeed — user genuinely meant to
+        schedule the same slot again (rare, but allowed)."""
+        from datetime import timedelta
+        from django.utils import timezone
+        m = self._setup(client)
+        client.post("/events/schedule/", self._payload())
+        # Force the existing row's created_at to be > 30s ago
+        Event.objects.for_manager(m.id).update(
+            created_at=timezone.now() - timedelta(minutes=5),
+        )
+        client.post("/events/schedule/", self._payload())
+        assert Event.objects.for_manager(m.id).count() == 2
+
+    def test_dedupe_applies_to_recurring_too(self, client):
+        """The bug the user actually saw was on a recurring quarterly.
+        Dedupe check runs BEFORE the rule branch, so the second submit
+        of an identical recurring series is also blocked."""
+        from datetime import date, timedelta
+        m = self._setup(client)
+        start = date.today() + timedelta(days=7)
+        payload = self._payload(
+            scheduled_date=start.isoformat(),
+            recurrence_rule="quarterly",
+            until_date=(start + timedelta(days=365)).isoformat(),
+        )
+        client.post("/events/schedule/", payload)
+        first_count = Event.objects.for_manager(m.id).count()
+        assert first_count > 1  # series created
+
+        client.post("/events/schedule/", payload)
+        # No additional events; the second submit was deduped at the parent
+        assert Event.objects.for_manager(m.id).count() == first_count
+
+    def test_cross_tenant_dedupe_not_triggered(self, client):
+        """Manager B's identical event must NOT trigger Manager A's
+        dedupe (and vice versa) — for_manager scoping inside the check."""
+        from datetime import date, timedelta
+        m = self._setup(client)  # Todd
+        m2 = Manager.objects.create(
+            username="other_dup", display_name="Other",
+            password_hash="x", email="other_dup@example.com",
+        )
+        # Other manager already has an identical event (created just now)
+        Event.objects.create(
+            manager_id=m2.id, title="Quarterly Review: PG",
+            event_type="quarterly_review",
+            scheduled_date=(date.today() + timedelta(days=7)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+        )
+        # Todd posts the same thing — must succeed (not dedupe across tenants)
+        client.post("/events/schedule/", self._payload())
+        assert Event.objects.for_manager(m.id).count() == 1
+        assert Event.objects.for_manager(m2.id).count() == 1
+
+
+# ============================================================
 # Phase 5.2b — recurring events
 # ============================================================
 

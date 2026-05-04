@@ -118,6 +118,12 @@ def create_recurring_events(
             f"({len(dates) - 1} > cap {MATERIALIZE_MAX_CHILDREN})"
         )
 
+    # Set created_at explicitly. PG gives the column a DB-level default
+    # but Django doesn't model it, so SQLite (and any read-back without
+    # re-fetch) sees NULL. Pinning here also makes the dedupe check in
+    # views.py treat parent + children as one logical create.
+    from django.utils import timezone
+    now = timezone.now()
     common = dict(
         title=title,
         event_type=event_type,
@@ -129,6 +135,7 @@ def create_recurring_events(
         recurrence_rule=rule,
         team_member=team_member,
         status="scheduled",
+        created_at=now,
     )
     parent = Event.objects.create(
         scheduled_date=dates[0].isoformat(), **common,

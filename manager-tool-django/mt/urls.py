@@ -16,6 +16,7 @@ urlpatterns = [
     path("events/schedule/", core_views.events_schedule, name="events-schedule"),
     path("events/<int:event_id>/cancel/", core_views.events_cancel, name="events-cancel"),
     path("events/<int:event_id>/complete/", core_views.events_complete, name="events-complete"),
+    path("events/<int:event_id>/delete/", core_views.events_delete, name="events-delete"),
     path("sentry-debug/", core_views.sentry_debug, name="sentry-debug"),
     # Force Google-only by short-circuiting allauth's default form. The
     # email/password page exists in allauth but we never want users to
