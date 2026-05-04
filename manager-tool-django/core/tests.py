@@ -1506,3 +1506,261 @@ class TestEventsEdit:
         )
         assert client.get(f"/events/{other.id}/edit/").status_code == 404
         assert client.post(f"/events/{other.id}/edit/", {}).status_code == 404
+
+
+# ============================================================
+# Phase 5.3 — Action items / To Do
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestTodosList:
+    """GET /todos/ — pending + completed sections, overdue indicator."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_t1", display_name="Todd",
+            password_hash="x", email="todd_t1@example.com",
+        )
+        self._login_as(client, "todd_t1@example.com")
+        return m
+
+    def test_anonymous_redirects(self, client):
+        resp = client.get("/todos/")
+        assert resp.status_code == 302
+        assert "/accounts/google/login/" in resp["Location"]
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger@example.com")
+        assert client.get("/todos/").status_code == 403
+
+    def test_empty_state(self, client):
+        m = self._setup(client)
+        body = client.get("/todos/").content.decode()
+        assert "caught up" in body.lower()
+
+    def test_lists_only_own_pending(self, client):
+        from core.models import ActionItem
+        m1 = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_t1", display_name="Other",
+            password_hash="x", email="other_t1@example.com",
+        )
+        ActionItem.objects.create(description="Mine pending", manager_id=m1.id, status="pending")
+        ActionItem.objects.create(description="Other pending", manager_id=m2.id, status="pending")
+        body = client.get("/todos/").content.decode()
+        assert "Mine pending" in body
+        assert "Other pending" not in body
+
+    def test_completed_appears_in_recently_completed(self, client):
+        from datetime import timedelta
+        from django.utils import timezone
+        from core.models import ActionItem
+        m = self._setup(client)
+        ActionItem.objects.create(
+            description="DoneOne", manager_id=m.id,
+            status="completed", completed_at=timezone.now() - timedelta(hours=1),
+        )
+        body = client.get("/todos/").content.decode()
+        assert "Recently completed" in body
+        assert "DoneOne" in body
+
+    def test_overdue_marker(self, client):
+        from datetime import timedelta, date
+        from core.models import ActionItem
+        m = self._setup(client)
+        past = (date.today() - timedelta(days=2)).isoformat()
+        ActionItem.objects.create(
+            description="LateThing", manager_id=m.id,
+            status="pending", due_date=past,
+        )
+        body = client.get("/todos/").content.decode()
+        assert "LateThing" in body
+        assert "overdue" in body.lower()
+
+
+@pytest.mark.django_db
+class TestTodosAdd:
+    """POST /todos/add/ — HTMX endpoint."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_t2", display_name="Todd",
+            password_hash="x", email="todd_t2@example.com",
+        )
+        self._login_as(client, "todd_t2@example.com")
+        return m
+
+    def test_get_not_allowed(self, client):
+        self._setup(client)
+        assert client.get("/todos/add/").status_code == 405
+
+    def test_create_persists_with_correct_manager_id(self, client):
+        from core.models import ActionItem
+        m = self._setup(client)
+        resp = client.post("/todos/add/", {
+            "description": "Send the report",
+            "assignee": "Me",
+            "due_date": "2026-06-01",
+        })
+        assert resp.status_code == 200
+        items = ActionItem.objects.for_manager(m.id)
+        assert items.count() == 1
+        i = items.first()
+        assert i.description == "Send the report"
+        assert i.due_date == "2026-06-01"  # iso text
+        assert i.status == "pending"
+        assert i.manager_id == m.id
+
+    def test_blank_description_is_validation_error(self, client):
+        from core.models import ActionItem
+        self._setup(client)
+        resp = client.post("/todos/add/", {"description": ""})
+        assert resp.status_code == 422
+        assert ActionItem.objects.count() == 0
+
+    def test_other_managers_data_unaffected(self, client):
+        from core.models import ActionItem
+        m1 = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_t2", display_name="Other",
+            password_hash="x", email="other_t2@example.com",
+        )
+        ActionItem.objects.create(description="Other had this", manager_id=m2.id, status="pending")
+        client.post("/todos/add/", {"description": "Mine"})
+        assert ActionItem.objects.for_manager(m1.id).count() == 1
+        assert ActionItem.objects.for_manager(m2.id).count() == 1
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger_t@example.com")
+        resp = client.post("/todos/add/", {"description": "X"})
+        assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+class TestTodosCompleteUncomplete:
+    """POST /todos/<id>/complete/ + /todos/<id>/uncomplete/"""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from core.models import ActionItem
+        m = Manager.objects.create(
+            username="todd_t3", display_name="Todd",
+            password_hash="x", email="todd_t3@example.com",
+        )
+        self._login_as(client, "todd_t3@example.com")
+        ai = ActionItem.objects.create(
+            description="x", manager_id=m.id, status="pending",
+        )
+        return m, ai
+
+    def test_complete_sets_status_and_completed_at(self, client):
+        m, ai = self._setup(client)
+        resp = client.post(f"/todos/{ai.id}/complete/")
+        assert resp.status_code == 200
+        ai.refresh_from_db()
+        assert ai.status == "completed"
+        assert ai.completed_at is not None
+
+    def test_complete_already_completed_returns_404(self, client):
+        m, ai = self._setup(client)
+        ai.status = "completed"
+        ai.save()
+        resp = client.post(f"/todos/{ai.id}/complete/")
+        assert resp.status_code == 404
+
+    def test_complete_cross_tenant_returns_404(self, client):
+        from core.models import ActionItem
+        m, _ = self._setup(client)  # Todd
+        m2 = Manager.objects.create(
+            username="other_t3", display_name="Other",
+            password_hash="x", email="other_t3@example.com",
+        )
+        other = ActionItem.objects.create(
+            description="other", manager_id=m2.id, status="pending",
+        )
+        resp = client.post(f"/todos/{other.id}/complete/")
+        assert resp.status_code == 404
+        other.refresh_from_db()
+        assert other.status == "pending"
+
+    def test_uncomplete_reverts_to_pending(self, client):
+        from django.utils import timezone
+        m, ai = self._setup(client)
+        ai.status = "completed"
+        ai.completed_at = timezone.now()
+        ai.save()
+        resp = client.post(f"/todos/{ai.id}/uncomplete/")
+        assert resp.status_code == 200
+        ai.refresh_from_db()
+        assert ai.status == "pending"
+        assert ai.completed_at is None
+
+    def test_uncomplete_already_pending_returns_404(self, client):
+        m, ai = self._setup(client)  # ai is already pending
+        resp = client.post(f"/todos/{ai.id}/uncomplete/")
+        assert resp.status_code == 404
+
+
+@pytest.mark.django_db
+class TestTodosDelete:
+    """DELETE /todos/<id>/delete/ — hard delete."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def test_delete_removes_row(self, client):
+        from core.models import ActionItem
+        m = Manager.objects.create(
+            username="todd_t4", display_name="Todd",
+            password_hash="x", email="todd_t4@example.com",
+        )
+        self._login_as(client, "todd_t4@example.com")
+        ai = ActionItem.objects.create(description="X", manager_id=m.id)
+        resp = client.delete(f"/todos/{ai.id}/delete/")
+        assert resp.status_code == 200
+        assert not ActionItem.objects.filter(pk=ai.id).exists()
+
+    def test_delete_cross_tenant_returns_404(self, client):
+        from core.models import ActionItem
+        m1 = Manager.objects.create(
+            username="todd_t4b", display_name="Todd",
+            password_hash="x", email="todd_t4b@example.com",
+        )
+        self._login_as(client, "todd_t4b@example.com")
+        m2 = Manager.objects.create(
+            username="other_t4", display_name="Other",
+            password_hash="x", email="other_t4@example.com",
+        )
+        other = ActionItem.objects.create(description="other", manager_id=m2.id)
+        resp = client.delete(f"/todos/{other.id}/delete/")
+        assert resp.status_code == 404
+        assert ActionItem.objects.filter(pk=other.id).exists()

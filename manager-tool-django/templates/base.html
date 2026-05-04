@@ -33,7 +33,8 @@
           <div class="block px-2 py-1.5 text-slate-500">Manager Journal <span class="text-xs">(Phase 5)</span></div>
           <a href="{% url 'events-schedule' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-schedule' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Schedule Event</a>
-          <div class="block px-2 py-1.5 text-slate-500">To Do <span class="text-xs">(Phase 5)</span></div>
+          <a href="{% url 'todos' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'todos' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">To Do</a>
           <div class="block px-2 py-1.5 text-slate-500">Decisions <span class="text-xs">(Phase 5)</span></div>
         </div>
 

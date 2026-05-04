@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}To Do — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">To Do</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      Your task list — work you're holding. (Work entrusted to a direct lives in Delegations.)
+    </p>
+  </header>
+
+  <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not pending %}open{% endif %}>
+    <summary class="px-6 py-3 cursor-pointer select-none font-medium">Add to-do</summary>
+    <div id="todo-form-wrap" class="px-6 pb-6">
+      {% include "_partials/todo_form.html" %}
+    </div>
+  </details>
+
+  <div id="todo-list">
+    {% include "_partials/todo_list.html" %}
+  </div>
+
+  <div id="todo-completed" class="mt-8">
+    {% include "_partials/todo_completed_list.html" %}
+  </div>
+</div>
+{% endblock %}

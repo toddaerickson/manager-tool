@@ -1,0 +1,8 @@
+{% comment %}
+Returned by todos-complete on success.
+- HTMX target is the row; outerHTML swap removes it from the pending list
+- OOB swap refreshes the Recently completed section
+{% endcomment %}
+<div id="todo-completed" hx-swap-oob="true">
+  {% include "_partials/todo_completed_list.html" %}
+</div>

@@ -253,3 +253,54 @@ class EventEditForm(forms.ModelForm):
         d = self.cleaned_data["scheduled_date"]
         return d.isoformat()
     # scheduled_time is already "HH:MM" string from the ChoiceField.
+
+
+# Phase 5.3 — Action items / "To Do"
+# action_items.status CHECK constraint allows 'pending', 'in_progress',
+# 'completed'. The form only exposes the create path (status defaults
+# to 'pending' on the model); transitions happen via HTMX endpoints.
+
+from .models import ActionItem  # noqa: E402
+
+
+class ActionItemForm(forms.ModelForm):
+    description = forms.CharField(
+        widget=forms.TextInput(attrs={
+            "class": _INPUT_CLS,
+            "placeholder": "What you need to do",
+        }),
+    )
+    assignee = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            "class": _INPUT_CLS,
+            "placeholder": "Assignee (default: yourself)",
+        }),
+    )
+    due_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+
+    class Meta:
+        model = ActionItem
+        fields = ["description", "assignee", "due_date", "event"]
+        widgets = {
+            "event": forms.Select(attrs={"class": _INPUT_CLS}),
+        }
+
+    def __init__(self, *args, manager_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Scope event dropdown to this manager's events; bare
+        # ModelChoiceField would leak across tenants.
+        if manager_id is not None:
+            self.fields["event"].queryset = (
+                Event.objects.for_manager(manager_id)
+                .order_by("-scheduled_date", "-scheduled_time")
+            )
+            self.fields["event"].required = False
+            self.fields["event"].empty_label = "(none)"
+
+    def clean_due_date(self):
+        d = self.cleaned_data.get("due_date")
+        return d.isoformat() if d else None

@@ -1,0 +1,10 @@
+{% comment %}
+Returned by todos-add on success.
+- Replaces #todo-form-wrap with the cleared form
+- Out-of-band swap updates #todo-list with the new row
+{% endcomment %}
+{% include "_partials/todo_form.html" %}
+
+<div id="todo-list" hx-swap-oob="true">
+  {% include "_partials/todo_list.html" %}
+</div>
