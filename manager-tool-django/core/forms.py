@@ -263,28 +263,34 @@ class EventEditForm(forms.ModelForm):
 from .models import ActionItem  # noqa: E402
 
 
+# Phase 5.3.1 — "(no time)" is the empty-string sentinel for due_time.
+TIME_CHOICES_OPTIONAL = [("", "(no time)")] + TIME_CHOICES
+
+
 class ActionItemForm(forms.ModelForm):
+    """The to-do list is the manager's own work. assignee was removed
+    per user feedback: work entrusted to a direct lives in Delegations,
+    not here, so an assignee field added confusion."""
+
     description = forms.CharField(
         widget=forms.TextInput(attrs={
             "class": _INPUT_CLS,
             "placeholder": "What you need to do",
         }),
     )
-    assignee = forms.CharField(
-        required=False,
-        widget=forms.TextInput(attrs={
-            "class": _INPUT_CLS,
-            "placeholder": "Assignee (default: yourself)",
-        }),
-    )
     due_date = forms.DateField(
         required=False,
         widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
     )
+    due_time = forms.ChoiceField(
+        choices=TIME_CHOICES_OPTIONAL,
+        required=False,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+    )
 
     class Meta:
         model = ActionItem
-        fields = ["description", "assignee", "due_date", "event"]
+        fields = ["description", "due_date", "due_time", "event"]
         widgets = {
             "event": forms.Select(attrs={"class": _INPUT_CLS}),
         }
@@ -304,3 +310,8 @@ class ActionItemForm(forms.ModelForm):
     def clean_due_date(self):
         d = self.cleaned_data.get("due_date")
         return d.isoformat() if d else None
+
+    def clean_due_time(self):
+        # ChoiceField returns the raw value; "" sentinel maps to NULL.
+        t = self.cleaned_data.get("due_time")
+        return t or None

@@ -1,6 +1,9 @@
 {% comment %}
 HTMX form: posts to todos-add. Errors swap back here, success replaces
 both #todo-form-wrap and #todo-list (oob).
+
+Phase 5.3.1: assignee removed (this is the manager's own list);
+due_time dropdown added next to due_date.
 {% endcomment %}
 <form id="todo-form"
       hx-post="{% url 'todos-add' %}"
@@ -17,12 +20,12 @@ both #todo-form-wrap and #todo-list (oob).
 
   <div class="grid grid-cols-2 gap-3">
     <div>
-      <label class="block text-sm font-medium text-slate-700">Assignee</label>
-      {{ form.assignee }}
-    </div>
-    <div>
       <label class="block text-sm font-medium text-slate-700">Due date</label>
       {{ form.due_date }}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Due time</label>
+      {{ form.due_time }}
     </div>
   </div>
 
