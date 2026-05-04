@@ -217,6 +217,14 @@ class Event(models.Model):
 
     objects = TenantManager()
 
+    def __str__(self):
+        # Used by ModelChoiceField in dropdowns (e.g., the To Do form's
+        # "Related event" picker). Without this, options render as
+        # "Event object (1)".
+        date = self.scheduled_date or "?"
+        title = self.title or "(untitled)"
+        return f"{title} ({date})"
+
     class Meta:
         db_table = "events"
         indexes = [
