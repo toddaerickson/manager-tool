@@ -1,21 +1,46 @@
-# CLAUDE.md — Project Intelligence
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
-Manager Tool is a Streamlit-based management coaching journal with a dual-mode database (SQLite local / Neon PostgreSQL). The primary interface is `web_app.py`. The wisdom library contains 620 management ideas from 23 books.
+Manager Tool is a management coaching journal with a dual-mode database (SQLite local / Neon PostgreSQL). The wisdom library contains 620 management ideas from 23 books.
+
+**Two apps live in this repo:**
+- **Streamlit app** (`web_app.py`) — the current production app. **FROZEN**: no new features, no new `_MIGRATIONS` entries. Bug fixes only.
+- **Django app** (`manager-tool-django/`) — the active migration target. All new development goes here. See `MIGRATION_STATUS.md` for phase progress and `MIGRATION_PLAN.md` for the full plan.
+
+## Module Map (Streamlit app)
+| File | Role |
+|------|------|
+| `web_app.py` (2.9k lines) | Streamlit UI — all page functions, sidebar nav, `_DISPATCH` table |
+| `database.py` (3.8k lines) | Dual-backend DB layer — helpers, schema, migrations, encryption |
+| `auth.py` | Session validation, login/logout, rate limiting |
+| `coaching.py` | Anthropic API integration for coaching suggestions |
+| `calendar_service.py` | ICS export and calendar integration |
+| `templates.py` | Email and notification templates |
+| `gui.py` | Shared Streamlit widget helpers |
+| `manager_tool.py` | Legacy CLI (not used in production) |
 
 ## Development Commands
 ```bash
-# Run locally
+# Run Streamlit app locally
 streamlit run web_app.py
 
-# Run tests (SQLite-only — see "Testing gotchas" below)
+# Run tests — SQLite-only (see "Testing gotchas" below)
 python -m pytest tests/ -v
+
+# Run a single test file or test
+python -m pytest tests/test_database.py -v
+python -m pytest tests/test_database.py::test_name -v
 
 # Verify syntax
 python -c "import py_compile; py_compile.compile('web_app.py', doraise=True)"
 
 # Smoke test against real Postgres (requires DATABASE_URL)
 python scripts/smoke_pg.py
+
+# Install dev dependencies
+pip install -r requirements-dev.txt
 ```
 
 ## Sidebar IA (3 sections)

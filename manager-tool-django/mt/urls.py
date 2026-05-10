@@ -23,6 +23,9 @@ urlpatterns = [
     path("todos/<int:todo_id>/complete/", core_views.todos_complete, name="todos-complete"),
     path("todos/<int:todo_id>/uncomplete/", core_views.todos_uncomplete, name="todos-uncomplete"),
     path("todos/<int:todo_id>/delete/", core_views.todos_delete, name="todos-delete"),
+    path("journal/", core_views.journal_list, name="journal"),
+    path("journal/add/", core_views.journal_add, name="journal-add"),
+    path("journal/<int:entry_id>/edit/", core_views.journal_edit, name="journal-edit"),
     path("sentry-debug/", core_views.sentry_debug, name="sentry-debug"),
     # Force Google-only by short-circuiting allauth's default form. The
     # email/password page exists in allauth but we never want users to

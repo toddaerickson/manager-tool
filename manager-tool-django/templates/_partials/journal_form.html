@@ -1,0 +1,67 @@
+{% comment %}
+HTMX form: posts to journal-add. If existing_id is set, updates that
+entry instead of creating a new one. Errors swap back here; success
+replaces both #journal-form-wrap and #journal-list (oob).
+{% endcomment %}
+<form id="journal-form"
+      hx-post="{% url 'journal-add' %}"
+      hx-target="#journal-form-wrap"
+      hx-swap="innerHTML"
+      class="space-y-3">
+  {% csrf_token %}
+  {% if existing_id %}
+    <input type="hidden" name="existing_id" value="{{ existing_id }}">
+  {% endif %}
+
+  <div class="grid grid-cols-2 gap-3">
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Date *</label>
+      {{ form.entry_date }}
+      {% if form.entry_date.errors %}<p class="text-xs text-red-600 mt-1">{{ form.entry_date.errors.0 }}</p>{% endif %}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Type</label>
+      {{ form.entry_type }}
+    </div>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">What's on your mind?</label>
+    {{ form.content }}
+    {% if form.content.errors %}<p class="text-xs text-red-600 mt-1">{{ form.content.errors.0 }}</p>{% endif %}
+  </div>
+
+  <div class="grid grid-cols-2 gap-3">
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Mood</label>
+      {{ form.mood }}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Energy</label>
+      {{ form.energy }}
+    </div>
+  </div>
+
+  <details class="text-sm">
+    <summary class="cursor-pointer text-slate-600 select-none">Private notes</summary>
+    <div class="mt-2">
+      {{ form.private_notes }}
+      <p class="text-xs text-slate-500 mt-1">What are you working on about yourself? (Not included in coaching context.)</p>
+    </div>
+  </details>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">Tags</label>
+    {{ form.tags }}
+  </div>
+
+  {% if form.non_field_errors %}
+    <div class="text-xs text-red-600">{{ form.non_field_errors.0 }}</div>
+  {% endif %}
+
+  <div class="flex justify-end">
+    <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">
+      {% if existing_id %}Update entry{% else %}Save entry{% endif %}
+    </button>
+  </div>
+</form>

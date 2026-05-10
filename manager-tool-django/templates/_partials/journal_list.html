@@ -1,0 +1,35 @@
+{% if entries %}
+<h2 class="text-lg font-semibold mb-3">Recent entries</h2>
+<div class="space-y-3">
+  {% for e in entries %}
+  <div id="journal-row-{{ e.id }}" class="bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-4">
+    <div class="flex items-center justify-between mb-1">
+      <div class="text-sm font-medium text-slate-800">
+        {{ e.entry_date }}
+        <span class="text-xs text-slate-500 ml-1">{{ e.entry_type }}</span>
+      </div>
+      <div class="flex items-center gap-3 text-sm">
+        {% if e.mood %}
+          <span title="Mood {{ e.mood }}">{% with emoji=mood_emoji|default_if_none:"" %}{% for k,v in mood_emoji.items %}{% if k == e.mood %}{{ v }}{% endif %}{% endfor %}{% endwith %} {{ e.mood }}/5</span>
+        {% endif %}
+        {% if e.energy %}
+          <span title="Energy {{ e.energy }}">{% for k,v in energy_emoji.items %}{% if k == e.energy %}{{ v }}{% endif %}{% endfor %} {{ e.energy }}/5</span>
+        {% endif %}
+        <a href="{% url 'journal-edit' e.id %}"
+           class="text-xs text-slate-600 hover:text-slate-900 underline">Edit</a>
+      </div>
+    </div>
+    {% if e.content %}
+      <p class="text-sm text-slate-700 whitespace-pre-line">{{ e.content|truncatewords:40 }}</p>
+    {% endif %}
+    {% if e.tags %}
+      <p class="text-xs text-slate-500 mt-1">{{ e.tags }}</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
+  No journal entries yet. Write your first one above.
+</div>
+{% endif %}
