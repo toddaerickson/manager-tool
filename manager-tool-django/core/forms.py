@@ -127,7 +127,7 @@ class EventForm(forms.ModelForm):
             "title": forms.TextInput(attrs={"class": _INPUT_CLS}),
             "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
             "duration_minutes": forms.NumberInput(attrs={
-                "class": _INPUT_CLS, "min": 5, "step": 5,
+                "class": _INPUT_CLS, "min": 15, "step": 15,
             }),
             "location": forms.TextInput(attrs={
                 "class": _INPUT_CLS,
@@ -138,16 +138,30 @@ class EventForm(forms.ModelForm):
 
     def __init__(self, *args, manager_id=None, **kwargs):
         super().__init__(*args, **kwargs)
-        # Scope team_member dropdown to this manager's roster — bare
-        # ModelChoiceField would show all rows across tenants.
+        # Replace the ModelChoiceField with a plain ChoiceField so we can
+        # add "(none)" and "All team members" sentinels.
         if manager_id is not None:
-            self.fields["team_member"].queryset = (
-                TeamMember.objects.active_for_manager(manager_id).order_by("name")
+            members = TeamMember.objects.active_for_manager(manager_id).order_by("name")
+            choices = [("", "(none)"), ("all", "All team members")]
+            choices += [(str(m.id), m.name) for m in members]
+            self.fields["team_member"] = forms.ChoiceField(
+                choices=choices,
+                required=False,
+                widget=forms.Select(attrs={"class": _INPUT_CLS}),
             )
-            self.fields["team_member"].required = False
-            self.fields["team_member"].empty_label = "(none)"
         if not self.initial.get("duration_minutes"):
             self.fields["duration_minutes"].initial = 30
+
+    def clean_team_member(self):
+        val = self.cleaned_data.get("team_member")
+        if val == "all":
+            return "all"  # sentinel — view handles expansion
+        if val:
+            try:
+                return TeamMember.objects.get(pk=int(val))
+            except (TeamMember.DoesNotExist, ValueError):
+                raise forms.ValidationError("Invalid team member.")
+        return None
 
     def clean_scheduled_date(self):
         d = self.cleaned_data["scheduled_date"]
@@ -223,7 +237,7 @@ class EventEditForm(forms.ModelForm):
             "title": forms.TextInput(attrs={"class": _INPUT_CLS}),
             "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
             "duration_minutes": forms.NumberInput(attrs={
-                "class": _INPUT_CLS, "min": 5, "step": 5,
+                "class": _INPUT_CLS, "min": 15, "step": 15,
             }),
             "location": forms.TextInput(attrs={
                 "class": _INPUT_CLS,

@@ -278,54 +278,62 @@ def events_schedule(request):
         form = EventForm(request.POST, manager_id=manager.id)
         if form.is_valid():
             rule = form.cleaned_data.get("recurrence_rule") or ""
+            tm_value = form.cleaned_data.get("team_member")
 
-            if _recently_created_dup(
-                manager_id=manager.id,
-                scheduled_date=form.cleaned_data["scheduled_date"],
-                scheduled_time=form.cleaned_data["scheduled_time"],
-                title=form.cleaned_data["title"],
-                team_member=form.cleaned_data.get("team_member"),
-            ):
-                # Silent dedupe — the user already got their event; no
-                # error message needed (would be confusing if it was a
-                # genuine refresh on slow network).
-                return redirect("events-upcoming")
+            # Expand "all" into the list of active team members.
+            if tm_value == "all":
+                target_members = list(
+                    TeamMember.objects.active_for_manager(manager.id).order_by("name")
+                )
+            else:
+                target_members = [tm_value]  # single member or None
 
-            if rule:
-                # cleaned_data["scheduled_date"] is iso string after
-                # clean_scheduled_date; the service expects a date.
-                sched_d = date.fromisoformat(form.cleaned_data["scheduled_date"])
-                until = form.cleaned_data.get("until_date")
-                try:
-                    create_recurring_events(
+            for tm in target_members:
+                if _recently_created_dup(
+                    manager_id=manager.id,
+                    scheduled_date=form.cleaned_data["scheduled_date"],
+                    scheduled_time=form.cleaned_data["scheduled_time"],
+                    title=form.cleaned_data["title"],
+                    team_member=tm,
+                ):
+                    continue  # skip this member's duplicate
+
+                if rule:
+                    sched_d = date.fromisoformat(form.cleaned_data["scheduled_date"])
+                    until = form.cleaned_data.get("until_date")
+                    try:
+                        create_recurring_events(
+                            manager_id=manager.id,
+                            title=form.cleaned_data["title"],
+                            event_type=form.cleaned_data["event_type"],
+                            start_date=sched_d,
+                            scheduled_time=form.cleaned_data["scheduled_time"],
+                            rule=rule,
+                            until_date=until,
+                            team_member=tm,
+                            duration_minutes=form.cleaned_data.get("duration_minutes") or 30,
+                            location=form.cleaned_data.get("location"),
+                            agenda=form.cleaned_data.get("agenda"),
+                        )
+                    except (TypeError, ValueError) as e:
+                        form.add_error(None, str(e))
+                        break
+                else:
+                    from django.utils import timezone
+                    Event.objects.create(
                         manager_id=manager.id,
                         title=form.cleaned_data["title"],
                         event_type=form.cleaned_data["event_type"],
-                        start_date=sched_d,
+                        scheduled_date=form.cleaned_data["scheduled_date"],
                         scheduled_time=form.cleaned_data["scheduled_time"],
-                        rule=rule,
-                        until_date=until,
-                        team_member=form.cleaned_data.get("team_member"),
+                        team_member=tm,
                         duration_minutes=form.cleaned_data.get("duration_minutes") or 30,
                         location=form.cleaned_data.get("location"),
                         agenda=form.cleaned_data.get("agenda"),
+                        status="scheduled",
+                        created_at=timezone.now(),
                     )
-                except (TypeError, ValueError) as e:
-                    form.add_error(None, str(e))
-                else:
-                    return redirect("events-upcoming")
-            else:
-                from django.utils import timezone
-                ev = form.save(commit=False)
-                ev.manager_id = manager.id
-                ev.status = "scheduled"
-                # Populate created_at explicitly. Schema gives PG a
-                # DB-level DEFAULT CURRENT_TIMESTAMP, but Django models
-                # don't know that, so SQLite (and any code path that
-                # reads back the value before re-fetching) sees NULL.
-                # Setting here makes the dedupe check backend-agnostic.
-                ev.created_at = timezone.now()
-                ev.save()
+            if not form.errors:
                 return redirect("events-upcoming")
     else:
         form = EventForm(manager_id=manager.id)
