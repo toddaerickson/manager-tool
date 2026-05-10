@@ -1583,7 +1583,13 @@ def history(request):
     if err:
         return err
     mid = manager.id
-    member_id = request.GET.get("member")
+    member_raw = request.GET.get("member", "")
+    member_id = None
+    if member_raw:
+        try:
+            member_id = int(member_raw)
+        except ValueError:
+            pass  # ignore bad input, show unfiltered
     members = TeamMember.objects.active_for_manager(mid).order_by("name")
 
     timeline = []
@@ -1679,14 +1685,28 @@ def history(request):
             "member": n.team_member.name if n.team_member else None,
         })
 
-    # Sort by date descending, cap at 100
+    # Sort by date descending
     timeline.sort(key=lambda x: x["date"] or "", reverse=True)
-    timeline = timeline[:100]
+
+    # Paginate (50 per page)
+    PAGE_SIZE = 50
+    try:
+        page = max(1, int(request.GET.get("page", 1)))
+    except ValueError:
+        page = 1
+    total = len(timeline)
+    start = (page - 1) * PAGE_SIZE
+    timeline = timeline[start:start + PAGE_SIZE]
+    has_next = start + PAGE_SIZE < total
+    has_prev = page > 1
 
     return render(request, "history.html", {
         "timeline": timeline,
         "members": members,
         "selected_member": member_id,
+        "page": page,
+        "has_next": has_next,
+        "has_prev": has_prev,
     })
 
 
@@ -1702,6 +1722,7 @@ def resources(request):
     entries = _load_wisdom()
     daily = get_daily_wisdom()
     query = request.GET.get("q", "").strip()
+    section_filter = request.GET.get("section", "").strip()
 
     # Count sections
     sections = {}
@@ -1710,7 +1731,13 @@ def resources(request):
             sections[sec] = len(indices)
 
     results = []
-    if query:
+    if section_filter:
+        # Exact section match (#15)
+        for e in entries:
+            if e["section"] == section_filter:
+                results.append(e)
+        query = ""  # don't show search UI state for section browse
+    elif query:
         q_lower = query.lower()
         for e in entries:
             if q_lower in e["text"].lower() or q_lower in e["section"].lower():
@@ -1721,6 +1748,7 @@ def resources(request):
     return render(request, "resources.html", {
         "daily": daily,
         "query": query,
+        "section_filter": section_filter,
         "results": results,
         "sections": sections,
         "wisdom_count": len(entries),

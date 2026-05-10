@@ -28,7 +28,10 @@
   </form>
 
   {# ---- Results / Full library ---- #}
-  {% if query %}
+  {% if section_filter %}
+  <h2 class="text-lg font-semibold mb-3">{{ section_filter }} ({{ results|length }})</h2>
+  <a href="{% url 'resources' %}" class="text-sm text-slate-500 hover:text-slate-700 underline mb-3 inline-block">&larr; All sections</a>
+  {% elif query %}
   <h2 class="text-lg font-semibold mb-3">Results for "{{ query }}" ({{ results|length }})</h2>
   {% endif %}
 
@@ -49,11 +52,11 @@
   {% endif %}
 
   {# ---- Section index (when not searching) ---- #}
-  {% if not query and sections %}
+  {% if not query and not section_filter and sections %}
   <h2 class="text-lg font-semibold mb-3">Browse by book</h2>
   <div class="space-y-1">
     {% for sec, count in sections.items %}
-    <a href="?q={{ sec|urlencode }}"
+    <a href="?section={{ sec|urlencode }}"
        class="block bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50">
       {{ sec }} <span class="text-xs text-slate-400 ml-1">({{ count }})</span>
     </a>
