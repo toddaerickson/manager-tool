@@ -10,11 +10,10 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 
 ## TL;DR
 
-- Phases 0–4 done. Django app deployed to Render with Google OAuth, Sentry, real PG smoke job in CI.
-- **Phase 5 complete** — all 8 sub-pages ported + dashboard panels + Feedback page. 183 Django tests.
-- Phase 6 partial — D1 (event edit) and D2 (Outlook source-of-truth contract + per-event link page) shipped early. SMTP invite + crons still pending.
-- **Streamlit is FROZEN.** No new entries to `_MIGRATIONS` in `database.py`; no feature work on `web_app.py`. All new development is in `manager-tool-django/`.
-- **Render auto-deploys main.** `render.yaml` drives it; the build step runs `manage.py migrate` so Django migrations apply automatically on push.
+- **Phases 0–6 done.** Django app is feature-complete: all pages ported, coaching wired, crons running, analytics/history/resources live.
+- **Phase 7 in progress** — cutover prep. Data-validation diff script written (`scripts/cutover_diff.py`). Checklist below.
+- **Streamlit is FROZEN.** No new entries to `_MIGRATIONS` in `database.py`; no feature work on `web_app.py`.
+- **Render auto-deploys main.** `render.yaml` drives it; the build step runs `manage.py migrate`.
 
 ## Phase progress
 
@@ -22,64 +21,56 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 |---|---|---|
 | 0 — Prereqs | done | Devcontainer (Debian 12, Python 3.11, Node 22, gh) |
 | 1 — Scaffold | done | Django 5.1, allauth, htmx, Sentry |
-| 2 — Schema/models | done | All 22 tables modeled; `migrate --fake-initial` clean; smoke job runs against `postgres:16` in CI |
-| 3 — Auth | done | Google OAuth via allauth; bridge middleware maps `request.user.email` → existing `Manager` row → `request.manager` |
+| 2 — Schema/models | done | All 22 tables modeled; `migrate --fake-initial` clean |
+| 3 — Auth | done | Google OAuth via allauth; bridge middleware |
 | 4 — Render deploy | done | Live; Sentry receiving |
-| **5 — Page port** | **done** | All sub-pages ported (see below) |
-| 6 — Background jobs | **done** | Calendar service, coaching service, weekly digest, crons. PRs #71, #73. |
-| 7 — Cutover | not started | Phase 7 of plan |
+| 5 — Page port | done | All sub-pages + dashboard + feedback + analytics/history/resources |
+| 6 — Background jobs | done | Calendar + coaching + digest cron + purge cron |
+| **7 — Cutover** | **in progress** | Diff script written; checklist below |
 | 8 — Decommission | not started | Drop Streamlit, drop legacy auth tables |
 
-### Phase 5 sub-page progress
+## Phase 7 — Cutover checklist
 
-- **5.1 Team Members** — list, HTMX add, soft-delete with 30-day undo, restore. PRs #51–#53.
-- **5.2 Events** — one-off + recurring + dedupe + delete + detail + edit + "Copy link for Outlook". PRs #54–#60.
-- **5.3 Action Items / "To Do"** — list + overdue + add + complete/uncomplete + delete. PRs #61–#63.
-- **5.4 Journal entries** — daily/weekly/reflection, mood+energy, streak counter, HTMX add/edit. PR #65.
-- **Dashboard panels** — 5 stat cards + upcoming events list + overdue to-dos list. PR #66.
-- **5.5 Goals + Career Dev** — Goals CRUD with status; Skills, Dev Plans + Milestones, Career Conversations. PR #67.
-- **5.6 Delegations + Decisions + 1:1 Notes** — delegation tracking with autonomy levels; decision log with review dates; running notes with broadcast. PR #68.
-- **5.6b Feedback** — SBI framework (Situation, Behavior, Impact) per team member. PR #69.
-- **5.7 Settings** — display name, timezone. PR #70.
+- [x] Django app is feature-complete vs Streamlit (all sidebar pages live)
+- [x] Send invite button on event detail page (D2 Option C)
+- [x] All test cases pass in CI (229+ Django tests + PG smoke)
+- [x] Data-validation diff script written (`scripts/cutover_diff.py`)
+- [ ] Render service on paid plan ($7/mo starter — already configured in render.yaml)
+- [ ] Run `cutover_diff.py` against Neon dev branch (proves the script works)
+- [ ] Run `cutover_diff.py` against production Neon (go/no-go signal)
+- [ ] Backup taken AND test-restored to throwaway Neon branch
+- [ ] Rollback rehearsed: Django writes readable by Streamlit and vice versa
+- [ ] Point Django's `DATABASE_URL` at production Neon
+- [ ] Run `manage.py migrate` against prod (should be no-op with --fake-initial)
+- [ ] Smoke-write: create and delete a scratch journal entry via Django shell to confirm write path
+- [ ] Update DNS / Render custom domain to point to Django
+- [ ] Verify login + write + read on production
+- [ ] **Rollback window: 30 minutes.** If any write fails within 30 min of DNS flip, revert DNS and re-enable Streamlit.
+- [ ] Stop Streamlit deploy (don't delete code yet)
 
-### Phase 6 shipped early
+## Phase 5 sub-page progress (all done)
 
-- D1 — Edit events (Outlook contract: full edit with date/time warning) — PR #60
-- D2 — Outlook source-of-truth contract + per-event detail page + "Copy link for Outlook" — PR #60
+- **5.1** Team Members — PRs #51–#53
+- **5.2** Events — PRs #54–#60
+- **5.3** Action Items — PRs #61–#63
+- **5.4** Journal entries — PR #65
+- **Dashboard panels** — PR #66
+- **5.5** Goals + Career Dev — PR #67
+- **5.6** Delegations + Decisions + 1:1 Notes — PR #68
+- **5.6b** Feedback — PR #69
+- **5.7** Settings — PR #70
 
-### Phase 6 shipped (PRs #71, #72, #73)
+## Phase 6 (all done)
 
-- Calendar service port (`core/services/calendar.py`) — ICS + SMTP invites with M3 sanitization
-- Coaching service port (`coaching/services.py`) — Anthropic API + wisdom matcher, wired to journal page
-- Weekly digest service + `send_weekly_digests` management command + Render cron (Mon 9 AM ET)
-- `purge_deleted_team_members` Render cron (daily 1 AM ET)
-- Shared email module (`core/services/email.py`) + journal streak utility (`core/services/journal.py`)
-- D3 audit logging + D4 HTMX consistency — both closed
-- **Still pending:** "Send invite" button on event detail page (D2 Option C UI trigger)
-
-## Remaining sidebar placeholders
-
-Three reference pages are not numbered sub-pages in the plan. They are aggregation/reporting views:
-- **Analytics** — goal completion rates, feedback ratios, delegation metrics
-- **History** — timeline of all activity across entities
-- **Resources** — wisdom library (620 management ideas from 23 books)
-
-These can be built post-Phase 5 or during Phase 6/7 prep.
+- Calendar service, coaching service, weekly digest, purge cron — PRs #71–#73
+- Analytics, History, Resources pages — PRs #71–#73
+- D1–D4 architecture deficits — all closed
+- Send invite button — shipped in events_detail.html
 
 ## Architecture deficits
 
-`manager-tool-django/ARCHITECTURE_DEFICITS.md` is the long-lived doc for design questions / known gaps.
-
-- D1 (no event edit) → closed
-- D2 (Outlook source-of-truth contract) → closed
-- D3 (audit logging for HR data mutations) → closed (AuditLog model + log_mutation calls on all HR-sensitive views)
-- D4 (HTMX consistency on Career Dev page) → closed (career dev content partial + hx-post on all forms)
-
-## Suggested next moves
-
-1. **"Send invite" button** on event detail page (D2 Option C UI trigger).
-2. **Analytics/History/Resources** pages (additive, not blocking).
-3. **Phase 7 — Cutover prep**: data-validation diff script, rollback rehearsal, telemetry for adoption tracking.
+All closed:
+- D1 (event edit), D2 (Outlook contract), D3 (audit logging), D4 (HTMX consistency)
 
 ## Anchor data
 
