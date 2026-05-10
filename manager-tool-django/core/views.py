@@ -407,11 +407,53 @@ def dashboard_overview(request):
     Mirrors the Streamlit `_dashboard_bundle` pattern (one cached call per
     manager_id) but with lazy loading so the page shell renders before
     any DB work happens.
+
+    Panels use data from completed Phase 5 pages: team members, events,
+    todos, journal. Coaching/AI panels deferred to Phase 6.
     """
     if request.manager is None:
         return HttpResponseForbidden("No manager profile.")
+    mid = request.manager.id
+    today_iso = date.today().isoformat()
+    week_end_iso = (date.today() + timedelta(days=7)).isoformat()
+
+    # Quick stats
+    team_count = TeamMember.objects.active_for_manager(mid).count()
+    upcoming_events = (
+        Event.objects.for_manager(mid)
+        .filter(status="scheduled", scheduled_date__gte=today_iso)
+    )
+    upcoming_count = upcoming_events.filter(
+        scheduled_date__lt=week_end_iso,
+    ).count()
+    pending_todos = (
+        ActionItem.objects.for_manager(mid)
+        .filter(status="pending")
+    )
+    pending_count = pending_todos.count()
+    overdue_todos = pending_todos.filter(
+        due_date__isnull=False, due_date__lt=today_iso,
+    )
+    overdue_count = overdue_todos.count()
+    streak = _journal_streak(mid, today_iso)
+
+    # Lists for detail sections
+    next_events = (
+        upcoming_events
+        .select_related("team_member")
+        .order_by("scheduled_date", "scheduled_time")[:5]
+    )
+    overdue_list = overdue_todos.order_by("due_date")[:5]
+
     ctx = {
-        "team_member_count": TeamMember.objects.for_manager(request.manager.id).count(),
+        "team_member_count": team_count,
+        "upcoming_count": upcoming_count,
+        "pending_count": pending_count,
+        "overdue_count": overdue_count,
+        "streak": streak,
+        "next_events": next_events,
+        "overdue_list": overdue_list,
+        "today_iso": today_iso,
     }
     return render(request, "_partials/dashboard_overview.html", ctx)
 
