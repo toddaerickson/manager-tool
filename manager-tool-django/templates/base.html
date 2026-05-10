@@ -46,7 +46,8 @@
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'notes' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">1:1 Notes</a>
           <a href="{% url 'delegations' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'delegations' or request.resolver_match.url_name == 'delegations-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Delegations</a>
-          <div class="block px-2 py-1.5 text-slate-500">Feedback <span class="text-xs">(Phase 5)</span></div>
+          <a href="{% url 'feedback' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'feedback' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Feedback</a>
           <a href="{% url 'goals' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'goals' or request.resolver_match.url_name == 'goals-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Goals</a>
           <a href="{% url 'career-dev' %}"

@@ -21,6 +21,7 @@ from core.models import (
     Delegation,
     DevelopmentPlan,
     Event,
+    Feedback,
     Goal,
     JournalEntry,
     Manager,
@@ -2975,3 +2976,94 @@ class TestNotes:
         resp = client.get(f"/notes/?member={tm.id}")
         assert b"Alice specific" in resp.content
         assert b"Broadcast note" in resp.content
+
+
+# ============================================================
+# Phase 5.6b — Feedback
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestFeedback:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_fb1", display_name="Todd",
+            password_hash="x", email="todd_fb1@example.com",
+        )
+        self._login_as(client, "todd_fb1@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_page_loads(self, client):
+        self._setup(client)
+        assert client.get("/feedback/").status_code == 200
+        assert b"Feedback" in client.get("/feedback/").content
+
+    def test_create_persists(self, client):
+        m, tm = self._setup(client)
+        resp = client.post("/feedback/add/", {
+            "team_member": tm.id,
+            "feedback_type": "positive",
+            "situation": "In the standup",
+            "behavior": "Gave clear status update",
+            "impact": "Saved 10 min of follow-up",
+        })
+        assert resp.status_code == 302
+        fbs = Feedback.objects.for_manager(m.id)
+        assert fbs.count() == 1
+        f = fbs.first()
+        assert f.feedback_type == "positive"
+        assert f.situation == "In the standup"
+        assert f.manager_id == m.id
+
+    def test_missing_team_member_returns_422(self, client):
+        self._setup(client)
+        resp = client.post("/feedback/add/", {
+            "feedback_type": "positive",
+            "situation": "In the standup",
+        })
+        assert resp.status_code == 422
+
+    def test_delete_removes(self, client):
+        m, tm = self._setup(client)
+        f = Feedback.objects.create(
+            team_member=tm, feedback_type="positive",
+            manager_id=m.id,
+        )
+        resp = client.delete(f"/feedback/{f.id}/delete/")
+        assert resp.status_code == 200
+        assert not Feedback.objects.filter(pk=f.id).exists()
+
+    def test_cross_tenant_delete_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_fb1", display_name="Other",
+            password_hash="x", email="other_fb1@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        f = Feedback.objects.create(
+            team_member=tm2, feedback_type="constructive",
+            manager_id=m2.id,
+        )
+        assert client.delete(f"/feedback/{f.id}/delete/").status_code == 404
+        assert Feedback.objects.filter(pk=f.id).exists()
+
+    def test_cross_tenant_list_hidden(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_fb1b", display_name="Other",
+            password_hash="x", email="other_fb1b@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        Feedback.objects.create(
+            team_member=tm2, feedback_type="positive",
+            situation="Secret feedback", manager_id=m2.id,
+        )
+        resp = client.get("/feedback/")
+        assert b"Secret feedback" not in resp.content
