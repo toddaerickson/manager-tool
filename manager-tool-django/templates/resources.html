@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Resources — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Resources</h1>
+    <p class="text-sm text-slate-500 mt-1">{{ wisdom_count }} management ideas from {{ section_count }} books.</p>
+  </header>
+
+  {# ---- Daily wisdom ---- #}
+  <div class="bg-indigo-50 border border-indigo-200 rounded-lg px-5 py-4 mb-8">
+    <div class="text-xs text-indigo-500 uppercase tracking-wider mb-1">Today's wisdom (#{{ daily.number }})</div>
+    <p class="text-sm text-indigo-900">{{ daily.text }}</p>
+    <p class="text-xs text-indigo-600 mt-1">— {{ daily.section }}</p>
+  </div>
+
+  {# ---- Search ---- #}
+  <form method="get" class="mb-6 flex items-end gap-3">
+    <div class="flex-1">
+      <label class="block text-sm font-medium text-slate-700 mb-1">Search wisdom library</label>
+      <input type="text" name="q" value="{{ query|default:'' }}" placeholder="feedback, delegation, trust..."
+             class="w-full text-sm border border-slate-300 rounded px-3 py-2">
+    </div>
+    <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">Search</button>
+    {% if query %}<a href="{% url 'resources' %}" class="text-sm text-slate-500 hover:text-slate-700 underline">Clear</a>{% endif %}
+  </form>
+
+  {# ---- Results / Full library ---- #}
+  {% if query %}
+  <h2 class="text-lg font-semibold mb-3">Results for "{{ query }}" ({{ results|length }})</h2>
+  {% endif %}
+
+  {% if results %}
+  <div class="space-y-2">
+    {% for w in results %}
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3">
+      <div class="flex items-start justify-between gap-2">
+        <p class="text-sm text-slate-800">{{ w.text }}</p>
+        <span class="text-xs text-slate-400 shrink-0">#{{ w.number }}</span>
+      </div>
+      <p class="text-xs text-slate-500 mt-1">{{ w.section }}</p>
+    </div>
+    {% endfor %}
+  </div>
+  {% elif query %}
+  <p class="text-sm text-slate-400 py-4">No results for "{{ query }}".</p>
+  {% endif %}
+
+  {# ---- Section index (when not searching) ---- #}
+  {% if not query and sections %}
+  <h2 class="text-lg font-semibold mb-3">Browse by book</h2>
+  <div class="space-y-1">
+    {% for sec, count in sections.items %}
+    <a href="?q={{ sec|urlencode }}"
+       class="block bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50">
+      {{ sec }} <span class="text-xs text-slate-400 ml-1">({{ count }})</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

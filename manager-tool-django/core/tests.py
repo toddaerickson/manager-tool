@@ -3391,3 +3391,104 @@ class TestAuditLogging:
         log_mutation(m2.id, "create", "Goal", 2, "M2's goal")
         assert AuditLog.objects.for_manager(m1.id).count() == 1
         assert AuditLog.objects.for_manager(m2.id).count() == 1
+
+
+# ============================================================
+# Reference pages — Analytics, History, Resources
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestReferencePages:
+    """Basic smoke tests for the three reference pages."""
+
+    def _setup(self, client):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username="ref@example.com", email="ref@example.com", password="x",
+        )
+        m = Manager.objects.create(
+            username="ref_mgr", display_name="Ref Manager",
+            password_hash="h", email="ref@example.com",
+        )
+        client.force_login(u)
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_analytics_renders(self, client):
+        self._setup(client)
+        resp = client.get("/analytics/")
+        assert resp.status_code == 200
+        assert b"Analytics" in resp.content
+
+    def test_analytics_shows_team_count(self, client):
+        m, _ = self._setup(client)
+        resp = client.get("/analytics/")
+        assert b"1" in resp.content  # 1 team member
+
+    def test_history_renders(self, client):
+        self._setup(client)
+        resp = client.get("/history/")
+        assert resp.status_code == 200
+        assert b"History" in resp.content
+
+    def test_history_shows_events(self, client):
+        m, tm = self._setup(client)
+        Event.objects.create(
+            manager_id=m.id, title="Test Meeting",
+            event_type="one_on_one", team_member=tm,
+            scheduled_date="2026-05-10", scheduled_time="10:00",
+            status="scheduled",
+        )
+        resp = client.get("/history/")
+        assert b"Test Meeting" in resp.content
+
+    def test_history_filters_by_member(self, client):
+        m, tm = self._setup(client)
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m.id)
+        Event.objects.create(
+            manager_id=m.id, title="Alice Meeting",
+            event_type="one_on_one", team_member=tm,
+            scheduled_date="2026-05-10", scheduled_time="10:00",
+            status="scheduled",
+        )
+        Event.objects.create(
+            manager_id=m.id, title="Bob Meeting",
+            event_type="one_on_one", team_member=tm2,
+            scheduled_date="2026-05-10", scheduled_time="11:00",
+            status="scheduled",
+        )
+        resp = client.get(f"/history/?member={tm.id}")
+        assert b"Alice Meeting" in resp.content
+        assert b"Bob Meeting" not in resp.content
+
+    def test_resources_renders(self, client):
+        self._setup(client)
+        resp = client.get("/resources/")
+        assert resp.status_code == 200
+        assert b"Resources" in resp.content
+        assert b"wisdom" in resp.content.lower()
+
+    def test_resources_search(self, client):
+        self._setup(client)
+        resp = client.get("/resources/?q=feedback")
+        assert resp.status_code == 200
+        assert b"feedback" in resp.content.lower()
+
+    def test_cross_tenant_analytics_403(self, client):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username="stranger@example.com", email="stranger@example.com", password="x",
+        )
+        client.force_login(u)
+        resp = client.get("/analytics/")
+        assert resp.status_code == 403
+
+    def test_cross_tenant_history_403(self, client):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username="stranger2@example.com", email="stranger2@example.com", password="x",
+        )
+        client.force_login(u)
+        resp = client.get("/history/")
+        assert resp.status_code == 403

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}History — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">History</h1>
+    <p class="text-sm text-slate-500 mt-1">Cross-entity timeline of all activity.</p>
+  </header>
+
+  <div class="flex items-center gap-3 mb-6">
+    <label class="text-sm text-slate-600">Filter by member:</label>
+    <select onchange="window.location='?member='+this.value"
+            class="text-sm border border-slate-300 rounded px-2 py-1">
+      <option value="">All members</option>
+      {% for m in members %}
+        <option value="{{ m.id }}" {% if selected_member == m.id|stringformat:"d" %}selected{% endif %}>{{ m.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  {% if timeline %}
+  <div class="space-y-2">
+    {% for item in timeline %}
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3 flex items-start gap-3">
+      <div class="text-lg mt-0.5">
+        {% if item.type == "event" %}&#128197;{% elif item.type == "feedback" %}&#128172;{% elif item.type == "journal" %}&#128221;{% elif item.type == "delegation" %}&#128203;{% elif item.type == "decision" %}&#9878;{% elif item.type == "goal" %}&#127919;{% elif item.type == "note" %}&#128221;{% else %}&#128196;{% endif %}
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-medium text-slate-800 truncate">{{ item.title }}</span>
+          <span class="text-xs text-slate-500 tabular-nums shrink-0 ml-2">{{ item.date }}</span>
+        </div>
+        {% if item.detail %}
+        <p class="text-sm text-slate-600 mt-0.5 truncate">{{ item.detail }}</p>
+        {% endif %}
+        <span class="text-xs text-slate-400">{{ item.type|capfirst }}{% if item.member %} · {{ item.member }}{% endif %}</span>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
+    No activity recorded yet.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
