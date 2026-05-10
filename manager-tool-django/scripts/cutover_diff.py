@@ -98,18 +98,31 @@ def get_active_manager_ids(conn):
 
 def raw_count(conn, table, manager_id):
     """Count rows in a table for a specific manager_id via raw SQL.
-    Uses psycopg.sql.Identifier to safely quote the table name."""
-    with conn.cursor() as cur:
-        query = psql.SQL("SELECT COUNT(*) FROM {} WHERE manager_id = %s").format(
-            psql.Identifier(table)
-        )
-        cur.execute(query, (manager_id,))
-        return cur.fetchone()[0]
+    Uses psycopg.sql.Identifier to safely quote the table name.
+    Returns None if the table doesn't exist (Django-only tables like
+    audit_log won't exist on production until migrate runs)."""
+    try:
+        with conn.cursor() as cur:
+            query = psql.SQL("SELECT COUNT(*) FROM {} WHERE manager_id = %s").format(
+                psql.Identifier(table)
+            )
+            cur.execute(query, (manager_id,))
+            return cur.fetchone()[0]
+    except psycopg.errors.UndefinedTable:
+        conn.rollback()  # clear the error state
+        return None
 
 
 def orm_count(model, manager_id):
-    """Count rows via Django ORM's TenantManager."""
-    return model.objects.for_manager(manager_id).count()
+    """Count rows via Django ORM's TenantManager.
+    Returns None if the table doesn't exist yet."""
+    try:
+        return model.objects.for_manager(manager_id).count()
+    except Exception:
+        # Table doesn't exist — Django migration hasn't run on this DB
+        from django.db import connection
+        connection.ensure_connection()  # reset after error
+        return None
 
 
 def run_diff():
@@ -138,11 +151,16 @@ def run_diff():
             raw = raw_count(conn, table, manager_id)
             orm = orm_count(model, manager_id)
             check_count += 1
-            status = "OK" if raw == orm else "DRIFT"
-            if raw != orm:
+            if raw is None or orm is None:
+                # Table doesn't exist in DB yet (Django-only, created by migrate)
+                status = "SKIP"
+                print(f"  SKIP:  {table:25s}  (table not in DB — will be created by migrate)")
+            elif raw != orm:
+                status = "DRIFT"
                 print(f"  DRIFT: {table:25s}  raw={raw}  orm={orm}")
                 drift_count += 1
             else:
+                status = "OK"
                 print(f"  OK:    {table:25s}  count={raw}")
             if raw == 0 and orm == 0:
                 zero_tables.add(table)
