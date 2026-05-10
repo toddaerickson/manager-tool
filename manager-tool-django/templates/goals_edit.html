@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Goal — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Edit Goal</h1>
+    <p class="text-sm text-slate-500 mt-1">{{ goal.team_member.name }} — {{ goal.quarter }}</p>
+  </header>
+
+  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
+    <form method="post" class="space-y-3">
+      {% csrf_token %}
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Team member *</label>
+          {{ form.team_member }}
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Quarter</label>
+          {{ form.quarter }}
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Goal description *</label>
+        {{ form.description }}
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Key results</label>
+        {{ form.key_results }}
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Target date</label>
+          {{ form.target_date }}
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Status</label>
+          {{ form.status }}
+        </div>
+      </div>
+
+      <div class="flex items-center justify-between pt-2">
+        <a href="{% url 'goals' %}" class="text-sm text-slate-600 hover:text-slate-900 underline">Back to goals</a>
+        <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">
+          Save changes
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

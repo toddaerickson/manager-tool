@@ -16,10 +16,15 @@ import pytest
 from coaching.models import CoachSuggestion
 from core.models import (
     ActionItem,
+    CareerConversation,
     Decision,
+    DevelopmentPlan,
     Event,
+    Goal,
     JournalEntry,
     Manager,
+    Milestone,
+    Skill,
     TeamMember,
 )
 
@@ -2212,3 +2217,471 @@ class TestJournalStreak:
         )
         resp = client.get("/journal/")
         assert b"1-day streak" in resp.content
+
+
+# ============================================================
+# Phase 5.5 — Goals
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestGoalsList:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_g1", display_name="Todd",
+            password_hash="x", email="todd_g1@example.com",
+        )
+        self._login_as(client, "todd_g1@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_page_loads(self, client):
+        self._setup(client)
+        resp = client.get("/goals/")
+        assert resp.status_code == 200
+        assert b"Goals" in resp.content
+
+    def test_shows_goals_for_manager(self, client):
+        m, tm = self._setup(client)
+        Goal.objects.create(
+            team_member=tm, quarter="Q2 2026", description="Ship feature",
+            manager_id=m.id, status="in_progress",
+        )
+        resp = client.get("/goals/")
+        assert b"Ship feature" in resp.content
+
+    def test_cross_tenant_goals_hidden(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_g1", display_name="Other",
+            password_hash="x", email="other_g1@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        Goal.objects.create(
+            team_member=tm2, quarter="Q2 2026", description="Secret goal",
+            manager_id=m2.id,
+        )
+        resp = client.get("/goals/")
+        assert b"Secret goal" not in resp.content
+
+
+@pytest.mark.django_db
+class TestGoalsAdd:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_g2", display_name="Todd",
+            password_hash="x", email="todd_g2@example.com",
+        )
+        self._login_as(client, "todd_g2@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_create_persists(self, client):
+        m, tm = self._setup(client)
+        resp = client.post("/goals/add/", {
+            "team_member": tm.id,
+            "quarter": "Q2 2026",
+            "description": "Improve code review",
+            "key_results": "Review 3 PRs/week",
+            "status": "not_started",
+        })
+        assert resp.status_code == 200
+        goals = Goal.objects.for_manager(m.id)
+        assert goals.count() == 1
+        g = goals.first()
+        assert g.description == "Improve code review"
+        assert g.manager_id == m.id
+
+    def test_missing_description_returns_422(self, client):
+        m, tm = self._setup(client)
+        resp = client.post("/goals/add/", {
+            "team_member": tm.id,
+            "quarter": "Q2 2026",
+            "status": "not_started",
+        })
+        assert resp.status_code == 422
+
+    def test_get_not_allowed(self, client):
+        self._setup(client)
+        assert client.get("/goals/add/").status_code == 405
+
+
+@pytest.mark.django_db
+class TestGoalsEdit:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_g3", display_name="Todd",
+            password_hash="x", email="todd_g3@example.com",
+        )
+        self._login_as(client, "todd_g3@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        g = Goal.objects.create(
+            team_member=tm, quarter="Q2 2026", description="Original",
+            manager_id=m.id, status="not_started",
+        )
+        return m, tm, g
+
+    def test_get_loads_form(self, client):
+        _, _, g = self._setup(client)
+        resp = client.get(f"/goals/{g.id}/edit/")
+        assert resp.status_code == 200
+        assert b"Original" in resp.content
+
+    def test_post_updates_and_redirects(self, client):
+        _, tm, g = self._setup(client)
+        resp = client.post(f"/goals/{g.id}/edit/", {
+            "team_member": tm.id,
+            "quarter": "Q2 2026",
+            "description": "Updated goal",
+            "status": "met",
+        })
+        assert resp.status_code == 302
+        g.refresh_from_db()
+        assert g.description == "Updated goal"
+        assert g.status == "met"
+
+    def test_cross_tenant_returns_404(self, client):
+        m1, _, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_g3", display_name="Other",
+            password_hash="x", email="other_g3@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        other = Goal.objects.create(
+            team_member=tm2, quarter="Q1", description="Secret",
+            manager_id=m2.id,
+        )
+        assert client.get(f"/goals/{other.id}/edit/").status_code == 404
+
+
+@pytest.mark.django_db
+class TestGoalsDelete:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def test_delete_removes_row(self, client):
+        m = Manager.objects.create(
+            username="todd_g4", display_name="Todd",
+            password_hash="x", email="todd_g4@example.com",
+        )
+        self._login_as(client, "todd_g4@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        g = Goal.objects.create(
+            team_member=tm, quarter="Q1", description="X",
+            manager_id=m.id,
+        )
+        resp = client.delete(f"/goals/{g.id}/delete/")
+        assert resp.status_code == 200
+        assert not Goal.objects.filter(pk=g.id).exists()
+
+    def test_cross_tenant_returns_404(self, client):
+        m1 = Manager.objects.create(
+            username="todd_g4b", display_name="Todd",
+            password_hash="x", email="todd_g4b@example.com",
+        )
+        self._login_as(client, "todd_g4b@example.com")
+        m2 = Manager.objects.create(
+            username="other_g4", display_name="Other",
+            password_hash="x", email="other_g4@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        other = Goal.objects.create(
+            team_member=tm2, quarter="Q1", description="X",
+            manager_id=m2.id,
+        )
+        assert client.delete(f"/goals/{other.id}/delete/").status_code == 404
+        assert Goal.objects.filter(pk=other.id).exists()
+
+
+# ============================================================
+# Phase 5.5 — Career Development
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestCareerDevPage:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_c1", display_name="Todd",
+            password_hash="x", email="todd_c1@example.com",
+        )
+        self._login_as(client, "todd_c1@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_page_loads(self, client):
+        self._setup(client)
+        resp = client.get("/career/")
+        assert resp.status_code == 200
+        assert b"Career Development" in resp.content
+
+    def test_shows_skills(self, client):
+        m, tm = self._setup(client)
+        Skill.objects.create(
+            team_member=tm, skill_name="Public speaking",
+            proficiency="developing", manager_id=m.id,
+        )
+        resp = client.get("/career/")
+        assert b"Public speaking" in resp.content
+
+    def test_shows_plans_with_milestones(self, client):
+        m, tm = self._setup(client)
+        plan = DevelopmentPlan.objects.create(
+            team_member=tm, title="Leadership track",
+            manager_id=m.id, status="active",
+        )
+        Milestone.objects.create(
+            plan=plan, description="Complete course",
+            manager_id=m.id, completed=0,
+        )
+        resp = client.get("/career/")
+        assert b"Leadership track" in resp.content
+        assert b"Complete course" in resp.content
+
+    def test_cross_tenant_data_hidden(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_c1", display_name="Other",
+            password_hash="x", email="other_c1@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        Skill.objects.create(
+            team_member=tm2, skill_name="Secret skill",
+            manager_id=m2.id,
+        )
+        resp = client.get("/career/")
+        assert b"Secret skill" not in resp.content
+
+
+@pytest.mark.django_db
+class TestSkillsAdd:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_s1", display_name="Todd",
+            password_hash="x", email="todd_s1@example.com",
+        )
+        self._login_as(client, "todd_s1@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_create_persists(self, client):
+        m, tm = self._setup(client)
+        resp = client.post("/career/skills/add/", {
+            "team_member": tm.id,
+            "skill_name": "Python",
+            "proficiency": "proficient",
+            "is_strength": "on",
+        })
+        assert resp.status_code == 302
+        skills = Skill.objects.for_manager(m.id)
+        assert skills.count() == 1
+        s = skills.first()
+        assert s.skill_name == "Python"
+        assert s.is_strength == 1
+        assert s.is_growth_area == 0
+
+    def test_delete_removes(self, client):
+        m, tm = self._setup(client)
+        s = Skill.objects.create(
+            team_member=tm, skill_name="X", manager_id=m.id,
+        )
+        resp = client.delete(f"/career/skills/{s.id}/delete/")
+        assert resp.status_code == 200
+        assert not Skill.objects.filter(pk=s.id).exists()
+
+    def test_cross_tenant_delete_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_s1", display_name="Other",
+            password_hash="x", email="other_s1@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        s = Skill.objects.create(
+            team_member=tm2, skill_name="Secret", manager_id=m2.id,
+        )
+        resp = client.delete(f"/career/skills/{s.id}/delete/")
+        assert resp.status_code == 404
+        assert Skill.objects.filter(pk=s.id).exists()
+
+
+@pytest.mark.django_db
+class TestPlansAndMilestones:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_p1", display_name="Todd",
+            password_hash="x", email="todd_p1@example.com",
+        )
+        self._login_as(client, "todd_p1@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_create_plan(self, client):
+        m, tm = self._setup(client)
+        resp = client.post("/career/plans/add/", {
+            "team_member": tm.id,
+            "title": "Leadership",
+            "status": "active",
+        })
+        assert resp.status_code == 302
+        assert DevelopmentPlan.objects.for_manager(m.id).count() == 1
+
+    def test_update_plan_status(self, client):
+        m, tm = self._setup(client)
+        plan = DevelopmentPlan.objects.create(
+            team_member=tm, title="X", manager_id=m.id, status="active",
+        )
+        resp = client.post(f"/career/plans/{plan.id}/status/", {"status": "completed"})
+        assert resp.status_code == 302
+        plan.refresh_from_db()
+        assert plan.status == "completed"
+
+    def test_add_milestone(self, client):
+        m, tm = self._setup(client)
+        plan = DevelopmentPlan.objects.create(
+            team_member=tm, title="X", manager_id=m.id, status="active",
+        )
+        resp = client.post(f"/career/plans/{plan.id}/milestones/add/", {
+            "description": "Read book",
+        })
+        assert resp.status_code == 302
+        assert Milestone.objects.for_manager(m.id).count() == 1
+        ms = Milestone.objects.first()
+        assert ms.completed == 0
+
+    def test_complete_milestone(self, client):
+        m, tm = self._setup(client)
+        plan = DevelopmentPlan.objects.create(
+            team_member=tm, title="X", manager_id=m.id, status="active",
+        )
+        ms = Milestone.objects.create(
+            plan=plan, description="Read book",
+            manager_id=m.id, completed=0,
+        )
+        resp = client.post(f"/career/milestones/{ms.id}/complete/")
+        assert resp.status_code == 302
+        ms.refresh_from_db()
+        assert ms.completed == 1
+        assert ms.completed_at is not None
+
+    def test_cross_tenant_plan_status_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_p1", display_name="Other",
+            password_hash="x", email="other_p1@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        plan = DevelopmentPlan.objects.create(
+            team_member=tm2, title="X", manager_id=m2.id, status="active",
+        )
+        resp = client.post(f"/career/plans/{plan.id}/status/", {"status": "completed"})
+        assert resp.status_code == 404
+        plan.refresh_from_db()
+        assert plan.status == "active"
+
+    def test_cross_tenant_milestone_add_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_p1b", display_name="Other",
+            password_hash="x", email="other_p1b@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        plan = DevelopmentPlan.objects.create(
+            team_member=tm2, title="X", manager_id=m2.id, status="active",
+        )
+        resp = client.post(f"/career/plans/{plan.id}/milestones/add/", {
+            "description": "Hacked milestone",
+        })
+        assert resp.status_code == 404
+        assert Milestone.objects.count() == 0
+
+    def test_cross_tenant_milestone_complete_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_p1c", display_name="Other",
+            password_hash="x", email="other_p1c@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        plan = DevelopmentPlan.objects.create(
+            team_member=tm2, title="X", manager_id=m2.id, status="active",
+        )
+        ms = Milestone.objects.create(
+            plan=plan, description="Other's milestone",
+            manager_id=m2.id, completed=0,
+        )
+        resp = client.post(f"/career/milestones/{ms.id}/complete/")
+        assert resp.status_code == 404
+        ms.refresh_from_db()
+        assert ms.completed == 0
+
+
+@pytest.mark.django_db
+class TestConvosAdd:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_cv1", display_name="Todd",
+            password_hash="x", email="todd_cv1@example.com",
+        )
+        self._login_as(client, "todd_cv1@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_create_persists(self, client):
+        m, tm = self._setup(client)
+        resp = client.post("/career/convos/add/", {
+            "team_member": tm.id,
+            "conversation_date": "2026-05-09",
+            "topic": "Career path",
+            "notes": "Discussed IC vs management",
+            "next_steps": "Shadow a team lead",
+        })
+        assert resp.status_code == 302
+        convos = CareerConversation.objects.for_manager(m.id)
+        assert convos.count() == 1
+        c = convos.first()
+        assert c.topic == "Career path"
+        assert c.conversation_date == "2026-05-09"
