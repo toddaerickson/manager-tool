@@ -40,6 +40,19 @@
     </div>
     {% endfor %}
   </div>
+  {% if has_prev or has_next %}
+  <div class="mt-4 flex items-center justify-between">
+    {% if has_prev %}
+    <a href="?page={{ page|add:"-1" }}{% if selected_member %}&member={{ selected_member }}{% endif %}"
+       class="text-sm text-slate-600 hover:text-slate-900 underline">&larr; Newer</a>
+    {% else %}<span></span>{% endif %}
+    <span class="text-xs text-slate-500">Page {{ page }}</span>
+    {% if has_next %}
+    <a href="?page={{ page|add:"1" }}{% if selected_member %}&member={{ selected_member }}{% endif %}"
+       class="text-sm text-slate-600 hover:text-slate-900 underline">Older &rarr;</a>
+    {% else %}<span></span>{% endif %}
+  </div>
+  {% endif %}
   {% else %}
   <div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
     No activity recorded yet.
