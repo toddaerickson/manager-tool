@@ -18,6 +18,7 @@ urlpatterns = [
     path("events/<int:event_id>/edit/", core_views.events_edit, name="events-edit"),
     path("events/<int:event_id>/complete/", core_views.events_complete, name="events-complete"),
     path("events/<int:event_id>/delete/", core_views.events_delete, name="events-delete"),
+    path("events/<int:event_id>/invite/", core_views.events_send_invite, name="events-invite"),
     path("todos/", core_views.todos_list, name="todos"),
     path("todos/add/", core_views.todos_add, name="todos-add"),
     path("todos/<int:todo_id>/complete/", core_views.todos_complete, name="todos-complete"),

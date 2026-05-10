@@ -419,6 +419,40 @@ def events_delete(request, event_id: int):
 
 
 @login_required
+@require_http_methods(["POST"])
+def events_send_invite(request, event_id: int):
+    """D2 Option C — send an RFC 5545 calendar invite for a 1-on-1 event.
+
+    Only works when the event has a team_member with an email address
+    and the manager has SMTP configured."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    ev = get_object_or_404(
+        Event.objects.for_manager(manager.id).select_related("team_member"),
+        pk=event_id,
+    )
+    if not ev.team_member or not ev.team_member.email:
+        return render(request, "events_detail.html", {
+            "ev": ev,
+            "invite_error": "No email address for this team member.",
+        })
+    from core.services.calendar import send_calendar_invite
+    success, message = send_calendar_invite(
+        ev, ev.team_member.email, ev.team_member.name,
+        manager_id=manager.id,
+    )
+    if success:
+        Event.objects.filter(pk=ev.id).update(calendar_invite_sent=1)
+        ev.refresh_from_db()
+    return render(request, "events_detail.html", {
+        "ev": ev,
+        "invite_success": message if success else None,
+        "invite_error": message if not success else None,
+    })
+
+
+@login_required
 def dashboard_overview(request):
     """HTMX partial — returns the overview panel HTML fragment.
 
