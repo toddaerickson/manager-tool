@@ -22,26 +22,74 @@ Manager Tool is a management coaching journal with a dual-mode database (SQLite 
 | `manager_tool.py` | Legacy CLI (not used in production) |
 
 ## Development Commands
+
+### Django app (active development)
+
 ```bash
-# Run Streamlit app locally
+cd manager-tool-django
+
+# Run dev server
+.venv/bin/python manage.py runserver
+
+# Run tests (SQLite in-memory, via settings_test.py)
+.venv/bin/pytest -v
+.venv/bin/pytest core/tests.py -v
+.venv/bin/pytest core/tests.py::TestClassName::test_name -v
+
+# PG smoke test (requires DATABASE_URL)
+DATABASE_URL=postgresql://... .venv/bin/python scripts/smoke_pg_django.py
+
+# Django migrations
+.venv/bin/python manage.py makemigrations
+.venv/bin/python manage.py migrate
+
+# Install deps
+pip install -r requirements.txt
+```
+
+### Streamlit app (frozen — bug fixes only)
+
+```bash
+# Run locally
 streamlit run web_app.py
 
-# Run tests — SQLite-only (see "Testing gotchas" below)
+# Run tests (SQLite-only)
 python -m pytest tests/ -v
-
-# Run a single test file or test
-python -m pytest tests/test_database.py -v
 python -m pytest tests/test_database.py::test_name -v
 
-# Verify syntax
-python -c "import py_compile; py_compile.compile('web_app.py', doraise=True)"
-
-# Smoke test against real Postgres (requires DATABASE_URL)
+# PG smoke test (requires DATABASE_URL)
 python scripts/smoke_pg.py
 
 # Install dev dependencies
 pip install -r requirements-dev.txt
 ```
+
+## Django App Architecture (`manager-tool-django/`)
+
+### Stack
+
+Django 5.1 + django-allauth (Google OAuth) + django-htmx + Tailwind CSS. Deployed on Render via `render.yaml`. PG via Neon.
+
+### Project layout
+
+- `mt/` — Django project: settings, urls, wsgi. `settings_test.py` overrides DB to SQLite `:memory:` for pytest.
+- `core/` — Single Django app: models, views, forms, middleware, services, management commands.
+- `coaching/` — Anthropic API integration (not yet ported from Streamlit).
+- `templates/` — Full-page templates. `_partials/` — HTMX fragment templates (swapped via `hx-target`).
+- `scripts/smoke_pg_django.py` — PG smoke test (mirrors Streamlit's `scripts/smoke_pg.py`).
+
+### Tenant isolation
+
+- `TenantManager` (`core/managers.py`) — custom manager on all tenant-scoped models. Views must call `.objects.for_manager(request.manager.id)` instead of `.objects.all()`. Raises `ValueError` if `manager_id` is None.
+- `ManagerBridgeMiddleware` (`core/middleware.py`) — maps allauth's `request.user.email` to the existing `Manager` row and sets `request.manager`. Views check `request.manager is None` → 403.
+
+### View pattern
+
+All views are function-based in `core/views.py`. Every view that touches tenant data is `@login_required` and gates on `request.manager`. HTMX requests return partials from `_partials/`; full-page requests return top-level templates extending `base.html`.
+
+### Date-shape decision
+
+Django ORM returns native `datetime.date`/`datetime.datetime` objects (unlike Streamlit's ISO-string normalization). `*_date` columns remain `TextField` because the DB stores `'YYYY-MM-DD'` text. `DateTimeField` columns (`created_at`, `updated_at`) return Python datetime objects. Before porting helpers, grep for `BETWEEN`, `startswith(`, `[:10]` patterns that assume string dates.
 
 ## Sidebar IA (3 sections)
 The sidebar is organized into Manager → Directs → Reference. Settings/Log Out live inside Reference under a thin divider. Tile labels are deliberate; page-keys in `_DISPATCH` are stable across rename rounds so cached `nav_page` values from prior deploys keep resolving:
@@ -91,14 +139,26 @@ Pooling is handled by Neon's serverless proxy; the app opens direct connections 
 
 ## Testing gotchas
 
-### pytest is SQLite-only
-`tests/conftest.py` pins `_USE_PG=False` for every test. **Green pytest does not prove PG safety.** The codebase has shipped four PG-only bugs that the SQLite suite missed: `init_db AttributeError`, `validate_session TypeError`, `LEFT(timestamp, 10)`, and `text BETWEEN date`.
+### CI runs 4 jobs (`.github/workflows/test.yml`)
 
-### scripts/smoke_pg.py is the PG safety net
-Runs against a real `postgres:16` service in CI on every PR via `.github/workflows/test.yml`. Mirrors production bootstrap (apply `schema_postgres.sql` → `init_db()` → exercise auth + sessions + aggregators + recurring materialization) and includes a forced-failure no-orphan assertion for `_materialize_in_txn`. **Any PR touching SQL or schema must extend it.**
+| Job | Scope | What it proves |
+| --- | ----- | -------------- |
+| `tests-sqlite` | Streamlit `tests/` via pytest | Logic correctness (SQLite only) |
+| `smoke-pg` | `scripts/smoke_pg.py` against `postgres:16` | Streamlit PG safety |
+| `tests-django-sqlite` | Django `core/tests.py` via pytest | Django logic (SQLite `:memory:`) |
+| `smoke-pg-django` | `scripts/smoke_pg_django.py` against `postgres:16` | Django PG safety |
+
+### pytest is SQLite-only (both apps)
+
+Streamlit: `tests/conftest.py` pins `_USE_PG=False`. Django: `mt/settings_test.py` overrides DB to SQLite `:memory:`. **Green pytest does not prove PG safety in either app.** The codebase has shipped four PG-only bugs that the SQLite suite missed: `init_db AttributeError`, `validate_session TypeError`, `LEFT(timestamp, 10)`, and `text BETWEEN date`.
+
+### PG smoke tests are the safety net
+
+Each app has its own smoke script. Both run against a real `postgres:16` service in CI on every PR. **Any PR touching SQL or schema must extend the relevant smoke script.**
 
 ### Cross-tenant tests
-The smoke test seeds a second manager via app helpers (NOT raw SQL — round-3 review caught raw-SQL seeding as tautological) and asserts bidirectional isolation: manager A sees zero of B's rows, AND vice versa. Mirror this when adding new aggregator-style helpers.
+
+The smoke tests seed a second manager via app helpers (NOT raw SQL — round-3 review caught raw-SQL seeding as tautological) and assert bidirectional isolation: manager A sees zero of B's rows, AND vice versa. Mirror this when adding new aggregator-style helpers.
 
 ## Dispatch (`_DISPATCH`)
 Sidebar nav is dispatched via a string→callable dict at `web_app.py:2005`. Renames change the *label* on the button, not the page key — that keeps cached `nav_page` values resolving across deploys. `tests/test_dispatch.py` parses the file via AST and asserts every value resolves to a defined function.
