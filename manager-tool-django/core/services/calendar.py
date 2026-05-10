@@ -9,7 +9,6 @@ Phase 6: used by the 1-on-1 invite flow (Option C from D2 contract).
 
 import logging
 import re
-import smtplib
 import uuid
 from datetime import datetime, timedelta
 from email import encoders
@@ -19,9 +18,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, parseaddr
 
-from django.conf import settings
-
-from core.models import Config
+from core.services.email import get_config, get_smtp_settings, send_smtp
 
 logger = logging.getLogger(__name__)
 
@@ -73,40 +70,6 @@ def _ics_escape(text):
     s = s.replace(",", "\\,")
     s = s.replace("\n", "\\n")
     return _CONTROL_CHARS_RE.sub("", s)
-
-
-# ---------------------------------------------------------------------------
-# SMTP config helpers — read from per-manager Config table
-# ---------------------------------------------------------------------------
-
-def _get_config(key, manager_id, default=None):
-    """Read a single config value for a manager."""
-    try:
-        row = Config.objects.get(manager_id=manager_id, key=key)
-        return row.value or default
-    except Config.DoesNotExist:
-        return default
-
-
-def _get_smtp_settings(manager_id):
-    """Return SMTP connection params or None if not configured."""
-    server = _get_config("smtp_server", manager_id)
-    user = _get_config("smtp_user", manager_id)
-    password = _get_config("smtp_password", manager_id)
-    email = _get_config("manager_email", manager_id)
-    if not all([server, user, password, email]):
-        return None
-    port_str = _get_config("smtp_port", manager_id, default="587")
-    port = int(port_str) if port_str and str(port_str).isdigit() else 587
-    name = _get_config("manager_name", manager_id, default="Manager")
-    return {
-        "server": server,
-        "port": port,
-        "user": user,
-        "password": password,
-        "email": email,
-        "name": name,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -204,39 +167,6 @@ def generate_ics(event, organizer_name=None, organizer_email=None,
     return "\r\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# SMTP sending
-# ---------------------------------------------------------------------------
-
-def _send_smtp(smtp_cfg, msg):
-    """Send an email via SMTP. Returns (success, message)."""
-    try:
-        server = smtplib.SMTP(smtp_cfg["server"], smtp_cfg["port"])
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(smtp_cfg["user"], smtp_cfg["password"])
-        server.sendmail(
-            smtp_cfg["email"],
-            [parseaddr(msg["To"])[1]],
-            msg.as_string(),
-        )
-        server.quit()
-        return True, f"Email sent to {msg['To']}"
-    except smtplib.SMTPAuthenticationError:
-        logger.exception("SMTP auth failed for %s", smtp_cfg["user"])
-        return False, (
-            "SMTP authentication failed. For Gmail, use an App Password: "
-            "https://myaccount.google.com/apppasswords"
-        )
-    except smtplib.SMTPException:
-        logger.exception("SMTP error")
-        return False, "SMTP error. Check the server logs for details."
-    except Exception:
-        logger.exception("Failed to send email")
-        return False, "Failed to send email. Check the server logs for details."
-
-
 def send_calendar_invite(event, recipient_email, recipient_name=None,
                          manager_id=None):
     """Send an RFC 5545 calendar invite for an event via SMTP.
@@ -249,7 +179,7 @@ def send_calendar_invite(event, recipient_email, recipient_name=None,
         else:
             manager_id = getattr(event, "manager_id", None)
 
-    smtp_cfg = _get_smtp_settings(manager_id)
+    smtp_cfg = get_smtp_settings(manager_id)
     if smtp_cfg is None:
         return False, "SMTP not configured. Set up email in Settings."
 
@@ -300,4 +230,4 @@ def send_calendar_invite(event, recipient_email, recipient_name=None,
     )
     msg.attach(cal_part)
 
-    return _send_smtp(smtp_cfg, msg)
+    return send_smtp(smtp_cfg, msg)

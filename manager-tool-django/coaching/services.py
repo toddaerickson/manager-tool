@@ -15,9 +15,11 @@ import re
 from datetime import date, datetime, timedelta
 
 from core.models import (
-    ActionItem, Config, Decision, Delegation, Event, JournalEntry,
+    ActionItem, Decision, Delegation, Event, JournalEntry,
     TeamMember,
 )
+from core.services.email import get_config as _get_config
+from core.services.journal import journal_streak as _journal_streak
 from coaching.models import CoachSuggestion
 
 logger = logging.getLogger(__name__)
@@ -321,14 +323,6 @@ RULES:
 # Config helpers
 # ---------------------------------------------------------------------------
 
-def _get_config(key, manager_id, default=None):
-    try:
-        row = Config.objects.get(manager_id=manager_id, key=key)
-        return row.value or default
-    except Config.DoesNotExist:
-        return default
-
-
 def _get_client(manager_id):
     """Get an Anthropic client using this manager's stored API key."""
     if Anthropic is None:
@@ -421,8 +415,8 @@ def get_coaching_response(notes, manager_id, context_type="journal",
     except Exception as e:
         logger.error("Claude API call failed: %s", e)
         return (
-            f"*Coaching unavailable: {e}*\n\n"
-            + _local_fallback(notes, context_type, member_name)
+            "*Coaching unavailable — API error. Check server logs.*\n\n"
+            + (_local_fallback(notes, context_type, member_name) or "")
         )
 
 
@@ -534,17 +528,8 @@ def generate_rule_based_suggestion(manager_id):
     today_iso = date.today().isoformat()
 
     # Journal streak
-    dates = set(
-        JournalEntry.objects.for_manager(manager_id)
-        .values_list("entry_date", flat=True)
-    )
-    has_today = today_iso in dates
-    streak = 0
-    if has_today:
-        d = date.today()
-        while d.isoformat() in dates:
-            streak += 1
-            d -= timedelta(days=1)
+    streak = _journal_streak(manager_id, today_iso)
+    has_today = streak > 0
 
     # Recent mood
     recent = (
@@ -676,19 +661,10 @@ def generate_ai_suggestion(manager_id):
             user_parts.append(f"  {j.entry_date} (mood: {mood_label}): {content}")
 
     # Streak
-    dates = set(
-        JournalEntry.objects.for_manager(manager_id)
-        .values_list("entry_date", flat=True)
-    )
-    streak = 0
-    d = date.today()
-    if d.isoformat() in dates:
-        while d.isoformat() in dates:
-            streak += 1
-            d -= timedelta(days=1)
+    streak = _journal_streak(manager_id, today_iso)
     trusted_parts.append(f"JOURNAL STREAK: {streak} days")
     trusted_parts.append(
-        f"TODAY'S JOURNAL: {'Written' if today_iso in dates else 'Not yet written'}"
+        f"TODAY'S JOURNAL: {'Written' if streak > 0 else 'Not yet written'}"
     )
 
     # Overdue delegations
