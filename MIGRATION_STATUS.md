@@ -26,7 +26,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 | 4 — Render deploy | done | Live; Sentry receiving |
 | 5 — Page port | done | All sub-pages + dashboard + feedback + analytics/history/resources |
 | 6 — Background jobs | done | Calendar + coaching + digest cron + purge cron |
-| **7 — Cutover** | **in progress** | Diff script written; checklist below |
+| 7 — Cutover | **done** | Production live on Django as of 2026-05-10 |
 | 8 — Decommission | not started | Drop Streamlit, drop legacy auth tables |
 
 ## Phase 7 — Cutover checklist
