@@ -70,6 +70,17 @@
   URL to clipboard. Phase 6+ extends this with notes / action items /
   coaching pane (the "context" half of the contract).
   {% endcomment %}
+  {% if invite_success %}
+  <div class="mt-4 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800">
+    {{ invite_success }}
+  </div>
+  {% endif %}
+  {% if invite_error %}
+  <div class="mt-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">
+    {{ invite_error }}
+  </div>
+  {% endif %}
+
   <div class="mt-4 flex items-center gap-3">
     <button type="button" id="copy-link"
             data-url="{{ request.scheme }}://{{ request.get_host }}{% url 'events-detail' ev.id %}"
@@ -77,6 +88,19 @@
       Copy link for Outlook
     </button>
     <span id="copy-link-feedback" class="text-xs text-emerald-600 hidden">Copied!</span>
+
+    {% if ev.team_member and ev.team_member.email and ev.status == "scheduled" %}
+    <form method="post" action="{% url 'events-invite' ev.id %}" class="inline">
+      {% csrf_token %}
+      <button type="submit"
+              class="bg-white border border-slate-300 text-sm px-4 py-2 rounded hover:bg-slate-50">
+        Send invite to {{ ev.team_member.name }}
+      </button>
+    </form>
+    {% if ev.calendar_invite_sent %}
+    <span class="text-xs text-slate-500">Invite sent</span>
+    {% endif %}
+    {% endif %}
   </div>
 </div>
 
