@@ -53,6 +53,9 @@ urlpatterns = [
     path("feedback/", core_views.feedback_list, name="feedback"),
     path("feedback/add/", core_views.feedback_add, name="feedback-add"),
     path("feedback/<int:feedback_id>/delete/", core_views.feedback_delete, name="feedback-delete"),
+    path("analytics/", core_views.analytics, name="analytics"),
+    path("history/", core_views.history, name="history"),
+    path("resources/", core_views.resources, name="resources"),
     path("settings/", core_views.settings_page, name="settings"),
     path("sentry-debug/", core_views.sentry_debug, name="sentry-debug"),
     # Force Google-only by short-circuiting allauth's default form. The

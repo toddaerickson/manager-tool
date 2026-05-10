@@ -56,9 +56,12 @@
 
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Reference</div>
-          <div class="block px-2 py-1.5 text-slate-500">Analytics <span class="text-xs">(Phase 5)</span></div>
-          <div class="block px-2 py-1.5 text-slate-500">History <span class="text-xs">(Phase 5)</span></div>
-          <div class="block px-2 py-1.5 text-slate-500">Resources <span class="text-xs">(Phase 5)</span></div>
+          <a href="{% url 'analytics' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'analytics' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Analytics</a>
+          <a href="{% url 'history' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'history' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">History</a>
+          <a href="{% url 'resources' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'resources' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Resources</a>
           <a href="{% url 'team' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'team' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Team</a>
           <hr class="border-slate-800 my-2">
