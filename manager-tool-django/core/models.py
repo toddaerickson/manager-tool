@@ -503,3 +503,48 @@ class SelfAssessment(models.Model):
     class Meta:
         db_table = "self_assessments"
         unique_together = (("manager_id", "week_date", "dimension"),)
+
+
+# ============================================================
+# Audit log (D3 — HR data mutation tracking)
+# ============================================================
+
+
+class AuditLog(models.Model):
+    """Immutable log of data mutations on HR-sensitive models.
+
+    Flagged by /review-as audit on PR #67: feedback, career dev,
+    delegations, and goals contain HR-sensitive data. Any create/update/
+    delete should be traceable for compliance.
+
+    This is Django-only (no Streamlit equivalent). The table is created
+    by a Django migration, not the Streamlit migration runner.
+    """
+
+    ACTION_CHOICES = [
+        ("create", "Create"),
+        ("update", "Update"),
+        ("delete", "Delete"),
+    ]
+
+    manager_id = models.IntegerField(db_index=True)
+    action = models.TextField()  # create / update / delete
+    entity_type = models.TextField()  # e.g. "TeamMember", "Feedback"
+    entity_id = models.IntegerField()
+    summary = models.TextField()  # human-readable description
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = TenantManager()
+
+    class Meta:
+        db_table = "audit_log"
+        indexes = [
+            models.Index(
+                fields=["manager_id", "-created_at"],
+                name="ix_audit_log_mgr_created",
+            ),
+            models.Index(
+                fields=["entity_type", "entity_id"],
+                name="ix_audit_log_entity",
+            ),
+        ]

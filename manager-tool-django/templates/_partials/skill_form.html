@@ -1,4 +1,7 @@
-<form method="post" action="{% url 'skills-add' %}" class="space-y-3">
+<form hx-post="{% url 'skills-add' %}"
+      hx-target="#career-dev-content"
+      hx-swap="outerHTML"
+      class="space-y-3">
   {% csrf_token %}
 
   <div class="grid grid-cols-2 gap-3">

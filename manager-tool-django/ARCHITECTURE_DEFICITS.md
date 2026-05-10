@@ -72,8 +72,30 @@ Recommendation: **Outlook is the source of truth for *when*; Manager Tool is the
 
 ---
 
+## D3 · 🟢 Audit logging for HR data mutations
+
+**CLOSED 2026-05-10.** Flagged by /review-as audit on PR #67.
+
+**Deficit.** Feedback, career dev, delegations, and goals contain HR-sensitive data. Create/update/delete operations had no audit trail — no way to trace who changed what and when for compliance review.
+
+**Resolution.** Added `AuditLog` model (`core/models.py`) with immutable append-only entries. `core/services/audit.log_mutation()` is called from every HR-sensitive mutation in views: TeamMember (add/delete), Feedback (add/delete), Goal (add/edit/delete), Delegation (add/edit/delete), Decision (add/edit/delete), Skill (add/delete), DevelopmentPlan (add), Milestone (add), CareerConversation (add), RunningNote (add/delete).
+
+Cross-tenant isolation is enforced via `TenantManager.for_manager()` on the `AuditLog` model.
+
+---
+
+## D4 · 🟢 HTMX consistency on Career Dev page
+
+**CLOSED 2026-05-10.** Flagged during Phase 5.5 review.
+
+**Deficit.** The Career Dev page used full-page redirects (`redirect("career-dev")`) after every add/update/delete operation, while all other Phase 5 pages (team members, todos, journal, goals) used HTMX partials for smooth in-place updates.
+
+**Resolution.** Extracted career dev content into `_partials/career_dev_content.html` with an `#career-dev-content` target div. Converted skill, plan, milestone, and conversation forms to use `hx-post` with `hx-target="#career-dev-content"`. Plan status buttons and milestone completion use HTMX `hx-post` with `hx-vals`. Skill delete uses `hx-delete` targeting the same partial. All Career Dev mutation views now return `_career_dev_partial()` (200 with HTML fragment) instead of `redirect()` (302).
+
+---
+
 ## How to use this doc
 
-- Add new entries with sequential IDs (D3, D4, ...)
+- Add new entries with sequential IDs (D5, D6, ...)
 - Status updates as the migration progresses; promote 🔴 → 🟡 → 🟢
 - When a deficit closes, leave the entry in place with the resolution noted — future migration archaeologists thank you
