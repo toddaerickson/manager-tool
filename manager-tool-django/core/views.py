@@ -764,6 +764,9 @@ def journal_edit(request, entry_id: int):
 # ============================================================
 
 
+_GOAL_STATUS_LABELS = dict(GoalForm.declared_fields["status"].choices)
+
+
 @login_required
 def goals_list(request):
     """Goals list with add form. Filterable by team member."""
@@ -782,6 +785,7 @@ def goals_list(request):
         "form": GoalForm(manager_id=mid),
         "members": members,
         "selected_member": member_id,
+        "status_labels": _GOAL_STATUS_LABELS,
     })
 
 
@@ -805,6 +809,7 @@ def goals_add(request):
     return render(request, "_partials/goal_list_after_add.html", {
         "goals": goals,
         "form": GoalForm(manager_id=manager.id),
+        "status_labels": _GOAL_STATUS_LABELS,
     })
 
 
@@ -874,17 +879,21 @@ def career_dev(request):
     convos = convos.order_by("-conversation_date")[:20]
 
     # Batch-load milestones for visible plans (avoids N+1).
+    # Attach directly to plan objects so the template does a simple
+    # {% for ms in p.milestones_list %} without O(plans*milestones).
+    plans = list(plans)
     plan_ids = [p.id for p in plans]
     milestones_by_plan = {}
     if plan_ids:
         for ms in Milestone.objects.for_manager(mid).filter(plan_id__in=plan_ids).order_by("id"):
             milestones_by_plan.setdefault(ms.plan_id, []).append(ms)
+    for p in plans:
+        p.milestones_list = milestones_by_plan.get(p.id, [])
 
     return render(request, "career_dev.html", {
         "skills": skills,
         "plans": plans,
         "convos": convos,
-        "milestones_by_plan": milestones_by_plan,
         "members": members,
         "selected_member": member_id,
         "skill_form": SkillForm(manager_id=mid),

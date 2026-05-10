@@ -108,30 +108,26 @@
         </div>
         {% if p.description %}<p class="text-sm text-slate-600 mb-2">{{ p.description|truncatewords:30 }}</p>{% endif %}
 
-        {# Milestones #}
-        {% with ms=milestones_by_plan|default_if_none:"" %}
-        {% for plan_id, milestones in milestones_by_plan.items %}
-          {% if plan_id == p.id %}
-            <div class="ml-2 mt-2 space-y-1">
-              {% for ms in milestones %}
-              <div class="flex items-center gap-2 text-sm">
-                {% if ms.completed %}
-                  <span class="text-green-600">&#10003;</span>
-                  <span class="text-slate-500 line-through">{{ ms.description }}</span>
-                {% else %}
-                  <form method="post" action="{% url 'milestones-complete' ms.id %}" class="inline flex items-center gap-2">
-                    {% csrf_token %}
-                    <button type="submit" class="text-slate-400 hover:text-green-600">&#9744;</button>
-                    <span>{{ ms.description }}</span>
-                    {% if ms.target_date %}<span class="text-xs text-slate-400">by {{ ms.target_date }}</span>{% endif %}
-                  </form>
-                {% endif %}
-              </div>
-              {% endfor %}
-            </div>
-          {% endif %}
-        {% endfor %}
-        {% endwith %}
+        {# Milestones — attached to plan object in the view #}
+        {% if p.milestones_list %}
+        <div class="ml-2 mt-2 space-y-1">
+          {% for ms in p.milestones_list %}
+          <div class="flex items-center gap-2 text-sm">
+            {% if ms.completed %}
+              <span class="text-green-600">&#10003;</span>
+              <span class="text-slate-500 line-through">{{ ms.description }}</span>
+            {% else %}
+              <form method="post" action="{% url 'milestones-complete' ms.id %}" class="inline flex items-center gap-2">
+                {% csrf_token %}
+                <button type="submit" class="text-slate-400 hover:text-green-600">&#9744;</button>
+                <span>{{ ms.description }}</span>
+                {% if ms.target_date %}<span class="text-xs text-slate-400">by {{ ms.target_date }}</span>{% endif %}
+              </form>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
 
         {# Add milestone #}
         <details class="mt-2">

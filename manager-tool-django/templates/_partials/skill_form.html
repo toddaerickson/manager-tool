@@ -21,11 +21,11 @@
     </div>
     <div class="flex items-center gap-2 pt-5">
       {{ skill_form.is_strength }}
-      <label class="text-sm text-slate-700">Strength</label>
+      <label for="{{ skill_form.is_strength.id_for_label }}" class="text-sm text-slate-700">Strength</label>
     </div>
     <div class="flex items-center gap-2 pt-5">
       {{ skill_form.is_growth_area }}
-      <label class="text-sm text-slate-700">Growth area</label>
+      <label for="{{ skill_form.is_growth_area.id_for_label }}" class="text-sm text-slate-700">Growth area</label>
     </div>
   </div>
 

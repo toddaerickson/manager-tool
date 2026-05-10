@@ -2522,6 +2522,20 @@ class TestSkillsAdd:
         assert resp.status_code == 200
         assert not Skill.objects.filter(pk=s.id).exists()
 
+    def test_cross_tenant_delete_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_s1", display_name="Other",
+            password_hash="x", email="other_s1@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        s = Skill.objects.create(
+            team_member=tm2, skill_name="Secret", manager_id=m2.id,
+        )
+        resp = client.delete(f"/career/skills/{s.id}/delete/")
+        assert resp.status_code == 404
+        assert Skill.objects.filter(pk=s.id).exists()
+
 
 @pytest.mark.django_db
 class TestPlansAndMilestones:
@@ -2602,6 +2616,41 @@ class TestPlansAndMilestones:
         assert resp.status_code == 404
         plan.refresh_from_db()
         assert plan.status == "active"
+
+    def test_cross_tenant_milestone_add_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_p1b", display_name="Other",
+            password_hash="x", email="other_p1b@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        plan = DevelopmentPlan.objects.create(
+            team_member=tm2, title="X", manager_id=m2.id, status="active",
+        )
+        resp = client.post(f"/career/plans/{plan.id}/milestones/add/", {
+            "description": "Hacked milestone",
+        })
+        assert resp.status_code == 404
+        assert Milestone.objects.count() == 0
+
+    def test_cross_tenant_milestone_complete_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_p1c", display_name="Other",
+            password_hash="x", email="other_p1c@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        plan = DevelopmentPlan.objects.create(
+            team_member=tm2, title="X", manager_id=m2.id, status="active",
+        )
+        ms = Milestone.objects.create(
+            plan=plan, description="Other's milestone",
+            manager_id=m2.id, completed=0,
+        )
+        resp = client.post(f"/career/milestones/{ms.id}/complete/")
+        assert resp.status_code == 404
+        ms.refresh_from_db()
+        assert ms.completed == 0
 
 
 @pytest.mark.django_db

@@ -19,9 +19,11 @@
       </td>
       <td class="px-4 py-3 text-sm tabular-nums text-slate-600">{{ g.quarter }}{% if g.target_date %}<br><span class="text-xs">by {{ g.target_date }}</span>{% endif %}</td>
       <td class="px-4 py-3 text-sm">
+        {% with label=status_labels|default_if_none:"" %}
         <span class="{% if g.status == 'met' or g.status == 'exceeded' %}text-green-700{% elif g.status == 'not_met' %}text-red-600{% elif g.status == 'in_progress' %}text-blue-600{% else %}text-slate-500{% endif %}">
-          {{ g.status|default:"not_started" }}
+          {% for key, val in status_labels.items %}{% if key == g.status %}{{ val }}{% endif %}{% endfor %}{% if not g.status %}Not started{% endif %}
         </span>
+        {% endwith %}
       </td>
       <td class="px-4 py-3 text-right text-sm">
         <div class="flex flex-col items-end gap-1">
