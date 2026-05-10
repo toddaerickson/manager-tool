@@ -8,13 +8,14 @@ from django.views.decorators.http import require_http_methods
 from django.shortcuts import get_object_or_404
 
 from .forms import (
-    ActionItemForm, CareerConversationForm, DevelopmentPlanForm,
-    EventEditForm, EventForm, GoalForm, JournalEntryForm, MilestoneForm,
-    SkillForm, TeamMemberForm,
+    ActionItemForm, CareerConversationForm, DecisionForm, DelegationForm,
+    DevelopmentPlanForm, EventEditForm, EventForm, GoalForm,
+    JournalEntryForm, MilestoneForm, RunningNoteForm, SkillForm,
+    TeamMemberForm,
 )
 from .models import (
-    ActionItem, CareerConversation, DevelopmentPlan, Event, Goal,
-    JournalEntry, Milestone, Skill, TeamMember,
+    ActionItem, CareerConversation, Decision, Delegation, DevelopmentPlan,
+    Event, Goal, JournalEntry, Milestone, RunningNote, Skill, TeamMember,
 )
 from .services.events import create_recurring_events
 
@@ -1029,3 +1030,242 @@ def convos_add(request):
     convo.created_at = timezone.now()
     convo.save()
     return redirect("career-dev")
+
+
+# ============================================================
+# Phase 5.6 — Delegations
+# ============================================================
+
+_DELEGATION_STATUS_LABELS = {
+    "active": "Active", "completed": "Completed", "stalled": "Stalled",
+}
+
+
+@login_required
+def delegations_list(request):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    mid = manager.id
+    today_iso = date.today().isoformat()
+    member_id = request.GET.get("member")
+    delegations = Delegation.objects.for_manager(mid).select_related("team_member")
+    if member_id:
+        delegations = delegations.filter(team_member_id=member_id)
+    active = delegations.filter(status="active").order_by("check_in_date", "id")
+    completed = delegations.exclude(status="active").order_by("-completed_at")[:20]
+    members = TeamMember.objects.active_for_manager(mid).order_by("name")
+    return render(request, "delegations.html", {
+        "active": active,
+        "completed": completed,
+        "form": DelegationForm(manager_id=mid),
+        "members": members,
+        "selected_member": member_id,
+        "today_iso": today_iso,
+        "status_labels": _DELEGATION_STATUS_LABELS,
+    })
+
+
+@login_required
+@require_http_methods(["POST"])
+def delegations_add(request):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    form = DelegationForm(request.POST, manager_id=manager.id)
+    if not form.is_valid():
+        return render(request, "_partials/delegation_form.html", {
+            "form": form,
+        }, status=422)
+    d = form.save(commit=False)
+    d.manager_id = manager.id
+    if not d.status:
+        d.status = "active"
+    from django.utils import timezone
+    d.created_at = timezone.now()
+    d.save()
+    return redirect("delegations")
+
+
+@login_required
+def delegations_edit(request, delegation_id: int):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    d = get_object_or_404(
+        Delegation.objects.for_manager(manager.id).select_related("team_member"),
+        pk=delegation_id,
+    )
+    if request.method == "POST":
+        form = DelegationForm(request.POST, instance=d, manager_id=manager.id)
+        if form.is_valid():
+            from django.utils import timezone
+            obj = form.save(commit=False)
+            if obj.status == "completed" and not obj.completed_at:
+                obj.completed_at = timezone.now()
+            obj.save()
+            return redirect("delegations")
+    else:
+        form = DelegationForm(instance=d, manager_id=manager.id)
+        if d.check_in_date:
+            form.initial["check_in_date"] = date.fromisoformat(d.check_in_date)
+    return render(request, "delegations_edit.html", {"form": form, "delegation": d})
+
+
+@login_required
+@require_http_methods(["DELETE"])
+def delegations_delete(request, delegation_id: int):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    deleted, _ = Delegation.objects.for_manager(manager.id).filter(pk=delegation_id).delete()
+    if deleted == 0:
+        return HttpResponse(status=404)
+    return HttpResponse(status=200)
+
+
+# ============================================================
+# Phase 5.6 — Decisions
+# ============================================================
+
+_DECISION_STATUS_LABELS = {
+    "active": "Active", "validated": "Validated",
+    "revised": "Revised", "reversed": "Reversed",
+}
+
+
+@login_required
+def decisions_list(request):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    mid = manager.id
+    today_iso = date.today().isoformat()
+    decisions = Decision.objects.for_manager(mid).order_by("-created_at")[:50]
+    return render(request, "decisions.html", {
+        "decisions": decisions,
+        "form": DecisionForm(),
+        "today_iso": today_iso,
+        "status_labels": _DECISION_STATUS_LABELS,
+    })
+
+
+@login_required
+@require_http_methods(["POST"])
+def decisions_add(request):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    form = DecisionForm(request.POST)
+    if not form.is_valid():
+        return render(request, "_partials/decision_form.html", {
+            "form": form,
+        }, status=422)
+    d = form.save(commit=False)
+    d.manager_id = manager.id
+    if not d.status:
+        d.status = "active"
+    from django.utils import timezone
+    d.created_at = timezone.now()
+    d.save()
+    return redirect("decisions")
+
+
+@login_required
+def decisions_edit(request, decision_id: int):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    d = get_object_or_404(
+        Decision.objects.for_manager(manager.id), pk=decision_id,
+    )
+    if request.method == "POST":
+        form = DecisionForm(request.POST, instance=d)
+        if form.is_valid():
+            from django.utils import timezone
+            obj = form.save(commit=False)
+            obj.updated_at = timezone.now()
+            obj.save()
+            return redirect("decisions")
+    else:
+        form = DecisionForm(instance=d)
+        if d.review_date:
+            form.initial["review_date"] = date.fromisoformat(d.review_date)
+    return render(request, "decisions_edit.html", {"form": form, "decision": d})
+
+
+@login_required
+@require_http_methods(["DELETE"])
+def decisions_delete(request, decision_id: int):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    deleted, _ = Decision.objects.for_manager(manager.id).filter(pk=decision_id).delete()
+    if deleted == 0:
+        return HttpResponse(status=404)
+    return HttpResponse(status=200)
+
+
+# ============================================================
+# Phase 5.6 — Running Notes (1:1 Notes)
+# ============================================================
+
+_NOTE_CATEGORY_LABELS = {
+    "general": "General", "meeting_prep": "Meeting prep",
+    "observation": "Observation", "follow_up": "Follow-up",
+    "praise": "Praise",
+}
+
+
+@login_required
+def notes_list(request):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    mid = manager.id
+    member_id = request.GET.get("member")
+    notes = RunningNote.objects.for_manager(mid).select_related("team_member")
+    if member_id:
+        # Show member's notes + broadcast notes
+        from django.db.models import Q
+        notes = notes.filter(Q(team_member_id=member_id) | Q(team_member__isnull=True))
+    notes = notes.order_by("-note_date", "-created_at")[:50]
+    members = TeamMember.objects.active_for_manager(mid).order_by("name")
+    return render(request, "notes.html", {
+        "notes": notes,
+        "form": RunningNoteForm(manager_id=mid),
+        "members": members,
+        "selected_member": member_id,
+        "category_labels": _NOTE_CATEGORY_LABELS,
+    })
+
+
+@login_required
+@require_http_methods(["POST"])
+def notes_add(request):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    form = RunningNoteForm(request.POST, manager_id=manager.id)
+    if not form.is_valid():
+        return render(request, "_partials/note_form.html", {
+            "form": form,
+        }, status=422)
+    note = form.save(commit=False)
+    note.manager_id = manager.id
+    from django.utils import timezone
+    note.created_at = timezone.now()
+    note.save()
+    return redirect("notes")
+
+
+@login_required
+@require_http_methods(["DELETE"])
+def notes_delete(request, note_id: int):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    deleted, _ = RunningNote.objects.for_manager(manager.id).filter(pk=note_id).delete()
+    if deleted == 0:
+        return HttpResponse(status=404)
+    return HttpResponse(status=200)

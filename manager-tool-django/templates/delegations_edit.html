@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Delegation — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Edit Delegation</h1>
+    <p class="text-sm text-slate-500 mt-1">{{ delegation.task|truncatewords:10 }}</p>
+  </header>
+
+  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
+    <form method="post" class="space-y-3">
+      {% csrf_token %}
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Task *</label>
+          {{ form.task }}
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Delegate to</label>
+          {{ form.team_member }}
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Expected outcome</label>
+        {{ form.outcome_expected }}
+      </div>
+
+      <div class="grid grid-cols-3 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Autonomy level</label>
+          {{ form.autonomy_level }}
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Check-in date</label>
+          {{ form.check_in_date }}
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Status</label>
+          {{ form.status }}
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Notes</label>
+        {{ form.notes }}
+      </div>
+
+      <div class="flex items-center justify-between pt-2">
+        <a href="{% url 'delegations' %}" class="text-sm text-slate-600 hover:text-slate-900 underline">Back to delegations</a>
+        <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">Save changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

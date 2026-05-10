@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Decision — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Edit Decision</h1>
+    <p class="text-sm text-slate-500 mt-1">{{ decision.title }}</p>
+  </header>
+
+  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
+    <form method="post" class="space-y-3">
+      {% csrf_token %}
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Title *</label>
+        {{ form.title }}
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Context</label>
+          {{ form.context }}
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Alternatives</label>
+          {{ form.alternatives }}
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Rationale</label>
+        {{ form.rationale }}
+      </div>
+
+      <div class="grid grid-cols-3 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Expected outcome</label>
+          {{ form.expected_outcome }}
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Review date</label>
+          {{ form.review_date }}
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Status</label>
+          {{ form.status }}
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Actual outcome</label>
+        {{ form.actual_outcome }}
+        <p class="text-xs text-slate-500 mt-1">Fill this in when you review the decision.</p>
+      </div>
+
+      <div class="flex items-center justify-between pt-2">
+        <a href="{% url 'decisions' %}" class="text-sm text-slate-600 hover:text-slate-900 underline">Back to decisions</a>
+        <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">Save changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

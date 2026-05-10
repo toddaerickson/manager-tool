@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}1:1 Notes — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">1:1 Notes</h1>
+    <p class="text-sm text-slate-500 mt-1">Running notes on your directs. Broadcast notes appear in every member's feed.</p>
+  </header>
+
+  <div class="flex items-center gap-3 mb-4">
+    <label class="text-sm text-slate-600">Filter by member:</label>
+    <select onchange="window.location=this.value?'?member='+this.value:window.location.pathname"
+            class="text-sm border border-slate-300 rounded px-2 py-1">
+      <option value="">All notes</option>
+      {% for m in members %}
+        <option value="{{ m.id }}" {% if selected_member == m.id|stringformat:"d" %}selected{% endif %}>{{ m.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not notes %}open{% endif %}>
+    <summary class="px-6 py-3 cursor-pointer select-none font-medium">Add note</summary>
+    <div class="px-6 pb-6">
+      {% include "_partials/note_form.html" %}
+    </div>
+  </details>
+
+  {% if notes %}
+  <div class="space-y-3">
+    {% for n in notes %}
+    <div id="note-row-{{ n.id }}" class="bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-4">
+      <div class="flex items-center justify-between mb-1">
+        <div class="text-sm">
+          {% if n.team_member %}
+            <span class="font-medium">{{ n.team_member.name }}</span>
+          {% else %}
+            <span class="font-medium text-slate-500">Broadcast</span>
+          {% endif %}
+          <span class="text-xs text-slate-400 ml-2">
+            {% for k, v in category_labels.items %}{% if k == n.category %}{{ v }}{% endif %}{% endfor %}
+          </span>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-slate-500 tabular-nums">{{ n.note_date }}</span>
+          <button type="button"
+                  hx-delete="{% url 'notes-delete' n.id %}"
+                  hx-target="#note-row-{{ n.id }}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete this note?"
+                  hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                  class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+        </div>
+      </div>
+      <p class="text-sm text-slate-700 whitespace-pre-line">{{ n.content }}</p>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
+    No notes yet. Add one above.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

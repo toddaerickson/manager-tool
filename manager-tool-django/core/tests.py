@@ -18,12 +18,14 @@ from core.models import (
     ActionItem,
     CareerConversation,
     Decision,
+    Delegation,
     DevelopmentPlan,
     Event,
     Goal,
     JournalEntry,
     Manager,
     Milestone,
+    RunningNote,
     Skill,
     TeamMember,
 )
@@ -2685,3 +2687,291 @@ class TestConvosAdd:
         c = convos.first()
         assert c.topic == "Career path"
         assert c.conversation_date == "2026-05-09"
+
+
+# ============================================================
+# Phase 5.6 — Delegations
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestDelegations:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_d1", display_name="Todd",
+            password_hash="x", email="todd_d1@example.com",
+        )
+        self._login_as(client, "todd_d1@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_page_loads(self, client):
+        self._setup(client)
+        assert client.get("/delegations/").status_code == 200
+
+    def test_create_persists(self, client):
+        m, tm = self._setup(client)
+        resp = client.post("/delegations/add/", {
+            "task": "Write the report",
+            "team_member": tm.id,
+            "outcome_expected": "Draft by Friday",
+            "autonomy_level": "guided",
+            "status": "active",
+        })
+        assert resp.status_code == 302
+        ds = Delegation.objects.for_manager(m.id)
+        assert ds.count() == 1
+        assert ds.first().task == "Write the report"
+        assert ds.first().manager_id == m.id
+
+    def test_edit_updates(self, client):
+        m, tm = self._setup(client)
+        d = Delegation.objects.create(
+            task="Original", manager_id=m.id, status="active",
+            team_member=tm,
+        )
+        resp = client.post(f"/delegations/{d.id}/edit/", {
+            "task": "Updated",
+            "team_member": tm.id,
+            "autonomy_level": "autonomous",
+            "status": "completed",
+        })
+        assert resp.status_code == 302
+        d.refresh_from_db()
+        assert d.task == "Updated"
+        assert d.status == "completed"
+        assert d.completed_at is not None
+
+    def test_delete_removes(self, client):
+        m, tm = self._setup(client)
+        d = Delegation.objects.create(
+            task="X", manager_id=m.id, team_member=tm, status="active",
+        )
+        resp = client.delete(f"/delegations/{d.id}/delete/")
+        assert resp.status_code == 200
+        assert not Delegation.objects.filter(pk=d.id).exists()
+
+    def test_cross_tenant_edit_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_d1", display_name="Other",
+            password_hash="x", email="other_d1@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        d = Delegation.objects.create(
+            task="Secret", manager_id=m2.id, team_member=tm2, status="active",
+        )
+        assert client.get(f"/delegations/{d.id}/edit/").status_code == 404
+
+    def test_cross_tenant_delete_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_d1b", display_name="Other",
+            password_hash="x", email="other_d1b@example.com",
+        )
+        d = Delegation.objects.create(
+            task="Secret", manager_id=m2.id, status="active",
+        )
+        assert client.delete(f"/delegations/{d.id}/delete/").status_code == 404
+        assert Delegation.objects.filter(pk=d.id).exists()
+
+    def test_cross_tenant_list_hidden(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_d1c", display_name="Other",
+            password_hash="x", email="other_d1c@example.com",
+        )
+        Delegation.objects.create(
+            task="Secret task", manager_id=m2.id, status="active",
+        )
+        resp = client.get("/delegations/")
+        assert b"Secret task" not in resp.content
+
+
+# ============================================================
+# Phase 5.6 — Decisions
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestDecisions:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_dc1", display_name="Todd",
+            password_hash="x", email="todd_dc1@example.com",
+        )
+        self._login_as(client, "todd_dc1@example.com")
+        return m
+
+    def test_page_loads(self, client):
+        self._setup(client)
+        assert client.get("/decisions/").status_code == 200
+
+    def test_create_persists(self, client):
+        m = self._setup(client)
+        resp = client.post("/decisions/add/", {
+            "title": "Switch to Django",
+            "rationale": "Better maintainability",
+            "status": "active",
+        })
+        assert resp.status_code == 302
+        ds = Decision.objects.for_manager(m.id)
+        assert ds.count() == 1
+        assert ds.first().title == "Switch to Django"
+
+    def test_edit_updates_with_outcome(self, client):
+        m = self._setup(client)
+        d = Decision.objects.create(
+            title="Original", manager_id=m.id, status="active",
+        )
+        resp = client.post(f"/decisions/{d.id}/edit/", {
+            "title": "Original",
+            "status": "validated",
+            "actual_outcome": "Shipped faster than expected",
+        })
+        assert resp.status_code == 302
+        d.refresh_from_db()
+        assert d.status == "validated"
+        assert d.actual_outcome == "Shipped faster than expected"
+
+    def test_delete_removes(self, client):
+        m = self._setup(client)
+        d = Decision.objects.create(title="X", manager_id=m.id)
+        resp = client.delete(f"/decisions/{d.id}/delete/")
+        assert resp.status_code == 200
+        assert not Decision.objects.filter(pk=d.id).exists()
+
+    def test_cross_tenant_edit_returns_404(self, client):
+        m1 = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_dc1", display_name="Other",
+            password_hash="x", email="other_dc1@example.com",
+        )
+        d = Decision.objects.create(title="Secret", manager_id=m2.id)
+        assert client.get(f"/decisions/{d.id}/edit/").status_code == 404
+
+    def test_cross_tenant_delete_returns_404(self, client):
+        m1 = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_dc1b", display_name="Other",
+            password_hash="x", email="other_dc1b@example.com",
+        )
+        d = Decision.objects.create(title="Secret", manager_id=m2.id)
+        assert client.delete(f"/decisions/{d.id}/delete/").status_code == 404
+        assert Decision.objects.filter(pk=d.id).exists()
+
+
+# ============================================================
+# Phase 5.6 — Running Notes (1:1 Notes)
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestNotes:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_n1", display_name="Todd",
+            password_hash="x", email="todd_n1@example.com",
+        )
+        self._login_as(client, "todd_n1@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_page_loads(self, client):
+        self._setup(client)
+        assert client.get("/notes/").status_code == 200
+
+    def test_create_persists(self, client):
+        m, tm = self._setup(client)
+        resp = client.post("/notes/add/", {
+            "team_member": tm.id,
+            "note_date": "2026-05-09",
+            "content": "Alice did great in the meeting",
+            "category": "praise",
+        })
+        assert resp.status_code == 302
+        ns = RunningNote.objects.for_manager(m.id)
+        assert ns.count() == 1
+        n = ns.first()
+        assert n.content == "Alice did great in the meeting"
+        assert n.category == "praise"
+        assert n.note_date == "2026-05-09"
+
+    def test_broadcast_note_has_null_member(self, client):
+        m, _ = self._setup(client)
+        resp = client.post("/notes/add/", {
+            "note_date": "2026-05-09",
+            "content": "Team-wide update",
+            "category": "general",
+        })
+        assert resp.status_code == 302
+        n = RunningNote.objects.for_manager(m.id).first()
+        assert n.team_member is None
+
+    def test_delete_removes(self, client):
+        m, tm = self._setup(client)
+        n = RunningNote.objects.create(
+            team_member=tm, note_date="2026-05-09",
+            content="X", manager_id=m.id,
+        )
+        resp = client.delete(f"/notes/{n.id}/delete/")
+        assert resp.status_code == 200
+        assert not RunningNote.objects.filter(pk=n.id).exists()
+
+    def test_cross_tenant_delete_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_n1", display_name="Other",
+            password_hash="x", email="other_n1@example.com",
+        )
+        n = RunningNote.objects.create(
+            note_date="2026-05-09", content="Secret",
+            manager_id=m2.id,
+        )
+        assert client.delete(f"/notes/{n.id}/delete/").status_code == 404
+        assert RunningNote.objects.filter(pk=n.id).exists()
+
+    def test_cross_tenant_notes_hidden(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_n1b", display_name="Other",
+            password_hash="x", email="other_n1b@example.com",
+        )
+        RunningNote.objects.create(
+            note_date="2026-05-09", content="Secret observation",
+            manager_id=m2.id,
+        )
+        resp = client.get("/notes/")
+        assert b"Secret observation" not in resp.content
+
+    def test_member_filter_includes_broadcasts(self, client):
+        m, tm = self._setup(client)
+        RunningNote.objects.create(
+            team_member=tm, note_date="2026-05-09",
+            content="Alice specific", manager_id=m.id,
+        )
+        RunningNote.objects.create(
+            note_date="2026-05-09", content="Broadcast note",
+            manager_id=m.id,
+        )
+        resp = client.get(f"/notes/?member={tm.id}")
+        assert b"Alice specific" in resp.content
+        assert b"Broadcast note" in resp.content
