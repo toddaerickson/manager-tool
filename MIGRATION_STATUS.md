@@ -73,4 +73,4 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 
 ## Anchor data
 
-- Manager: `terickson@marathoncre.com`, username `todd`, `manager_id=1` — use as the cross-tenant test anchor in any new smoke job.
+- Manager: username `todd`, `manager_id=1` — use as the cross-tenant test anchor in any new smoke job.
