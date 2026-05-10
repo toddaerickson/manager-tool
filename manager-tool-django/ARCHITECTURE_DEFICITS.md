@@ -6,7 +6,9 @@ Status legend: 🔴 open · 🟡 partially addressed · 🟢 closed
 
 ---
 
-## D1 · 🟡 Scheduled events have no edit function (unblocked by D2 contract)
+## D1 · 🟢 Scheduled events have no edit function (unblocked by D2 contract)
+
+**CLOSED 2026-05-10.** Shipped in PR #60 as Option C (full edit with warning on date/time changes).
 
 **Deficit.** Once a Manager Tool event is created, the only state transitions available are Cancel (status → cancelled, kept for history), Complete (status → completed), and Delete (hard remove). There is no path to edit fields like title, agenda, location, date/time, or duration after creation. Streamlit's page didn't have full edit either, but this is a clear gap relative to user expectations of any modern scheduling tool.
 

@@ -25,6 +25,12 @@
     {% if e.tags %}
       <p class="text-xs text-slate-500 mt-1">{{ e.tags }}</p>
     {% endif %}
+    {% if e.coaching_response %}
+      <details class="mt-3 border-t border-slate-100 pt-2">
+        <summary class="text-xs text-indigo-600 cursor-pointer font-medium">Coaching response</summary>
+        <div class="mt-2 text-sm text-slate-700 prose prose-sm max-w-none whitespace-pre-line">{{ e.coaching_response }}</div>
+      </details>
+    {% endif %}
   </div>
   {% endfor %}
 </div>

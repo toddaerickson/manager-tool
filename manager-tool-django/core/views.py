@@ -22,6 +22,9 @@ from .services.audit import log_mutation
 from .services.events import create_recurring_events
 from .services.journal import journal_streak as _journal_streak
 
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+
 
 def hello(request):
     """Public landing page. Shows a sign-in link if anonymous, otherwise
@@ -699,6 +702,19 @@ def journal_add(request):
         entry.created_at = timezone.now()
     entry.updated_at = timezone.now()
     entry.save()
+    # Generate coaching response if content is non-empty.
+    if entry.content and entry.content.strip():
+        try:
+            from coaching.services import get_coaching_response
+            coaching = get_coaching_response(
+                entry.content, manager.id,
+                context_type=entry.entry_type or "journal",
+            )
+            if coaching:
+                entry.coaching_response = coaching
+                entry.save(update_fields=["coaching_response"])
+        except Exception:
+            _logger.exception("Coaching generation failed for entry %d", entry.id)
     # Return refreshed form + history via OOB.
     today_iso = date.today().isoformat()
     new_form = JournalEntryForm(instance=entry)

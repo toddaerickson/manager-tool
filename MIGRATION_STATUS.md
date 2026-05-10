@@ -26,7 +26,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 | 3 — Auth | done | Google OAuth via allauth; bridge middleware maps `request.user.email` → existing `Manager` row → `request.manager` |
 | 4 — Render deploy | done | Live; Sentry receiving |
 | **5 — Page port** | **done** | All sub-pages ported (see below) |
-| 6 — Background jobs | partial | D1 + D2 shipped; SMTP invite + crons pending |
+| 6 — Background jobs | **done** | Calendar service, coaching service, weekly digest, crons. PRs #71, #73. |
 | 7 — Cutover | not started | Phase 7 of plan |
 | 8 — Decommission | not started | Drop Streamlit, drop legacy auth tables |
 
@@ -47,11 +47,15 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - D1 — Edit events (Outlook contract: full edit with date/time warning) — PR #60
 - D2 — Outlook source-of-truth contract + per-event detail page + "Copy link for Outlook" — PR #60
 
-### Phase 6 still pending
+### Phase 6 shipped (PRs #71, #72, #73)
 
-- D2 medium-term — SMTP calendar invite for 1-on-1s
-- Weekly digest cron
-- `purge_deleted_team_members` cron (management command exists; needs Render Cron wiring)
+- Calendar service port (`core/services/calendar.py`) — ICS + SMTP invites with M3 sanitization
+- Coaching service port (`coaching/services.py`) — Anthropic API + wisdom matcher, wired to journal page
+- Weekly digest service + `send_weekly_digests` management command + Render cron (Mon 9 AM ET)
+- `purge_deleted_team_members` Render cron (daily 1 AM ET)
+- Shared email module (`core/services/email.py`) + journal streak utility (`core/services/journal.py`)
+- D3 audit logging + D4 HTMX consistency — both closed
+- **Still pending:** "Send invite" button on event detail page (D2 Option C UI trigger)
 
 ## Remaining sidebar placeholders
 
@@ -73,7 +77,7 @@ These can be built post-Phase 5 or during Phase 6/7 prep.
 
 ## Suggested next moves
 
-1. **Phase 6 — Background jobs**: SMTP calendar invites, weekly digest cron, purge_deleted_team_members cron.
+1. **"Send invite" button** on event detail page (D2 Option C UI trigger).
 2. **Analytics/History/Resources** pages (additive, not blocking).
 3. **Phase 7 — Cutover prep**: data-validation diff script, rollback rehearsal, telemetry for adoption tracking.
 
