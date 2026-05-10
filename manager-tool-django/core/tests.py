@@ -1785,3 +1785,364 @@ class TestTodosDelete:
         resp = client.delete(f"/todos/{other.id}/delete/")
         assert resp.status_code == 404
         assert ActionItem.objects.filter(pk=other.id).exists()
+
+
+# ============================================================
+# Phase 5.4 — Journal entries
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestJournalList:
+    """GET /journal/ — main journal page with today's form + history."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_j1", display_name="Todd",
+            password_hash="x", email="todd_j1@example.com",
+        )
+        self._login_as(client, "todd_j1@example.com")
+        return m
+
+    def test_page_loads_with_empty_form(self, client):
+        self._setup(client)
+        resp = client.get("/journal/")
+        assert resp.status_code == 200
+        assert b"Manager Journal" in resp.content
+
+    def test_page_shows_existing_entries(self, client):
+        m = self._setup(client)
+        JournalEntry.objects.create(
+            entry_date="2026-05-08", entry_type="daily",
+            content="Had a great 1:1", manager_id=m.id,
+        )
+        resp = client.get("/journal/")
+        assert resp.status_code == 200
+        assert b"Had a great 1:1" in resp.content
+
+    def test_today_entry_prefills_form(self, client):
+        from datetime import date
+        m = self._setup(client)
+        today = date.today().isoformat()
+        JournalEntry.objects.create(
+            entry_date=today, entry_type="daily",
+            content="Morning thoughts", mood=4, energy=3,
+            manager_id=m.id,
+        )
+        resp = client.get("/journal/")
+        assert resp.status_code == 200
+        assert b"Morning thoughts" in resp.content
+        # Form should show "Edit today's entry" not "Write today's entry"
+        assert b"Edit today" in resp.content
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger_j@example.com")
+        resp = client.get("/journal/")
+        assert resp.status_code == 403
+
+    def test_cross_manager_entries_not_visible(self, client):
+        m1 = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_j1", display_name="Other",
+            password_hash="x", email="other_j1@example.com",
+        )
+        JournalEntry.objects.create(
+            entry_date="2026-05-08", entry_type="daily",
+            content="Secret thoughts", manager_id=m2.id,
+        )
+        resp = client.get("/journal/")
+        assert b"Secret thoughts" not in resp.content
+
+
+@pytest.mark.django_db
+class TestJournalAdd:
+    """POST /journal/add/ — create or update a journal entry."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_j2", display_name="Todd",
+            password_hash="x", email="todd_j2@example.com",
+        )
+        self._login_as(client, "todd_j2@example.com")
+        return m
+
+    def test_get_not_allowed(self, client):
+        self._setup(client)
+        assert client.get("/journal/add/").status_code == 405
+
+    def test_create_persists_with_correct_manager_id(self, client):
+        m = self._setup(client)
+        resp = client.post("/journal/add/", {
+            "entry_date": "2026-05-09",
+            "entry_type": "daily",
+            "content": "Delegated the Q3 report",
+            "mood": "4",
+            "energy": "3",
+            "tags": "delegation, empowerment",
+        })
+        assert resp.status_code == 200
+        entries = JournalEntry.objects.for_manager(m.id)
+        assert entries.count() == 1
+        e = entries.first()
+        assert e.entry_date == "2026-05-09"
+        assert e.entry_type == "daily"
+        assert e.content == "Delegated the Q3 report"
+        assert e.mood == 4
+        assert e.energy == 3
+        assert e.tags == "delegation, empowerment"
+        assert e.manager_id == m.id
+        assert e.created_at is not None
+
+    def test_create_with_no_mood_energy_stores_null(self, client):
+        m = self._setup(client)
+        client.post("/journal/add/", {
+            "entry_date": "2026-05-09",
+            "entry_type": "daily",
+            "content": "Quick note",
+            "mood": "",
+            "energy": "",
+        })
+        e = JournalEntry.objects.for_manager(m.id).first()
+        assert e.mood is None
+        assert e.energy is None
+
+    def test_update_existing_entry(self, client):
+        m = self._setup(client)
+        entry = JournalEntry.objects.create(
+            entry_date="2026-05-09", entry_type="daily",
+            content="Original", manager_id=m.id,
+        )
+        resp = client.post("/journal/add/", {
+            "existing_id": str(entry.id),
+            "entry_date": "2026-05-09",
+            "entry_type": "daily",
+            "content": "Updated thoughts",
+            "mood": "5",
+            "energy": "4",
+        })
+        assert resp.status_code == 200
+        entry.refresh_from_db()
+        assert entry.content == "Updated thoughts"
+        assert entry.mood == 5
+        assert entry.energy == 4
+        assert entry.updated_at is not None
+        # No duplicate created
+        assert JournalEntry.objects.for_manager(m.id).count() == 1
+
+    def test_update_cross_tenant_ignored(self, client):
+        """Passing another manager's entry_id should create a new entry
+        for the logged-in manager, not update the other manager's."""
+        m1 = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_j2", display_name="Other",
+            password_hash="x", email="other_j2@example.com",
+        )
+        other_entry = JournalEntry.objects.create(
+            entry_date="2026-05-09", entry_type="daily",
+            content="Other's secret", manager_id=m2.id,
+        )
+        resp = client.post("/journal/add/", {
+            "existing_id": str(other_entry.id),
+            "entry_date": "2026-05-09",
+            "entry_type": "daily",
+            "content": "My entry",
+        })
+        assert resp.status_code == 200
+        other_entry.refresh_from_db()
+        assert other_entry.content == "Other's secret"  # unchanged
+        # A new entry was created for m1
+        assert JournalEntry.objects.for_manager(m1.id).count() == 1
+
+    def test_missing_date_is_validation_error(self, client):
+        self._setup(client)
+        resp = client.post("/journal/add/", {
+            "entry_type": "daily",
+            "content": "No date",
+        })
+        assert resp.status_code == 422
+        assert JournalEntry.objects.count() == 0
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger_j2@example.com")
+        resp = client.post("/journal/add/", {
+            "entry_date": "2026-05-09",
+            "entry_type": "daily",
+        })
+        assert resp.status_code == 403
+
+    def test_other_managers_data_unaffected(self, client):
+        m1 = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_j2b", display_name="Other",
+            password_hash="x", email="other_j2b@example.com",
+        )
+        JournalEntry.objects.create(
+            entry_date="2026-05-08", entry_type="daily",
+            content="Other's entry", manager_id=m2.id,
+        )
+        client.post("/journal/add/", {
+            "entry_date": "2026-05-09",
+            "entry_type": "daily",
+            "content": "Mine",
+        })
+        assert JournalEntry.objects.for_manager(m1.id).count() == 1
+        assert JournalEntry.objects.for_manager(m2.id).count() == 1
+
+
+@pytest.mark.django_db
+class TestJournalEdit:
+    """GET/POST /journal/<id>/edit/ — edit a past journal entry."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_j3", display_name="Todd",
+            password_hash="x", email="todd_j3@example.com",
+        )
+        self._login_as(client, "todd_j3@example.com")
+        entry = JournalEntry.objects.create(
+            entry_date="2026-05-05", entry_type="daily",
+            content="Old thoughts", mood=3, energy=2,
+            manager_id=m.id,
+        )
+        return m, entry
+
+    def test_get_loads_form_with_existing_data(self, client):
+        _, entry = self._setup(client)
+        resp = client.get(f"/journal/{entry.id}/edit/")
+        assert resp.status_code == 200
+        assert b"Old thoughts" in resp.content
+
+    def test_post_updates_entry_and_redirects(self, client):
+        _, entry = self._setup(client)
+        resp = client.post(f"/journal/{entry.id}/edit/", {
+            "entry_date": "2026-05-05",
+            "entry_type": "daily",
+            "content": "Revised thoughts",
+            "mood": "5",
+            "energy": "4",
+        })
+        assert resp.status_code == 302
+        assert resp.url == "/journal/"
+        entry.refresh_from_db()
+        assert entry.content == "Revised thoughts"
+        assert entry.mood == 5
+
+    def test_cross_tenant_edit_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_j3", display_name="Other",
+            password_hash="x", email="other_j3@example.com",
+        )
+        other_entry = JournalEntry.objects.create(
+            entry_date="2026-05-05", entry_type="daily",
+            content="Secret", manager_id=m2.id,
+        )
+        resp = client.get(f"/journal/{other_entry.id}/edit/")
+        assert resp.status_code == 404
+
+    def test_edit_post_cross_tenant_returns_404(self, client):
+        m1, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_j3b", display_name="Other",
+            password_hash="x", email="other_j3b@example.com",
+        )
+        other_entry = JournalEntry.objects.create(
+            entry_date="2026-05-05", entry_type="daily",
+            content="Secret", manager_id=m2.id,
+        )
+        resp = client.post(f"/journal/{other_entry.id}/edit/", {
+            "entry_date": "2026-05-05",
+            "entry_type": "daily",
+            "content": "Hacked",
+        })
+        assert resp.status_code == 404
+        other_entry.refresh_from_db()
+        assert other_entry.content == "Secret"
+
+
+@pytest.mark.django_db
+class TestJournalStreak:
+    """Streak calculation in journal_list view."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_j4", display_name="Todd",
+            password_hash="x", email="todd_j4@example.com",
+        )
+        self._login_as(client, "todd_j4@example.com")
+        return m
+
+    def test_no_entries_shows_no_streak(self, client):
+        self._setup(client)
+        resp = client.get("/journal/")
+        assert b"-day streak" not in resp.content
+
+    def test_today_entry_shows_1_day_streak(self, client):
+        from datetime import date
+        m = self._setup(client)
+        JournalEntry.objects.create(
+            entry_date=date.today().isoformat(), entry_type="daily",
+            manager_id=m.id,
+        )
+        resp = client.get("/journal/")
+        assert b"1-day streak" in resp.content
+
+    def test_consecutive_days_counted(self, client):
+        from datetime import date, timedelta
+        m = self._setup(client)
+        today = date.today()
+        for i in range(3):
+            JournalEntry.objects.create(
+                entry_date=(today - timedelta(days=i)).isoformat(),
+                entry_type="daily", manager_id=m.id,
+            )
+        resp = client.get("/journal/")
+        assert b"3-day streak" in resp.content
+
+    def test_gap_breaks_streak(self, client):
+        from datetime import date, timedelta
+        m = self._setup(client)
+        today = date.today()
+        JournalEntry.objects.create(
+            entry_date=today.isoformat(), entry_type="daily",
+            manager_id=m.id,
+        )
+        # Skip yesterday, add day before yesterday
+        JournalEntry.objects.create(
+            entry_date=(today - timedelta(days=2)).isoformat(),
+            entry_type="daily", manager_id=m.id,
+        )
+        resp = client.get("/journal/")
+        assert b"1-day streak" in resp.content

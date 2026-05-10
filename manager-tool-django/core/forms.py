@@ -315,3 +315,91 @@ class ActionItemForm(forms.ModelForm):
         # ChoiceField returns the raw value; "" sentinel maps to NULL.
         t = self.cleaned_data.get("due_time")
         return t or None
+
+
+# Phase 5.4 — Journal entries
+
+from .models import JournalEntry  # noqa: E402
+
+ENTRY_TYPE_CHOICES = [
+    ("daily", "Daily"),
+    ("weekly", "Weekly reflection"),
+    ("reflection", "Reflection"),
+]
+
+MOOD_CHOICES = [
+    ("", "—"),
+    ("1", "1 — Rough"),
+    ("2", "2 — Low"),
+    ("3", "3 — Okay"),
+    ("4", "4 — Good"),
+    ("5", "5 — Great"),
+]
+
+ENERGY_CHOICES = [
+    ("", "—"),
+    ("1", "1 — Drained"),
+    ("2", "2 — Low"),
+    ("3", "3 — Steady"),
+    ("4", "4 — High"),
+    ("5", "5 — Fired up"),
+]
+
+
+class JournalEntryForm(forms.ModelForm):
+    """Daily or weekly journal entry. Mood and energy are optional 1-5
+    scales. Tags are freeform comma-separated text."""
+
+    entry_date = forms.DateField(
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+    entry_type = forms.ChoiceField(
+        choices=ENTRY_TYPE_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+        initial="daily",
+    )
+    mood = forms.ChoiceField(
+        choices=MOOD_CHOICES,
+        required=False,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+    )
+    energy = forms.ChoiceField(
+        choices=ENERGY_CHOICES,
+        required=False,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+    )
+
+    class Meta:
+        model = JournalEntry
+        fields = [
+            "entry_date", "entry_type", "content",
+            "mood", "energy", "private_notes", "tags",
+        ]
+        widgets = {
+            "content": forms.Textarea(attrs={
+                "class": _INPUT_CLS,
+                "rows": 5,
+                "placeholder": "What's on your mind?",
+            }),
+            "private_notes": forms.Textarea(attrs={
+                "class": _INPUT_CLS,
+                "rows": 3,
+                "placeholder": "What are you working on about yourself?",
+            }),
+            "tags": forms.TextInput(attrs={
+                "class": _INPUT_CLS,
+                "placeholder": "e.g. delegation, feedback, hiring",
+            }),
+        }
+
+    def clean_entry_date(self):
+        d = self.cleaned_data["entry_date"]
+        return d.isoformat()  # text in DB
+
+    def clean_mood(self):
+        v = self.cleaned_data.get("mood")
+        return int(v) if v else None
+
+    def clean_energy(self):
+        v = self.cleaned_data.get("energy")
+        return int(v) if v else None

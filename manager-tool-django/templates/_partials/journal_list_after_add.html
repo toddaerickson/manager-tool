@@ -1,0 +1,15 @@
+{% comment %}
+Returned by journal-add on success.
+- Replaces #journal-form-wrap with the updated form (shows existing_id)
+- Out-of-band swap updates #journal-list with the new entry
+- Out-of-band swap updates #journal-streak
+{% endcomment %}
+{% include "_partials/journal_form.html" %}
+
+<div id="journal-list" hx-swap-oob="true">
+  {% include "_partials/journal_list.html" %}
+</div>
+
+<div id="journal-streak" hx-swap-oob="true">
+  {% include "_partials/journal_streak.html" %}
+</div>

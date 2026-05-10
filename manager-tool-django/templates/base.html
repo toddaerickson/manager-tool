@@ -30,7 +30,8 @@
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'dashboard' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Dashboard</a>
           <a href="{% url 'events-upcoming' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-upcoming' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Upcoming</a>
-          <div class="block px-2 py-1.5 text-slate-500">Manager Journal <span class="text-xs">(Phase 5)</span></div>
+          <a href="{% url 'journal' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'journal' or request.resolver_match.url_name == 'journal-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Manager Journal</a>
           <a href="{% url 'events-schedule' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-schedule' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Schedule Event</a>
           <a href="{% url 'todos' %}"
