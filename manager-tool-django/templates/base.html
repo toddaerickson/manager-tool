@@ -36,13 +36,16 @@
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-schedule' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Schedule Event</a>
           <a href="{% url 'todos' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'todos' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">To Do</a>
-          <div class="block px-2 py-1.5 text-slate-500">Decisions <span class="text-xs">(Phase 5)</span></div>
+          <a href="{% url 'decisions' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'decisions' or request.resolver_match.url_name == 'decisions-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Decisions</a>
         </div>
 
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Directs</div>
-          <div class="block px-2 py-1.5 text-slate-500">1:1 Notes <span class="text-xs">(Phase 5)</span></div>
-          <div class="block px-2 py-1.5 text-slate-500">Delegations <span class="text-xs">(Phase 5)</span></div>
+          <a href="{% url 'notes' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'notes' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">1:1 Notes</a>
+          <a href="{% url 'delegations' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'delegations' or request.resolver_match.url_name == 'delegations-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Delegations</a>
           <div class="block px-2 py-1.5 text-slate-500">Feedback <span class="text-xs">(Phase 5)</span></div>
           <a href="{% url 'goals' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'goals' or request.resolver_match.url_name == 'goals-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Goals</a>

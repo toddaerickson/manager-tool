@@ -1,0 +1,44 @@
+<form method="post" action="{% url 'decisions-add' %}" class="space-y-3">
+  {% csrf_token %}
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">Title *</label>
+    {{ form.title }}
+    {% if form.title.errors %}<p class="text-xs text-red-600 mt-1">{{ form.title.errors.0 }}</p>{% endif %}
+  </div>
+
+  <div class="grid grid-cols-2 gap-3">
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Context</label>
+      {{ form.context }}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Alternatives considered</label>
+      {{ form.alternatives }}
+    </div>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">Rationale</label>
+    {{ form.rationale }}
+  </div>
+
+  <div class="grid grid-cols-3 gap-3">
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Expected outcome</label>
+      {{ form.expected_outcome }}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Review date</label>
+      {{ form.review_date }}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Status</label>
+      {{ form.status }}
+    </div>
+  </div>
+
+  <div class="flex justify-end">
+    <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">Log decision</button>
+  </div>
+</form>

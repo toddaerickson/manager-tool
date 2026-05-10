@@ -1,0 +1,44 @@
+<form method="post" action="{% url 'delegations-add' %}" class="space-y-3">
+  {% csrf_token %}
+
+  <div class="grid grid-cols-2 gap-3">
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Task *</label>
+      {{ form.task }}
+      {% if form.task.errors %}<p class="text-xs text-red-600 mt-1">{{ form.task.errors.0 }}</p>{% endif %}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Delegate to</label>
+      {{ form.team_member }}
+    </div>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">Expected outcome</label>
+    {{ form.outcome_expected }}
+  </div>
+
+  <div class="grid grid-cols-3 gap-3">
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Autonomy level</label>
+      {{ form.autonomy_level }}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Check-in date</label>
+      {{ form.check_in_date }}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Status</label>
+      {{ form.status }}
+    </div>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">Notes</label>
+    {{ form.notes }}
+  </div>
+
+  <div class="flex justify-end">
+    <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">Add delegation</button>
+  </div>
+</form>

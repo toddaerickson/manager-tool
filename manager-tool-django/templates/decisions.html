@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Decisions — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Decision Log</h1>
+    <p class="text-sm text-slate-500 mt-1">Record decisions with context and rationale. Review outcomes later.</p>
+  </header>
+
+  <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not decisions %}open{% endif %}>
+    <summary class="px-6 py-3 cursor-pointer select-none font-medium">Log decision</summary>
+    <div class="px-6 pb-6">
+      {% include "_partials/decision_form.html" %}
+    </div>
+  </details>
+
+  {% if decisions %}
+  <div class="space-y-3">
+    {% for d in decisions %}
+    <div id="decision-row-{{ d.id }}" class="bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-4">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-sm font-medium">{{ d.title }}</span>
+        <div class="flex items-center gap-3">
+          <span class="text-xs {% if d.status == 'validated' %}text-green-700{% elif d.status == 'reversed' %}text-red-600{% elif d.status == 'revised' %}text-amber-600{% else %}text-blue-600{% endif %}">
+            {% for k, v in status_labels.items %}{% if k == d.status %}{{ v }}{% endif %}{% endfor %}{% if not d.status %}Active{% endif %}
+          </span>
+          {% if d.review_date %}
+            <span class="text-xs tabular-nums {% if d.review_date <= today_iso and d.status == 'active' %}text-red-600 font-medium{% else %}text-slate-400{% endif %}">
+              review {{ d.review_date }}{% if d.review_date <= today_iso and d.status == 'active' %} (due){% endif %}
+            </span>
+          {% endif %}
+          <a href="{% url 'decisions-edit' d.id %}" class="text-xs text-slate-600 hover:text-slate-900 underline">Edit</a>
+          <button type="button"
+                  hx-delete="{% url 'decisions-delete' d.id %}"
+                  hx-target="#decision-row-{{ d.id }}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete this decision?"
+                  hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                  class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+        </div>
+      </div>
+      {% if d.rationale %}<p class="text-sm text-slate-600">{{ d.rationale|truncatewords:30 }}</p>{% endif %}
+      {% if d.actual_outcome %}<p class="text-xs text-slate-500 mt-1"><strong>Outcome:</strong> {{ d.actual_outcome }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
+    No decisions logged yet.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

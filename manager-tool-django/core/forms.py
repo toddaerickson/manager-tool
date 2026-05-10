@@ -9,8 +9,8 @@ forms convert from native date/time input to ISO/HH:MM strings on save.
 from django import forms
 
 from .models import (
-    CareerConversation, DevelopmentPlan, Event, Goal, Milestone, Skill,
-    TeamMember,
+    CareerConversation, Decision, Delegation, DevelopmentPlan, Event,
+    Goal, Milestone, RunningNote, Skill, TeamMember,
 )
 
 
@@ -629,4 +629,171 @@ class CareerConversationForm(forms.ModelForm):
 
     def clean_conversation_date(self):
         d = self.cleaned_data["conversation_date"]
+        return d.isoformat()
+
+
+# ============================================================
+# Phase 5.6 — Delegations + Decisions + Running Notes
+# ============================================================
+
+AUTONOMY_CHOICES = [
+    ("guided", "Guided"),
+    ("autonomous", "Autonomous"),
+    ("delegated", "Fully delegated"),
+]
+
+DELEGATION_STATUS_CHOICES = [
+    ("active", "Active"),
+    ("completed", "Completed"),
+    ("stalled", "Stalled"),
+]
+
+DECISION_STATUS_CHOICES = [
+    ("active", "Active"),
+    ("validated", "Validated"),
+    ("revised", "Revised"),
+    ("reversed", "Reversed"),
+]
+
+NOTE_CATEGORY_CHOICES = [
+    ("general", "General"),
+    ("meeting_prep", "Meeting prep"),
+    ("observation", "Observation"),
+    ("follow_up", "Follow-up"),
+    ("praise", "Praise"),
+]
+
+
+class DelegationForm(forms.ModelForm):
+    check_in_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+    autonomy_level = forms.ChoiceField(
+        choices=AUTONOMY_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+        initial="guided",
+    )
+    status = forms.ChoiceField(
+        choices=DELEGATION_STATUS_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+        initial="active",
+    )
+
+    class Meta:
+        model = Delegation
+        fields = [
+            "team_member", "task", "outcome_expected",
+            "autonomy_level", "check_in_date", "notes", "status",
+        ]
+        widgets = {
+            "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
+            "task": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "What you're delegating",
+            }),
+            "outcome_expected": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 2,
+                "placeholder": "What does done look like?",
+            }),
+            "notes": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 2,
+                "placeholder": "Additional context",
+            }),
+        }
+
+    def __init__(self, *args, manager_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager_id is not None:
+            self.fields["team_member"].queryset = (
+                TeamMember.objects.active_for_manager(manager_id).order_by("name")
+            )
+            self.fields["team_member"].required = False
+            self.fields["team_member"].empty_label = "(none)"
+
+    def clean_check_in_date(self):
+        d = self.cleaned_data.get("check_in_date")
+        return d.isoformat() if d else None
+
+
+class DecisionForm(forms.ModelForm):
+    review_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+    status = forms.ChoiceField(
+        choices=DECISION_STATUS_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+        initial="active",
+    )
+
+    class Meta:
+        model = Decision
+        fields = [
+            "title", "context", "alternatives", "rationale",
+            "expected_outcome", "review_date", "status", "actual_outcome",
+        ]
+        widgets = {
+            "title": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "Decision title",
+            }),
+            "context": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 2,
+                "placeholder": "What prompted this decision?",
+            }),
+            "alternatives": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 2,
+                "placeholder": "What else was considered?",
+            }),
+            "rationale": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 2,
+                "placeholder": "Why this choice?",
+            }),
+            "expected_outcome": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "What should happen if this works",
+            }),
+            "actual_outcome": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "What actually happened (fill on review)",
+            }),
+        }
+
+    def clean_review_date(self):
+        d = self.cleaned_data.get("review_date")
+        return d.isoformat() if d else None
+
+
+class RunningNoteForm(forms.ModelForm):
+    note_date = forms.DateField(
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+    category = forms.ChoiceField(
+        choices=NOTE_CATEGORY_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+        initial="general",
+    )
+
+    class Meta:
+        model = RunningNote
+        fields = ["team_member", "note_date", "content", "category"]
+        widgets = {
+            "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
+            "content": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 3,
+                "placeholder": "What happened or what you observed",
+            }),
+        }
+
+    def __init__(self, *args, manager_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager_id is not None:
+            self.fields["team_member"].queryset = (
+                TeamMember.objects.active_for_manager(manager_id).order_by("name")
+            )
+            self.fields["team_member"].required = False
+            self.fields["team_member"].empty_label = "All members (broadcast)"
+        if not self.initial.get("note_date"):
+            from datetime import date
+            self.fields["note_date"].initial = date.today()
+
+    def clean_note_date(self):
+        d = self.cleaned_data["note_date"]
         return d.isoformat()
