@@ -1471,40 +1471,48 @@ def analytics(request):
     members = TeamMember.objects.active_for_manager(mid).order_by("name")
     team_count = members.count()
 
-    # Meeting cadence per member
+    # Meeting cadence per member — single annotated query (#4)
+    from django.db.models import Max, Count, Q
+    cadence_qs = (
+        Event.objects.for_manager(mid)
+        .filter(
+            status__in=["completed", "scheduled"],
+            scheduled_date__lte=today_iso,  # past events only (#13)
+        )
+        .values("team_member_id")
+        .annotate(last_date=Max("scheduled_date"))
+    )
+    cadence_map = {r["team_member_id"]: r["last_date"] for r in cadence_qs}
     meeting_cadence = []
     for m in members:
-        last = (
-            Event.objects.for_manager(mid)
-            .filter(team_member=m, status__in=["completed", "scheduled"])
-            .order_by("-scheduled_date")
-            .first()
-        )
-        if last:
+        last_date = cadence_map.get(m.id)
+        if last_date:
             try:
-                days = (date.today() - date.fromisoformat(last.scheduled_date)).days
+                days = (date.today() - date.fromisoformat(last_date)).days
             except ValueError:
                 days = None
-            meeting_cadence.append({
-                "name": m.name, "last_date": last.scheduled_date, "days_ago": days,
-            })
+            meeting_cadence.append({"name": m.name, "last_date": last_date, "days_ago": days})
         else:
             meeting_cadence.append({"name": m.name, "last_date": None, "days_ago": None})
 
-    # Feedback ratios per member
+    # Feedback ratios per member — single annotated query (#4)
+    fb_qs = (
+        Feedback.objects.for_manager(mid)
+        .values("team_member_id", "team_member__name")
+        .annotate(
+            positive=Count("id", filter=Q(feedback_type="positive")),
+            constructive=Count("id", filter=Q(feedback_type="constructive")),
+        )
+    )
     feedback_ratios = []
-    for m in members:
-        pos = Feedback.objects.for_manager(mid).filter(
-            team_member=m, feedback_type="positive",
-        ).count()
-        con = Feedback.objects.for_manager(mid).filter(
-            team_member=m, feedback_type="constructive",
-        ).count()
-        total = pos + con
+    for row in fb_qs:
+        total = row["positive"] + row["constructive"]
         if total > 0:
             feedback_ratios.append({
-                "name": m.name, "positive": pos, "constructive": con,
-                "ratio_pct": int(pos / total * 100),
+                "name": row["team_member__name"],
+                "positive": row["positive"],
+                "constructive": row["constructive"],
+                "ratio_pct": int(row["positive"] / total * 100),
             })
 
     # Action item stats
