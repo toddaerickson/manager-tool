@@ -49,3 +49,45 @@ services:
         value: ""
       - key: PYTHON_VERSION
         value: "3.11"
+
+  # --- Cron jobs (Phase 6) ---
+
+  - type: cron
+    name: weekly-digest
+    runtime: python
+    rootDir: manager-tool-django
+    plan: starter
+    region: oregon
+    branch: main
+    schedule: "0 13 * * MON"  # 9 AM ET (UTC-4) every Monday
+    buildCommand: pip install -r requirements.txt
+    command: python manage.py send_weekly_digests
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: MANAGER_TOOL_ENV
+        value: prod
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+  - type: cron
+    name: purge-deleted-members
+    runtime: python
+    rootDir: manager-tool-django
+    plan: starter
+    region: oregon
+    branch: main
+    schedule: "0 5 * * *"  # 1 AM ET daily
+    buildCommand: pip install -r requirements.txt
+    command: python manage.py purge_deleted_team_members
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: MANAGER_TOOL_ENV
+        value: prod
+      - key: PYTHON_VERSION
+        value: "3.11"

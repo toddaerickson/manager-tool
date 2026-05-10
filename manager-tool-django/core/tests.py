@@ -3118,3 +3118,202 @@ class TestSettings:
         m = self._setup(client)
         resp = client.get("/settings/")
         assert b"todd_set1@example.com" in resp.content or b"todd_set1" in resp.content
+
+
+# ============================================================
+# Phase 6 — Calendar service tests
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestCalendarService:
+    """Tests for core/services/calendar.py — ICS generation and M3
+    sanitization guards."""
+
+    def _make_event(self):
+        m = Manager.objects.create(
+            username="cal_mgr", display_name="Cal Manager",
+            password_hash="h", email="cal@example.com",
+        )
+        tm = TeamMember.objects.create(
+            name="Cal Report", manager_id=m.id, email="report@example.com",
+        )
+        e = Event.objects.create(
+            manager_id=m.id, title="Weekly 1:1", event_type="one_on_one",
+            team_member=tm, scheduled_date="2026-06-01",
+            scheduled_time="10:00", duration_minutes=30,
+            status="scheduled",
+        )
+        return m, tm, e
+
+    def test_generate_ics_basic(self):
+        from core.services.calendar import generate_ics
+        _, _, event = self._make_event()
+        ics = generate_ics(event)
+        assert "BEGIN:VCALENDAR" in ics
+        assert "BEGIN:VEVENT" in ics
+        assert "SUMMARY:Weekly 1:1" in ics
+        assert "END:VCALENDAR" in ics
+
+    def test_generate_ics_from_dict(self):
+        from core.services.calendar import generate_ics
+        event_dict = {
+            "scheduled_date": "2026-06-01",
+            "scheduled_time": "14:00",
+            "duration_minutes": 45,
+            "title": "Coaching",
+            "event_type": "coaching",
+            "location": "Room A",
+            "agenda": "Discuss goals",
+        }
+        ics = generate_ics(event_dict)
+        assert "SUMMARY:Coaching" in ics
+        assert "LOCATION:Room A" in ics
+
+    def test_ics_strips_control_chars(self):
+        """M3 guard: control characters in title/agenda are stripped."""
+        from core.services.calendar import generate_ics
+        event_dict = {
+            "scheduled_date": "2026-06-01",
+            "scheduled_time": "10:00",
+            "title": "Meeting\r\nBcc: evil@attacker.com",
+            "event_type": "other",
+        }
+        ics = generate_ics(event_dict)
+        assert "\r\nBcc:" not in ics.replace("\r\n", "|||")
+        assert "evil@attacker.com" not in ics or "SUMMARY" in ics
+
+    def test_ics_with_attendees(self):
+        from core.services.calendar import generate_ics
+        _, _, event = self._make_event()
+        ics = generate_ics(
+            event,
+            organizer_name="Boss", organizer_email="boss@example.com",
+            attendee_name="Report", attendee_email="report@example.com",
+        )
+        assert "ORGANIZER" in ics
+        assert "ATTENDEE" in ics
+        assert "boss@example.com" in ics
+        assert "report@example.com" in ics
+
+    def test_safe_header_text_strips_control_chars(self):
+        from core.services.calendar import _safe_header_text
+        assert "\n" not in _safe_header_text("Hello\nWorld")
+        assert "\r" not in _safe_header_text("Hello\rWorld")
+        assert len(_safe_header_text("x" * 300)) == 200
+
+    def test_ics_cn_value_strips_quotes(self):
+        from core.services.calendar import _ics_cn_value
+        assert '"' not in _ics_cn_value('John "Boss" Smith')
+
+    def test_send_calendar_invite_no_smtp(self):
+        """Without SMTP config, send_calendar_invite returns failure."""
+        from core.services.calendar import send_calendar_invite
+        _, _, event = self._make_event()
+        success, msg = send_calendar_invite(
+            event, "recipient@example.com",
+            manager_id=event.manager_id,
+        )
+        assert success is False
+        assert "SMTP not configured" in msg
+
+
+# ============================================================
+# Phase 6 — Digest service tests
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestDigestService:
+    """Tests for core/services/digest.py."""
+
+    def _seed(self):
+        m = Manager.objects.create(
+            username="digest_mgr", display_name="Digest Manager",
+            password_hash="h", email="digest@example.com",
+        )
+        tm = TeamMember.objects.create(
+            name="Digest Report", manager_id=m.id,
+        )
+        Event.objects.create(
+            manager_id=m.id, title="Upcoming Event",
+            event_type="one_on_one", team_member=tm,
+            scheduled_date="2099-01-01", scheduled_time="10:00",
+            status="scheduled",
+        )
+        ActionItem.objects.create(
+            manager_id=m.id, description="Overdue task",
+            due_date="2020-01-01", status="pending",
+        )
+        JournalEntry.objects.create(
+            manager_id=m.id, entry_date="2099-01-01",
+            entry_type="daily", content="Test entry",
+        )
+        return m
+
+    def test_generate_weekly_digest_html(self):
+        from core.services.digest import generate_weekly_digest
+        m = self._seed()
+        subject, html = generate_weekly_digest(m.id)
+        assert "Weekly Digest" in subject
+        assert "Digest Manager" in html
+        assert "Overdue" in html
+
+    def test_generate_weekly_digest_empty_manager(self):
+        from core.services.digest import generate_weekly_digest
+        m = Manager.objects.create(
+            username="empty_mgr", display_name="Empty",
+            password_hash="h",
+        )
+        subject, html = generate_weekly_digest(m.id)
+        assert "Weekly Digest" in subject
+        assert "Empty" in html
+
+    def test_send_weekly_digest_no_smtp(self):
+        from core.services.digest import send_weekly_digest
+        m = self._seed()
+        success, msg = send_weekly_digest(m.id)
+        assert success is False
+        assert "SMTP not configured" in msg
+
+
+# ============================================================
+# Phase 6 — Management commands tests
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestSendWeeklyDigestsCommand:
+    """Tests for the send_weekly_digests management command."""
+
+    def test_dry_run_no_configured_managers(self):
+        from django.core.management import call_command
+        from io import StringIO
+        out = StringIO()
+        call_command("send_weekly_digests", "--dry-run", stdout=out)
+        assert "0 manager(s)" in out.getvalue()
+
+    def test_dry_run_with_configured_manager(self):
+        from django.core.management import call_command
+        from io import StringIO
+        from core.models import Config
+        m = Manager.objects.create(
+            username="cmd_mgr", display_name="Cmd Manager",
+            password_hash="h", email="cmd@example.com",
+        )
+        Config.objects.create(manager_id=m.id, key="smtp_server", value="smtp.example.com")
+        out = StringIO()
+        call_command("send_weekly_digests", "--dry-run", stdout=out)
+        assert "1 manager(s)" in out.getvalue()
+        assert "Cmd Manager" in out.getvalue()
+
+    def test_single_manager_no_smtp(self):
+        from django.core.management import call_command
+        from io import StringIO
+        m = Manager.objects.create(
+            username="cmd_mgr2", display_name="Cmd Manager 2",
+            password_hash="h",
+        )
+        out = StringIO()
+        call_command("send_weekly_digests", "--manager-id", str(m.id), stdout=out)
+        assert "0 sent, 1 failed" in out.getvalue()
