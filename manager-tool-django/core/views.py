@@ -445,6 +445,8 @@ def events_send_invite(request, event_id: int):
     if success:
         Event.objects.filter(pk=ev.id).update(calendar_invite_sent=1)
         ev.refresh_from_db()
+        log_mutation(manager.id, "create", "CalendarInvite", ev.id,
+                     f"Sent invite to {ev.team_member.email} for '{ev.title}'")
     return render(request, "events_detail.html", {
         "ev": ev,
         "invite_success": message if success else None,
