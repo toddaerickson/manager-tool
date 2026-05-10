@@ -18,6 +18,7 @@ from .models import (
     Event, Feedback, Goal, JournalEntry, Milestone, RunningNote, Skill,
     TeamMember,
 )
+from .services.audit import log_mutation
 from .services.events import create_recurring_events
 
 
@@ -106,6 +107,8 @@ def team_members_add(request):
     member = form.save(commit=False)
     member.manager_id = manager.id
     member.save()
+    log_mutation(manager.id, "create", "TeamMember", member.id,
+                 f"Added team member: {member.name}")
     members = TeamMember.objects.active_for_manager(manager.id).order_by("name")
     # Return BOTH the cleared form (oob swap) and the updated list.
     return render(request, "_partials/team_member_list_after_add.html", {
@@ -140,6 +143,8 @@ def team_members_delete(request, member_id: int):
     )
     if updated == 0:
         return HttpResponse(status=404)
+    log_mutation(manager.id, "delete", "TeamMember", member_id,
+                 "Soft-deleted team member")
     return render(request, "_partials/team_member_row_deleted.html", {
         "deleted_members": TeamMember.objects.recently_deleted_for_manager(manager.id),
     })
@@ -807,6 +812,8 @@ def goals_add(request):
     from django.utils import timezone
     goal.created_at = timezone.now()
     goal.save()
+    log_mutation(manager.id, "create", "Goal", goal.id,
+                 f"Goal for {goal.team_member.name}: {goal.description[:60]}")
     goals = Goal.objects.for_manager(manager.id).select_related("team_member").order_by("-created_at")
     return render(request, "_partials/goal_list_after_add.html", {
         "goals": goals,
@@ -832,6 +839,8 @@ def goals_edit(request, goal_id: int):
             obj = form.save(commit=False)
             obj.updated_at = timezone.now()
             obj.save()
+            log_mutation(manager.id, "update", "Goal", obj.id,
+                         f"Updated goal: {obj.description[:60]}")
             return redirect("goals")
     else:
         form = GoalForm(instance=goal, manager_id=manager.id)
@@ -849,12 +858,37 @@ def goals_delete(request, goal_id: int):
     deleted, _ = Goal.objects.for_manager(manager.id).filter(pk=goal_id).delete()
     if deleted == 0:
         return HttpResponse(status=404)
+    log_mutation(manager.id, "delete", "Goal", goal_id, "Deleted goal")
     return HttpResponse(status=200)
 
 
 # ============================================================
 # Phase 5.5 — Career Development (Skills, Dev Plans, Conversations)
 # ============================================================
+
+
+def _career_dev_partial(request, manager):
+    """Build context and return the career dev content partial (D4)."""
+    mid = manager.id
+    skills = Skill.objects.for_manager(mid).select_related("team_member").order_by("team_member__name", "skill_name")
+    plans = DevelopmentPlan.objects.for_manager(mid).select_related("team_member").order_by("-created_at")
+    convos = CareerConversation.objects.for_manager(mid).select_related("team_member").order_by("-conversation_date")[:20]
+    plans = list(plans)
+    plan_ids = [p.id for p in plans]
+    milestones_by_plan = {}
+    if plan_ids:
+        for ms in Milestone.objects.for_manager(mid).filter(plan_id__in=plan_ids).order_by("id"):
+            milestones_by_plan.setdefault(ms.plan_id, []).append(ms)
+    for p in plans:
+        p.milestones_list = milestones_by_plan.get(p.id, [])
+    return render(request, "_partials/career_dev_content.html", {
+        "skills": skills,
+        "plans": plans,
+        "convos": convos,
+        "skill_form": SkillForm(manager_id=mid),
+        "plan_form": DevelopmentPlanForm(manager_id=mid),
+        "convo_form": CareerConversationForm(manager_id=mid),
+    })
 
 
 @login_required
@@ -920,7 +954,9 @@ def skills_add(request):
     from django.utils import timezone
     skill.created_at = timezone.now()
     skill.save()
-    return redirect("career-dev")
+    log_mutation(manager.id, "create", "Skill", skill.id,
+                 f"Skill for {skill.team_member.name}: {skill.skill_name}")
+    return _career_dev_partial(request, manager)
 
 
 @login_required
@@ -932,7 +968,8 @@ def skills_delete(request, skill_id: int):
     deleted, _ = Skill.objects.for_manager(manager.id).filter(pk=skill_id).delete()
     if deleted == 0:
         return HttpResponse(status=404)
-    return HttpResponse(status=200)
+    log_mutation(manager.id, "delete", "Skill", skill_id, "Deleted skill")
+    return _career_dev_partial(request, manager)
 
 
 @login_required
@@ -951,7 +988,9 @@ def plans_add(request):
     from django.utils import timezone
     plan.created_at = timezone.now()
     plan.save()
-    return redirect("career-dev")
+    log_mutation(manager.id, "create", "DevelopmentPlan", plan.id,
+                 f"Plan for {plan.team_member.name}: {plan.title[:60]}")
+    return _career_dev_partial(request, manager)
 
 
 @login_required
@@ -972,7 +1011,7 @@ def plans_update_status(request, plan_id: int):
     )
     if updated == 0:
         return HttpResponse(status=404)
-    return redirect("career-dev")
+    return _career_dev_partial(request, manager)
 
 
 @login_required
@@ -993,7 +1032,9 @@ def milestones_add(request, plan_id: int):
     ms.manager_id = manager.id
     ms.completed = 0
     ms.save()
-    return redirect("career-dev")
+    log_mutation(manager.id, "create", "Milestone", ms.id,
+                 f"Milestone: {ms.description[:60]}")
+    return _career_dev_partial(request, manager)
 
 
 @login_required
@@ -1011,7 +1052,7 @@ def milestones_complete(request, milestone_id: int):
     )
     if updated == 0:
         return HttpResponse(status=404)
-    return redirect("career-dev")
+    return _career_dev_partial(request, manager)
 
 
 @login_required
@@ -1030,7 +1071,9 @@ def convos_add(request):
     from django.utils import timezone
     convo.created_at = timezone.now()
     convo.save()
-    return redirect("career-dev")
+    log_mutation(manager.id, "create", "CareerConversation", convo.id,
+                 f"Career convo with {convo.team_member.name}")
+    return _career_dev_partial(request, manager)
 
 
 # ============================================================
@@ -1085,6 +1128,8 @@ def delegations_add(request):
     from django.utils import timezone
     d.created_at = timezone.now()
     d.save()
+    log_mutation(manager.id, "create", "Delegation", d.id,
+                 f"Delegated to {d.team_member.name if d.team_member else '?'}: {d.task[:60]}")
     return redirect("delegations")
 
 
@@ -1105,6 +1150,8 @@ def delegations_edit(request, delegation_id: int):
             if obj.status == "completed" and not obj.completed_at:
                 obj.completed_at = timezone.now()
             obj.save()
+            log_mutation(manager.id, "update", "Delegation", obj.id,
+                         f"Updated delegation: {obj.task[:60]}")
             return redirect("delegations")
     else:
         form = DelegationForm(instance=d, manager_id=manager.id)
@@ -1122,6 +1169,8 @@ def delegations_delete(request, delegation_id: int):
     deleted, _ = Delegation.objects.for_manager(manager.id).filter(pk=delegation_id).delete()
     if deleted == 0:
         return HttpResponse(status=404)
+    log_mutation(manager.id, "delete", "Delegation", delegation_id,
+                 "Deleted delegation")
     return HttpResponse(status=200)
 
 
@@ -1169,6 +1218,8 @@ def decisions_add(request):
     from django.utils import timezone
     d.created_at = timezone.now()
     d.save()
+    log_mutation(manager.id, "create", "Decision", d.id,
+                 f"Decision: {d.title[:60]}")
     return redirect("decisions")
 
 
@@ -1187,6 +1238,8 @@ def decisions_edit(request, decision_id: int):
             obj = form.save(commit=False)
             obj.updated_at = timezone.now()
             obj.save()
+            log_mutation(manager.id, "update", "Decision", obj.id,
+                         f"Updated decision: {obj.title[:60]}")
             return redirect("decisions")
     else:
         form = DecisionForm(instance=d)
@@ -1204,6 +1257,8 @@ def decisions_delete(request, decision_id: int):
     deleted, _ = Decision.objects.for_manager(manager.id).filter(pk=decision_id).delete()
     if deleted == 0:
         return HttpResponse(status=404)
+    log_mutation(manager.id, "delete", "Decision", decision_id,
+                 "Deleted decision")
     return HttpResponse(status=200)
 
 
@@ -1257,6 +1312,8 @@ def notes_add(request):
     from django.utils import timezone
     note.created_at = timezone.now()
     note.save()
+    log_mutation(manager.id, "create", "RunningNote", note.id,
+                 f"Note: {note.content[:60]}")
     return redirect("notes")
 
 
@@ -1269,6 +1326,8 @@ def notes_delete(request, note_id: int):
     deleted, _ = RunningNote.objects.for_manager(manager.id).filter(pk=note_id).delete()
     if deleted == 0:
         return HttpResponse(status=404)
+    log_mutation(manager.id, "delete", "RunningNote", note_id,
+                 "Deleted running note")
     return HttpResponse(status=200)
 
 
@@ -1313,6 +1372,8 @@ def feedback_add(request):
     from django.utils import timezone
     fb.created_at = timezone.now()
     fb.save()
+    log_mutation(manager.id, "create", "Feedback", fb.id,
+                 f"{fb.feedback_type} feedback for {fb.team_member.name}")
     return redirect("feedback")
 
 
@@ -1325,6 +1386,8 @@ def feedback_delete(request, feedback_id: int):
     deleted, _ = Feedback.objects.for_manager(manager.id).filter(pk=feedback_id).delete()
     if deleted == 0:
         return HttpResponse(status=404)
+    log_mutation(manager.id, "delete", "Feedback", feedback_id,
+                 "Deleted feedback entry")
     return HttpResponse(status=200)
 
 

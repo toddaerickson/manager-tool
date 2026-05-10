@@ -2508,7 +2508,7 @@ class TestSkillsAdd:
             "proficiency": "proficient",
             "is_strength": "on",
         })
-        assert resp.status_code == 302
+        assert resp.status_code == 200  # HTMX partial (D4)
         skills = Skill.objects.for_manager(m.id)
         assert skills.count() == 1
         s = skills.first()
@@ -2564,7 +2564,7 @@ class TestPlansAndMilestones:
             "title": "Leadership",
             "status": "active",
         })
-        assert resp.status_code == 302
+        assert resp.status_code == 200  # HTMX partial (D4)
         assert DevelopmentPlan.objects.for_manager(m.id).count() == 1
 
     def test_update_plan_status(self, client):
@@ -2573,7 +2573,7 @@ class TestPlansAndMilestones:
             team_member=tm, title="X", manager_id=m.id, status="active",
         )
         resp = client.post(f"/career/plans/{plan.id}/status/", {"status": "completed"})
-        assert resp.status_code == 302
+        assert resp.status_code == 200  # HTMX partial (D4)
         plan.refresh_from_db()
         assert plan.status == "completed"
 
@@ -2585,7 +2585,7 @@ class TestPlansAndMilestones:
         resp = client.post(f"/career/plans/{plan.id}/milestones/add/", {
             "description": "Read book",
         })
-        assert resp.status_code == 302
+        assert resp.status_code == 200  # HTMX partial (D4)
         assert Milestone.objects.for_manager(m.id).count() == 1
         ms = Milestone.objects.first()
         assert ms.completed == 0
@@ -2600,7 +2600,7 @@ class TestPlansAndMilestones:
             manager_id=m.id, completed=0,
         )
         resp = client.post(f"/career/milestones/{ms.id}/complete/")
-        assert resp.status_code == 302
+        assert resp.status_code == 200  # HTMX partial (D4)
         ms.refresh_from_db()
         assert ms.completed == 1
         assert ms.completed_at is not None
@@ -2682,7 +2682,7 @@ class TestConvosAdd:
             "notes": "Discussed IC vs management",
             "next_steps": "Shadow a team lead",
         })
-        assert resp.status_code == 302
+        assert resp.status_code == 200  # HTMX partial (D4)
         convos = CareerConversation.objects.for_manager(m.id)
         assert convos.count() == 1
         c = convos.first()
@@ -3317,3 +3317,77 @@ class TestSendWeeklyDigestsCommand:
         out = StringIO()
         call_command("send_weekly_digests", "--manager-id", str(m.id), stdout=out)
         assert "0 sent, 1 failed" in out.getvalue()
+
+
+# ============================================================
+# D3 — Audit logging tests
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestAuditLogging:
+    """Tests for the audit log service and its integration with views."""
+
+    def test_log_mutation_creates_entry(self):
+        from core.models import AuditLog
+        from core.services.audit import log_mutation
+        m = Manager.objects.create(
+            username="audit_mgr", display_name="Audit Mgr",
+            password_hash="h", email="audit@example.com",
+        )
+        log_mutation(m.id, "create", "TeamMember", 99, "Added team member: Alice")
+        entries = AuditLog.objects.for_manager(m.id)
+        assert entries.count() == 1
+        entry = entries.first()
+        assert entry.action == "create"
+        assert entry.entity_type == "TeamMember"
+        assert entry.entity_id == 99
+        assert "Alice" in entry.summary
+
+    def test_log_mutation_none_manager_skipped(self):
+        from core.models import AuditLog
+        from core.services.audit import log_mutation
+        log_mutation(None, "create", "TeamMember", 1, "should not save")
+        assert AuditLog.objects.count() == 0
+
+    def test_log_mutation_caps_summary(self):
+        from core.models import AuditLog
+        from core.services.audit import log_mutation
+        m = Manager.objects.create(
+            username="audit_cap", display_name="Cap Mgr",
+            password_hash="h",
+        )
+        log_mutation(m.id, "update", "Goal", 1, "x" * 600)
+        entry = AuditLog.objects.for_manager(m.id).first()
+        assert len(entry.summary) == 500
+
+    def test_team_member_add_creates_audit(self, client):
+        """Integration: adding a team member via the view creates an audit entry."""
+        from django.contrib.auth.models import User
+        from core.models import AuditLog
+        user = User.objects.create_user("auditor", "auditor@example.com", "pw")
+        m = Manager.objects.create(
+            username="audit_int", display_name="Audit Int",
+            password_hash="h", email="auditor@example.com",
+        )
+        client.force_login(user)
+        client.post("/team/add/", {"name": "New Member"})
+        assert AuditLog.objects.for_manager(m.id).filter(
+            action="create", entity_type="TeamMember",
+        ).exists()
+
+    def test_audit_log_cross_tenant_isolation(self):
+        from core.models import AuditLog
+        from core.services.audit import log_mutation
+        m1 = Manager.objects.create(
+            username="audit_m1", display_name="M1",
+            password_hash="h",
+        )
+        m2 = Manager.objects.create(
+            username="audit_m2", display_name="M2",
+            password_hash="h",
+        )
+        log_mutation(m1.id, "create", "Goal", 1, "M1's goal")
+        log_mutation(m2.id, "create", "Goal", 2, "M2's goal")
+        assert AuditLog.objects.for_manager(m1.id).count() == 1
+        assert AuditLog.objects.for_manager(m2.id).count() == 1

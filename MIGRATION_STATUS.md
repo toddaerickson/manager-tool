@@ -68,8 +68,8 @@ These can be built post-Phase 5 or during Phase 6/7 prep.
 
 - D1 (no event edit) → closed
 - D2 (Outlook source-of-truth contract) → closed
-- D3 (audit logging for HR data mutations) → open (flagged by /review-as audit on PR #67)
-- D4 (HTMX consistency on Career Dev page) → open (Career Dev uses full-page redirects instead of HTMX partials)
+- D3 (audit logging for HR data mutations) → closed (AuditLog model + log_mutation calls on all HR-sensitive views)
+- D4 (HTMX consistency on Career Dev page) → closed (career dev content partial + hx-post on all forms)
 
 ## Suggested next moves
 
