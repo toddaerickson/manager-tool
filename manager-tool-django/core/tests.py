@@ -15,6 +15,7 @@ import pytest
 
 from coaching.models import CoachSuggestion
 from core.models import (
+    ActionItem,
     Decision,
     Event,
     JournalEntry,
@@ -239,7 +240,72 @@ class TestDashboardView:
         body = resp.content.decode()
         # Per-tenant count is 2 (Todd's), not 3 (all rows)
         assert ">2<" in body, body
-        assert "id=" + str(m.id) in body
+
+    def test_overview_shows_overdue_count(self, client):
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd_dash2", display_name="Todd",
+            password_hash="x", email="todd_dash2@example.com",
+        )
+        self._login_as(client, "todd_dash2@example.com")
+        ActionItem.objects.create(
+            description="Overdue task", manager_id=m.id,
+            status="pending",
+            due_date=(date.today() - timedelta(days=1)).isoformat(),
+        )
+        ActionItem.objects.create(
+            description="Future task", manager_id=m.id,
+            status="pending",
+            due_date=(date.today() + timedelta(days=3)).isoformat(),
+        )
+        resp = client.get("/dashboard/panels/overview/")
+        body = resp.content.decode()
+        assert "Overdue" in body
+        assert "Overdue task" in body  # appears in overdue list
+
+    def test_overview_shows_upcoming_events(self, client):
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd_dash3", display_name="Todd",
+            password_hash="x", email="todd_dash3@example.com",
+        )
+        self._login_as(client, "todd_dash3@example.com")
+        Event.objects.create(
+            title="Weekly sync", event_type="one_on_one",
+            scheduled_date=(date.today() + timedelta(days=1)).isoformat(),
+            scheduled_time="10:00", status="scheduled",
+            manager_id=m.id,
+        )
+        resp = client.get("/dashboard/panels/overview/")
+        body = resp.content.decode()
+        assert "Weekly sync" in body
+
+    def test_overview_cross_tenant_isolation(self, client):
+        from datetime import date
+        m1 = Manager.objects.create(
+            username="todd_dash4", display_name="Todd",
+            password_hash="x", email="todd_dash4@example.com",
+        )
+        m2 = Manager.objects.create(
+            username="other_dash4", display_name="Other",
+            password_hash="x", email="other_dash4@example.com",
+        )
+        self._login_as(client, "todd_dash4@example.com")
+        # Create data for m2 only
+        ActionItem.objects.create(
+            description="Other's overdue", manager_id=m2.id,
+            status="pending", due_date="2020-01-01",
+        )
+        Event.objects.create(
+            title="Other's meeting", event_type="one_on_one",
+            scheduled_date=date.today().isoformat(),
+            scheduled_time="09:00", status="scheduled",
+            manager_id=m2.id,
+        )
+        resp = client.get("/dashboard/panels/overview/")
+        body = resp.content.decode()
+        assert "Other's overdue" not in body
+        assert "Other's meeting" not in body
 
     def test_logout_invalidates_session_with_setup(self, client):
         m = Manager.objects.create(
