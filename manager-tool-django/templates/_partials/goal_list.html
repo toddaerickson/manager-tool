@@ -1,0 +1,48 @@
+{% if goals %}
+<table class="min-w-full bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+  <thead class="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+    <tr>
+      <th class="px-4 py-3">Member</th>
+      <th class="px-4 py-3">Goal</th>
+      <th class="px-4 py-3">Quarter</th>
+      <th class="px-4 py-3">Status</th>
+      <th class="px-4 py-3 w-24"></th>
+    </tr>
+  </thead>
+  <tbody class="divide-y divide-slate-100">
+    {% for g in goals %}
+    <tr id="goal-row-{{ g.id }}">
+      <td class="px-4 py-3 text-sm">{{ g.team_member.name }}</td>
+      <td class="px-4 py-3 text-sm break-words">
+        {{ g.description }}
+        {% if g.key_results %}<p class="text-xs text-slate-500 mt-0.5 whitespace-pre-line">{{ g.key_results|truncatewords:20 }}</p>{% endif %}
+      </td>
+      <td class="px-4 py-3 text-sm tabular-nums text-slate-600">{{ g.quarter }}{% if g.target_date %}<br><span class="text-xs">by {{ g.target_date }}</span>{% endif %}</td>
+      <td class="px-4 py-3 text-sm">
+        <span class="{% if g.status == 'met' or g.status == 'exceeded' %}text-green-700{% elif g.status == 'not_met' %}text-red-600{% elif g.status == 'in_progress' %}text-blue-600{% else %}text-slate-500{% endif %}">
+          {{ g.status|default:"not_started" }}
+        </span>
+      </td>
+      <td class="px-4 py-3 text-right text-sm">
+        <div class="flex flex-col items-end gap-1">
+          <a href="{% url 'goals-edit' g.id %}" class="text-slate-700 hover:text-slate-900 underline">Edit</a>
+          <button type="button"
+                  hx-delete="{% url 'goals-delete' g.id %}"
+                  hx-target="#goal-row-{{ g.id }}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete this goal? Cannot be undone."
+                  hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                  class="text-xs text-slate-400 hover:text-red-600 underline">
+            Delete
+          </button>
+        </div>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
+  No goals yet. Add one above.
+</div>
+{% endif %}

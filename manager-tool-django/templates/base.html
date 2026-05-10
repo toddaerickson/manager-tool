@@ -44,8 +44,10 @@
           <div class="block px-2 py-1.5 text-slate-500">1:1 Notes <span class="text-xs">(Phase 5)</span></div>
           <div class="block px-2 py-1.5 text-slate-500">Delegations <span class="text-xs">(Phase 5)</span></div>
           <div class="block px-2 py-1.5 text-slate-500">Feedback <span class="text-xs">(Phase 5)</span></div>
-          <div class="block px-2 py-1.5 text-slate-500">Goals <span class="text-xs">(Phase 5)</span></div>
-          <div class="block px-2 py-1.5 text-slate-500">Career Dev <span class="text-xs">(Phase 5)</span></div>
+          <a href="{% url 'goals' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'goals' or request.resolver_match.url_name == 'goals-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Goals</a>
+          <a href="{% url 'career-dev' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'career-dev' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Career Dev</a>
         </div>
 
         <div>

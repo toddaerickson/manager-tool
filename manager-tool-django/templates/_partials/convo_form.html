@@ -1,0 +1,35 @@
+<form method="post" action="{% url 'convos-add' %}" class="space-y-3">
+  {% csrf_token %}
+
+  <div class="grid grid-cols-2 gap-3">
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Team member *</label>
+      {{ convo_form.team_member }}
+      {% if convo_form.team_member.errors %}<p class="text-xs text-red-600 mt-1">{{ convo_form.team_member.errors.0 }}</p>{% endif %}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Date *</label>
+      {{ convo_form.conversation_date }}
+      {% if convo_form.conversation_date.errors %}<p class="text-xs text-red-600 mt-1">{{ convo_form.conversation_date.errors.0 }}</p>{% endif %}
+    </div>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">Topic</label>
+    {{ convo_form.topic }}
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">Notes</label>
+    {{ convo_form.notes }}
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">Next steps</label>
+    {{ convo_form.next_steps }}
+  </div>
+
+  <div class="flex justify-end">
+    <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">Log conversation</button>
+  </div>
+</form>

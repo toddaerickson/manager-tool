@@ -7,8 +7,15 @@ from django.views.decorators.http import require_http_methods
 
 from django.shortcuts import get_object_or_404
 
-from .forms import ActionItemForm, EventEditForm, EventForm, JournalEntryForm, TeamMemberForm
-from .models import ActionItem, Event, JournalEntry, TeamMember
+from .forms import (
+    ActionItemForm, CareerConversationForm, DevelopmentPlanForm,
+    EventEditForm, EventForm, GoalForm, JournalEntryForm, MilestoneForm,
+    SkillForm, TeamMemberForm,
+)
+from .models import (
+    ActionItem, CareerConversation, DevelopmentPlan, Event, Goal,
+    JournalEntry, Milestone, Skill, TeamMember,
+)
 from .services.events import create_recurring_events
 
 
@@ -750,3 +757,266 @@ def journal_edit(request, entry_id: int):
         if entry.energy is not None:
             form.initial["energy"] = str(entry.energy)
     return render(request, "journal_edit.html", {"form": form, "entry": entry})
+
+
+# ============================================================
+# Phase 5.5 — Goals
+# ============================================================
+
+
+@login_required
+def goals_list(request):
+    """Goals list with add form. Filterable by team member."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    mid = manager.id
+    member_id = request.GET.get("member")
+    goals = Goal.objects.for_manager(mid).select_related("team_member")
+    if member_id:
+        goals = goals.filter(team_member_id=member_id)
+    goals = goals.order_by("-created_at")
+    members = TeamMember.objects.active_for_manager(mid).order_by("name")
+    return render(request, "goals.html", {
+        "goals": goals,
+        "form": GoalForm(manager_id=mid),
+        "members": members,
+        "selected_member": member_id,
+    })
+
+
+@login_required
+@require_http_methods(["POST"])
+def goals_add(request):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    form = GoalForm(request.POST, manager_id=manager.id)
+    if not form.is_valid():
+        return render(request, "_partials/goal_form.html", {
+            "form": form,
+        }, status=422)
+    goal = form.save(commit=False)
+    goal.manager_id = manager.id
+    from django.utils import timezone
+    goal.created_at = timezone.now()
+    goal.save()
+    goals = Goal.objects.for_manager(manager.id).select_related("team_member").order_by("-created_at")
+    return render(request, "_partials/goal_list_after_add.html", {
+        "goals": goals,
+        "form": GoalForm(manager_id=manager.id),
+    })
+
+
+@login_required
+def goals_edit(request, goal_id: int):
+    """Edit a goal — GET shows form, POST saves and redirects."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    goal = get_object_or_404(
+        Goal.objects.for_manager(manager.id).select_related("team_member"),
+        pk=goal_id,
+    )
+    if request.method == "POST":
+        form = GoalForm(request.POST, instance=goal, manager_id=manager.id)
+        if form.is_valid():
+            from django.utils import timezone
+            obj = form.save(commit=False)
+            obj.updated_at = timezone.now()
+            obj.save()
+            return redirect("goals")
+    else:
+        form = GoalForm(instance=goal, manager_id=manager.id)
+        if goal.target_date:
+            form.initial["target_date"] = date.fromisoformat(goal.target_date)
+    return render(request, "goals_edit.html", {"form": form, "goal": goal})
+
+
+@login_required
+@require_http_methods(["DELETE"])
+def goals_delete(request, goal_id: int):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    deleted, _ = Goal.objects.for_manager(manager.id).filter(pk=goal_id).delete()
+    if deleted == 0:
+        return HttpResponse(status=404)
+    return HttpResponse(status=200)
+
+
+# ============================================================
+# Phase 5.5 — Career Development (Skills, Dev Plans, Conversations)
+# ============================================================
+
+
+@login_required
+def career_dev(request):
+    """Career development page — skills, development plans with
+    milestones, and career conversations. All scoped to the selected
+    team member (or all members if none selected)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    mid = manager.id
+    member_id = request.GET.get("member")
+    members = TeamMember.objects.active_for_manager(mid).order_by("name")
+
+    skills = Skill.objects.for_manager(mid).select_related("team_member")
+    plans = DevelopmentPlan.objects.for_manager(mid).select_related("team_member")
+    convos = CareerConversation.objects.for_manager(mid).select_related("team_member")
+    if member_id:
+        skills = skills.filter(team_member_id=member_id)
+        plans = plans.filter(team_member_id=member_id)
+        convos = convos.filter(team_member_id=member_id)
+    skills = skills.order_by("team_member__name", "skill_name")
+    plans = plans.order_by("-created_at")
+    convos = convos.order_by("-conversation_date")[:20]
+
+    # Batch-load milestones for visible plans (avoids N+1).
+    plan_ids = [p.id for p in plans]
+    milestones_by_plan = {}
+    if plan_ids:
+        for ms in Milestone.objects.for_manager(mid).filter(plan_id__in=plan_ids).order_by("id"):
+            milestones_by_plan.setdefault(ms.plan_id, []).append(ms)
+
+    return render(request, "career_dev.html", {
+        "skills": skills,
+        "plans": plans,
+        "convos": convos,
+        "milestones_by_plan": milestones_by_plan,
+        "members": members,
+        "selected_member": member_id,
+        "skill_form": SkillForm(manager_id=mid),
+        "plan_form": DevelopmentPlanForm(manager_id=mid),
+        "convo_form": CareerConversationForm(manager_id=mid),
+    })
+
+
+@login_required
+@require_http_methods(["POST"])
+def skills_add(request):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    form = SkillForm(request.POST, manager_id=manager.id)
+    if not form.is_valid():
+        return render(request, "_partials/skill_form.html", {
+            "skill_form": form,
+        }, status=422)
+    skill = form.save(commit=False)
+    skill.manager_id = manager.id
+    from django.utils import timezone
+    skill.created_at = timezone.now()
+    skill.save()
+    return redirect("career-dev")
+
+
+@login_required
+@require_http_methods(["DELETE"])
+def skills_delete(request, skill_id: int):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    deleted, _ = Skill.objects.for_manager(manager.id).filter(pk=skill_id).delete()
+    if deleted == 0:
+        return HttpResponse(status=404)
+    return HttpResponse(status=200)
+
+
+@login_required
+@require_http_methods(["POST"])
+def plans_add(request):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    form = DevelopmentPlanForm(request.POST, manager_id=manager.id)
+    if not form.is_valid():
+        return render(request, "_partials/plan_form.html", {
+            "plan_form": form,
+        }, status=422)
+    plan = form.save(commit=False)
+    plan.manager_id = manager.id
+    from django.utils import timezone
+    plan.created_at = timezone.now()
+    plan.save()
+    return redirect("career-dev")
+
+
+@login_required
+@require_http_methods(["POST"])
+def plans_update_status(request, plan_id: int):
+    """HTMX: update plan status (active/completed/paused)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    new_status = request.POST.get("status")
+    if new_status not in ("active", "completed", "paused"):
+        return HttpResponse(status=400)
+    from django.utils import timezone
+    updated = (
+        DevelopmentPlan.objects.for_manager(manager.id)
+        .filter(pk=plan_id)
+        .update(status=new_status, updated_at=timezone.now())
+    )
+    if updated == 0:
+        return HttpResponse(status=404)
+    return redirect("career-dev")
+
+
+@login_required
+@require_http_methods(["POST"])
+def milestones_add(request, plan_id: int):
+    """Add a milestone to a development plan."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    plan = get_object_or_404(
+        DevelopmentPlan.objects.for_manager(manager.id), pk=plan_id,
+    )
+    form = MilestoneForm(request.POST)
+    if not form.is_valid():
+        return redirect("career-dev")
+    ms = form.save(commit=False)
+    ms.plan = plan
+    ms.manager_id = manager.id
+    ms.completed = 0
+    ms.save()
+    return redirect("career-dev")
+
+
+@login_required
+@require_http_methods(["POST"])
+def milestones_complete(request, milestone_id: int):
+    """Mark a milestone as completed."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    from django.utils import timezone
+    updated = (
+        Milestone.objects.for_manager(manager.id)
+        .filter(pk=milestone_id, completed=0)
+        .update(completed=1, completed_at=timezone.now())
+    )
+    if updated == 0:
+        return HttpResponse(status=404)
+    return redirect("career-dev")
+
+
+@login_required
+@require_http_methods(["POST"])
+def convos_add(request):
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    form = CareerConversationForm(request.POST, manager_id=manager.id)
+    if not form.is_valid():
+        return render(request, "_partials/convo_form.html", {
+            "convo_form": form,
+        }, status=422)
+    convo = form.save(commit=False)
+    convo.manager_id = manager.id
+    from django.utils import timezone
+    convo.created_at = timezone.now()
+    convo.save()
+    return redirect("career-dev")

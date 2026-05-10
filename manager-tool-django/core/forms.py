@@ -8,7 +8,10 @@ forms convert from native date/time input to ISO/HH:MM strings on save.
 
 from django import forms
 
-from .models import Event, TeamMember
+from .models import (
+    CareerConversation, DevelopmentPlan, Event, Goal, Milestone, Skill,
+    TeamMember,
+)
 
 
 _INPUT_CLS = (
@@ -403,3 +406,227 @@ class JournalEntryForm(forms.ModelForm):
     def clean_energy(self):
         v = self.cleaned_data.get("energy")
         return int(v) if v else None
+
+
+# ============================================================
+# Phase 5.5 — Goals + Skills + Development Plans
+# ============================================================
+
+GOAL_STATUS_CHOICES = [
+    ("not_started", "Not started"),
+    ("in_progress", "In progress"),
+    ("met", "Met"),
+    ("exceeded", "Exceeded"),
+    ("partially_met", "Partially met"),
+    ("not_met", "Not met"),
+]
+
+PROFICIENCY_CHOICES = [
+    ("learning", "Learning"),
+    ("developing", "Developing"),
+    ("proficient", "Proficient"),
+    ("expert", "Expert"),
+]
+
+PLAN_STATUS_CHOICES = [
+    ("active", "Active"),
+    ("completed", "Completed"),
+    ("paused", "Paused"),
+]
+
+
+def _current_quarter():
+    from datetime import date
+    q = (date.today().month - 1) // 3 + 1
+    return f"Q{q} {date.today().year}"
+
+
+class GoalForm(forms.ModelForm):
+    target_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+    status = forms.ChoiceField(
+        choices=GOAL_STATUS_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+        initial="not_started",
+    )
+
+    class Meta:
+        model = Goal
+        fields = [
+            "team_member", "quarter", "description",
+            "key_results", "target_date", "status",
+        ]
+        widgets = {
+            "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
+            "quarter": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "e.g. Q2 2026",
+            }),
+            "description": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "Goal description",
+            }),
+            "key_results": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 3,
+                "placeholder": "One key result per line",
+            }),
+        }
+
+    def __init__(self, *args, manager_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager_id is not None:
+            self.fields["team_member"].queryset = (
+                TeamMember.objects.active_for_manager(manager_id).order_by("name")
+            )
+            self.fields["team_member"].required = True
+            self.fields["team_member"].empty_label = "Select team member"
+        if not self.initial.get("quarter"):
+            self.fields["quarter"].initial = _current_quarter()
+
+    def clean_target_date(self):
+        d = self.cleaned_data.get("target_date")
+        return d.isoformat() if d else None
+
+
+class SkillForm(forms.ModelForm):
+    proficiency = forms.ChoiceField(
+        choices=PROFICIENCY_CHOICES,
+        required=False,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+    )
+    is_strength = forms.BooleanField(required=False)
+    is_growth_area = forms.BooleanField(required=False)
+
+    class Meta:
+        model = Skill
+        fields = [
+            "team_member", "skill_name", "proficiency",
+            "is_strength", "is_growth_area", "notes",
+        ]
+        widgets = {
+            "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
+            "skill_name": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "e.g. Public speaking",
+            }),
+            "notes": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 2,
+                "placeholder": "Optional notes",
+            }),
+        }
+
+    def __init__(self, *args, manager_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager_id is not None:
+            self.fields["team_member"].queryset = (
+                TeamMember.objects.active_for_manager(manager_id).order_by("name")
+            )
+            self.fields["team_member"].required = True
+            self.fields["team_member"].empty_label = "Select team member"
+
+    def clean_is_strength(self):
+        return 1 if self.cleaned_data.get("is_strength") else 0
+
+    def clean_is_growth_area(self):
+        return 1 if self.cleaned_data.get("is_growth_area") else 0
+
+
+class DevelopmentPlanForm(forms.ModelForm):
+    target_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+    status = forms.ChoiceField(
+        choices=PLAN_STATUS_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+        initial="active",
+    )
+
+    class Meta:
+        model = DevelopmentPlan
+        fields = [
+            "team_member", "title", "description",
+            "target_date", "status",
+        ]
+        widgets = {
+            "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
+            "title": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "Plan title",
+            }),
+            "description": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 3,
+                "placeholder": "What this plan covers",
+            }),
+        }
+
+    def __init__(self, *args, manager_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager_id is not None:
+            self.fields["team_member"].queryset = (
+                TeamMember.objects.active_for_manager(manager_id).order_by("name")
+            )
+            self.fields["team_member"].required = True
+            self.fields["team_member"].empty_label = "Select team member"
+
+    def clean_target_date(self):
+        d = self.cleaned_data.get("target_date")
+        return d.isoformat() if d else None
+
+
+class MilestoneForm(forms.ModelForm):
+    target_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+
+    class Meta:
+        model = Milestone
+        fields = ["description", "target_date"]
+        widgets = {
+            "description": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "Milestone description",
+            }),
+        }
+
+    def clean_target_date(self):
+        d = self.cleaned_data.get("target_date")
+        return d.isoformat() if d else None
+
+
+class CareerConversationForm(forms.ModelForm):
+    conversation_date = forms.DateField(
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+
+    class Meta:
+        model = CareerConversation
+        fields = [
+            "team_member", "conversation_date", "topic",
+            "notes", "next_steps",
+        ]
+        widgets = {
+            "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
+            "topic": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "Discussion topic",
+            }),
+            "notes": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 3,
+                "placeholder": "Key points from the conversation",
+            }),
+            "next_steps": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 2,
+                "placeholder": "Agreed next steps",
+            }),
+        }
+
+    def __init__(self, *args, manager_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager_id is not None:
+            self.fields["team_member"].queryset = (
+                TeamMember.objects.active_for_manager(manager_id).order_by("name")
+            )
+            self.fields["team_member"].required = True
+            self.fields["team_member"].empty_label = "Select team member"
+
+    def clean_conversation_date(self):
+        d = self.cleaned_data["conversation_date"]
+        return d.isoformat()

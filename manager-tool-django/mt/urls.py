@@ -26,6 +26,18 @@ urlpatterns = [
     path("journal/", core_views.journal_list, name="journal"),
     path("journal/add/", core_views.journal_add, name="journal-add"),
     path("journal/<int:entry_id>/edit/", core_views.journal_edit, name="journal-edit"),
+    path("goals/", core_views.goals_list, name="goals"),
+    path("goals/add/", core_views.goals_add, name="goals-add"),
+    path("goals/<int:goal_id>/edit/", core_views.goals_edit, name="goals-edit"),
+    path("goals/<int:goal_id>/delete/", core_views.goals_delete, name="goals-delete"),
+    path("career/", core_views.career_dev, name="career-dev"),
+    path("career/skills/add/", core_views.skills_add, name="skills-add"),
+    path("career/skills/<int:skill_id>/delete/", core_views.skills_delete, name="skills-delete"),
+    path("career/plans/add/", core_views.plans_add, name="plans-add"),
+    path("career/plans/<int:plan_id>/status/", core_views.plans_update_status, name="plans-status"),
+    path("career/plans/<int:plan_id>/milestones/add/", core_views.milestones_add, name="milestones-add"),
+    path("career/milestones/<int:milestone_id>/complete/", core_views.milestones_complete, name="milestones-complete"),
+    path("career/convos/add/", core_views.convos_add, name="convos-add"),
     path("sentry-debug/", core_views.sentry_debug, name="sentry-debug"),
     # Force Google-only by short-circuiting allauth's default form. The
     # email/password page exists in allauth but we never want users to

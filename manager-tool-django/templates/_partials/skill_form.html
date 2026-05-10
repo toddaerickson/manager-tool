@@ -1,0 +1,40 @@
+<form method="post" action="{% url 'skills-add' %}" class="space-y-3">
+  {% csrf_token %}
+
+  <div class="grid grid-cols-2 gap-3">
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Team member *</label>
+      {{ skill_form.team_member }}
+      {% if skill_form.team_member.errors %}<p class="text-xs text-red-600 mt-1">{{ skill_form.team_member.errors.0 }}</p>{% endif %}
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Skill name *</label>
+      {{ skill_form.skill_name }}
+      {% if skill_form.skill_name.errors %}<p class="text-xs text-red-600 mt-1">{{ skill_form.skill_name.errors.0 }}</p>{% endif %}
+    </div>
+  </div>
+
+  <div class="grid grid-cols-3 gap-3">
+    <div>
+      <label class="block text-sm font-medium text-slate-700">Proficiency</label>
+      {{ skill_form.proficiency }}
+    </div>
+    <div class="flex items-center gap-2 pt-5">
+      {{ skill_form.is_strength }}
+      <label class="text-sm text-slate-700">Strength</label>
+    </div>
+    <div class="flex items-center gap-2 pt-5">
+      {{ skill_form.is_growth_area }}
+      <label class="text-sm text-slate-700">Growth area</label>
+    </div>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700">Notes</label>
+    {{ skill_form.notes }}
+  </div>
+
+  <div class="flex justify-end">
+    <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">Add skill</button>
+  </div>
+</form>
