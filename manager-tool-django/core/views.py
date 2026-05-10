@@ -736,19 +736,38 @@ def journal_add(request):
         entry.created_at = timezone.now()
     entry.updated_at = timezone.now()
     entry.save()
-    # Generate coaching response if content is non-empty.
+    action = "update" if instance else "create"
+    log_mutation(manager.id, action, "JournalEntry", entry.id,
+                 f"Journal ({entry.entry_type}): {(entry.content or '')[:60]}")
+    # Generate coaching response in a background thread so the
+    # save returns instantly (finding #1 from /review-as).
     if entry.content and entry.content.strip():
-        try:
-            from coaching.services import get_coaching_response
-            coaching = get_coaching_response(
-                entry.content, manager.id,
-                context_type=entry.entry_type or "journal",
-            )
-            if coaching:
-                entry.coaching_response = coaching
-                entry.save(update_fields=["coaching_response"])
-        except Exception:
-            _logger.exception("Coaching generation failed for entry %d", entry.id)
+        import threading
+
+        def _generate_coaching(entry_id, manager_id, content, entry_type):
+            try:
+                import django
+                django.setup()
+                from coaching.services import get_coaching_response
+                coaching = get_coaching_response(
+                    content, manager_id,
+                    context_type=entry_type or "journal",
+                )
+                if coaching:
+                    JournalEntry.objects.filter(pk=entry_id).update(
+                        coaching_response=coaching,
+                    )
+                    log_mutation(manager_id, "create", "CoachingResponse",
+                                entry_id, f"AI coaching for journal entry {entry_id}")
+            except Exception:
+                _logger.exception("Coaching generation failed for entry %d", entry_id)
+
+        t = threading.Thread(
+            target=_generate_coaching,
+            args=(entry.id, manager.id, entry.content, entry.entry_type),
+            daemon=True,
+        )
+        t.start()
     # Return refreshed form + history via OOB.
     today_iso = date.today().isoformat()
     new_form = JournalEntryForm(instance=entry)
