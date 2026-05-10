@@ -62,7 +62,8 @@
           <a href="{% url 'team' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'team' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Team</a>
           <hr class="border-slate-800 my-2">
-          <div class="block px-2 py-1.5 text-slate-500">Settings <span class="text-xs">(Phase 5)</span></div>
+          <a href="{% url 'settings' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'settings' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Settings</a>
           {% if request.user.is_authenticated %}
             <a href="{% url 'account_logout' %}" class="block px-2 py-1.5 rounded hover:bg-slate-800">Log Out</a>
           {% endif %}

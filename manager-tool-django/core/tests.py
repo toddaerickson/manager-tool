@@ -3067,3 +3067,54 @@ class TestFeedback:
         )
         resp = client.get("/feedback/")
         assert b"Secret feedback" not in resp.content
+
+
+# ============================================================
+# Phase 5.7 — Settings
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestSettings:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_set1", display_name="Todd",
+            password_hash="x", email="todd_set1@example.com",
+            timezone="America/New_York",
+        )
+        self._login_as(client, "todd_set1@example.com")
+        return m
+
+    def test_page_loads(self, client):
+        m = self._setup(client)
+        resp = client.get("/settings/")
+        assert resp.status_code == 200
+        assert b"Settings" in resp.content
+        assert b"Todd" in resp.content
+
+    def test_update_display_name(self, client):
+        m = self._setup(client)
+        resp = client.post("/settings/", {
+            "display_name": "Todd E.",
+            "timezone": "America/Chicago",
+        })
+        assert resp.status_code == 302
+        m.refresh_from_db()
+        assert m.display_name == "Todd E."
+        assert m.timezone == "America/Chicago"
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger_set@example.com")
+        resp = client.get("/settings/")
+        assert resp.status_code == 403
+
+    def test_shows_account_info(self, client):
+        m = self._setup(client)
+        resp = client.get("/settings/")
+        assert b"todd_set1@example.com" in resp.content or b"todd_set1" in resp.content
