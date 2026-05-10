@@ -20,6 +20,7 @@ from .models import (
 )
 from .services.audit import log_mutation
 from .services.events import create_recurring_events
+from .services.journal import journal_streak as _journal_streak
 
 
 def hello(request):
@@ -664,22 +665,6 @@ def journal_list(request):
         "energy_emoji": _ENERGY_EMOJI,
     })
 
-
-def _journal_streak(manager_id: int, today_iso: str) -> int:
-    """Count consecutive days with a journal entry ending on today_iso.
-    Returns 0 if no entry today."""
-    dates = set(
-        JournalEntry.objects.for_manager(manager_id)
-        .values_list("entry_date", flat=True)
-    )
-    if today_iso not in dates:
-        return 0
-    streak = 0
-    d = date.fromisoformat(today_iso)
-    while d.isoformat() in dates:
-        streak += 1
-        d -= timedelta(days=1)
-    return streak
 
 
 @login_required

@@ -138,6 +138,7 @@ updates without a full reload (D4 consistency fix).
                 hx-target="#career-dev-content"
                 hx-swap="outerHTML"
                 hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                hx-disabled-elt="find button[type='submit']"
                 class="flex items-end gap-2 mt-1">
             <input type="text" name="description" placeholder="Milestone" required
                    class="flex-1 text-sm border border-slate-300 rounded px-2 py-1">

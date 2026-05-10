@@ -10,9 +10,9 @@ calendar invites). Preserves M3 sanitization from calendar service.
 
 import logging
 import re
-import smtplib
 from datetime import date, datetime, timedelta
 from email.header import Header
+from html import escape as h
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -20,26 +20,11 @@ from core.models import (
     ActionItem, Config, Decision, Delegation, Event, JournalEntry,
     Manager, TeamMember,
 )
-from core.services.calendar import _get_smtp_settings, _safe_address_pair, _safe_header_text
+from core.services.calendar import _safe_address_pair, _safe_header_text
+from core.services.email import get_smtp_settings, send_smtp
+from core.services.journal import journal_streak
 
 logger = logging.getLogger(__name__)
-
-
-def _journal_streak(manager_id):
-    """Count consecutive days with a journal entry ending on today."""
-    dates = set(
-        JournalEntry.objects.for_manager(manager_id)
-        .values_list("entry_date", flat=True)
-    )
-    today_iso = date.today().isoformat()
-    if today_iso not in dates:
-        return 0
-    streak = 0
-    d = date.today()
-    while d.isoformat() in dates:
-        streak += 1
-        d -= timedelta(days=1)
-    return streak
 
 
 def generate_weekly_digest(manager_id):
@@ -98,12 +83,12 @@ def generate_weekly_digest(manager_id):
         .filter(status="active", review_date__lte=today_iso)[:5]
     )
 
-    streak = _journal_streak(manager_id)
+    streak = journal_streak(manager_id)
 
     subject = f"Manager Tool Weekly Digest \u2014 {today.strftime('%b %d, %Y')}"
 
     sections = []
-    sections.append(f"<h2>Weekly Digest for {name}</h2>")
+    sections.append(f"<h2>Weekly Digest for {h(name)}</h2>")
     sections.append(
         f"<p><strong>Journal streak:</strong> "
         f"{streak} day{'s' if streak != 1 else ''}</p>"
@@ -113,10 +98,10 @@ def generate_weekly_digest(manager_id):
     if upcoming:
         sections.append(f"<h3>Upcoming Events ({upcoming.count()})</h3><ul>")
         for e in upcoming:
-            member = f" with {e.team_member.name}" if e.team_member else ""
+            member = f" with {h(e.team_member.name)}" if e.team_member else ""
             sections.append(
-                f"<li><strong>{e.title}</strong> &mdash; "
-                f"{e.scheduled_date} at {e.scheduled_time}{member}</li>"
+                f"<li><strong>{h(e.title)}</strong> &mdash; "
+                f"{h(e.scheduled_date)} at {h(e.scheduled_time)}{member}</li>"
             )
         sections.append("</ul>")
 
@@ -124,7 +109,7 @@ def generate_weekly_digest(manager_id):
     if completed:
         sections.append(f"<h3>Completed This Week ({completed.count()})</h3><ul>")
         for e in completed:
-            sections.append(f"<li>{e.title} &mdash; {e.scheduled_date}</li>")
+            sections.append(f"<li>{h(e.title)} &mdash; {h(e.scheduled_date)}</li>")
         sections.append("</ul>")
 
     # Overdue action items
@@ -135,8 +120,8 @@ def generate_weekly_digest(manager_id):
         )
         for a in overdue:
             sections.append(
-                f"<li><strong>{a.description}</strong> "
-                f"&mdash; due {a.due_date or 'N/A'}</li>"
+                f"<li><strong>{h(a.description)}</strong> "
+                f"&mdash; due {h(a.due_date or 'N/A')}</li>"
             )
         sections.append("</ul>")
 
@@ -147,10 +132,10 @@ def generate_weekly_digest(manager_id):
             f"({overdue_dels.count()})</h3><ul>"
         )
         for d in overdue_dels:
-            member = d.team_member.name if d.team_member else "?"
+            member = h(d.team_member.name) if d.team_member else "?"
             sections.append(
-                f"<li><strong>{d.task[:80]}</strong> &mdash; "
-                f"{member}, check-in was {d.check_in_date}</li>"
+                f"<li><strong>{h(d.task[:80])}</strong> &mdash; "
+                f"{member}, check-in was {h(d.check_in_date or '?')}</li>"
             )
         sections.append("</ul>")
 
@@ -161,7 +146,7 @@ def generate_weekly_digest(manager_id):
         )
         for d in decisions_due:
             sections.append(
-                f"<li>{d.title} &mdash; review by {d.review_date}</li>"
+                f"<li>{h(d.title)} &mdash; review by {h(d.review_date or '?')}</li>"
             )
         sections.append("</ul>")
 
@@ -169,8 +154,8 @@ def generate_weekly_digest(manager_id):
     if pending:
         sections.append(f"<h3>Pending Actions ({pending.count()})</h3><ul>")
         for a in pending[:10]:
-            due = f" (due {a.due_date})" if a.due_date else ""
-            sections.append(f"<li>{a.description}{due}</li>")
+            due = f" (due {h(a.due_date)})" if a.due_date else ""
+            sections.append(f"<li>{h(a.description)}{due}</li>")
         sections.append("</ul>")
 
     sections.append(
@@ -187,7 +172,7 @@ def send_weekly_digest(manager_id):
 
     Returns (success: bool, message: str).
     """
-    smtp_cfg = _get_smtp_settings(manager_id)
+    smtp_cfg = get_smtp_settings(manager_id)
     if smtp_cfg is None:
         return False, "SMTP not configured for this manager."
 
@@ -203,18 +188,4 @@ def send_weekly_digest(manager_id):
     msg.attach(MIMEText(plain_text, "plain"))
     msg.attach(MIMEText(html_body, "html"))
 
-    try:
-        server = smtplib.SMTP(smtp_cfg["server"], smtp_cfg["port"])
-        server.ehlo()
-        server.starttls()
-        server.ehlo()
-        server.login(smtp_cfg["user"], smtp_cfg["password"])
-        server.sendmail(smtp_cfg["email"], [smtp_cfg["email"]], msg.as_string())
-        server.quit()
-        return True, f"Weekly digest sent to {smtp_cfg['email']}"
-    except smtplib.SMTPAuthenticationError:
-        logger.exception("Weekly digest SMTP auth failed for %s", smtp_cfg["user"])
-        return False, "SMTP authentication failed. Check your App Password."
-    except Exception:
-        logger.exception("Failed to send weekly digest to %s", smtp_cfg["email"])
-        return False, "Failed to send digest. Check the server logs for details."
+    return send_smtp(smtp_cfg, msg)
