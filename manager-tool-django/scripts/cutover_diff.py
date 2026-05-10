@@ -79,11 +79,10 @@ def get_raw_connection():
         print("FAIL: DATABASE_URL not set.")
         sys.exit(2)
     try:
-        conn = psycopg.connect(
-            url,
-            connect_timeout=10,
-            options="-c default_transaction_read_only=on",
-        )
+        conn = psycopg.connect(url, connect_timeout=10)
+        # Set read-only at session level (Neon pooler doesn't support
+        # startup options, so we SET after connecting).
+        conn.execute("SET default_transaction_read_only = on")
         return conn
     except Exception as e:
         print(f"FAIL: Could not connect to database: {e}")
