@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Feedback — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Feedback</h1>
+    <p class="text-sm text-slate-500 mt-1">SBI framework: Situation, Behavior, Impact.</p>
+  </header>
+
+  <div class="flex items-center gap-3 mb-4">
+    <label class="text-sm text-slate-600">Filter by member:</label>
+    <select onchange="window.location=this.value?'?member='+this.value:window.location.pathname"
+            class="text-sm border border-slate-300 rounded px-2 py-1">
+      <option value="">All members</option>
+      {% for m in members %}
+        <option value="{{ m.id }}" {% if selected_member == m.id|stringformat:"d" %}selected{% endif %}>{{ m.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not feedback_list %}open{% endif %}>
+    <summary class="px-6 py-3 cursor-pointer select-none font-medium">Record feedback</summary>
+    <div class="px-6 pb-6">
+      {% include "_partials/feedback_form.html" %}
+    </div>
+  </details>
+
+  {% if feedback_list %}
+  <div class="space-y-3">
+    {% for f in feedback_list %}
+    <div id="feedback-row-{{ f.id }}" class="bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-4">
+      <div class="flex items-center justify-between mb-1">
+        <div class="text-sm">
+          <span class="font-medium">{{ f.team_member.name }}</span>
+          <span class="ml-2 text-xs px-1.5 py-0.5 rounded {% if f.feedback_type == 'positive' %}bg-green-100 text-green-800{% else %}bg-amber-100 text-amber-800{% endif %}">
+            {{ f.feedback_type|capfirst }}
+          </span>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="text-xs text-slate-500 tabular-nums">{% if f.created_at %}{{ f.created_at|date:"Y-m-d" }}{% endif %}</span>
+          <button type="button"
+                  hx-delete="{% url 'feedback-delete' f.id %}"
+                  hx-target="#feedback-row-{{ f.id }}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete this feedback?"
+                  hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                  class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+        </div>
+      </div>
+      {% if f.situation %}<p class="text-sm text-slate-600"><strong class="text-slate-700">S:</strong> {{ f.situation }}</p>{% endif %}
+      {% if f.behavior %}<p class="text-sm text-slate-600"><strong class="text-slate-700">B:</strong> {{ f.behavior }}</p>{% endif %}
+      {% if f.impact %}<p class="text-sm text-slate-600"><strong class="text-slate-700">I:</strong> {{ f.impact }}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
+    No feedback recorded yet.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

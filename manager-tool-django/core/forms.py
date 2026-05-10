@@ -10,7 +10,7 @@ from django import forms
 
 from .models import (
     CareerConversation, Decision, Delegation, DevelopmentPlan, Event,
-    Goal, Milestone, RunningNote, Skill, TeamMember,
+    Feedback, Goal, Milestone, RunningNote, Skill, TeamMember,
 )
 
 
@@ -797,3 +797,49 @@ class RunningNoteForm(forms.ModelForm):
     def clean_note_date(self):
         d = self.cleaned_data["note_date"]
         return d.isoformat()
+
+
+# Phase 5.6b — Feedback
+
+FEEDBACK_TYPE_CHOICES = [
+    ("positive", "Positive"),
+    ("constructive", "Constructive"),
+]
+
+
+class FeedbackForm(forms.ModelForm):
+    feedback_type = forms.ChoiceField(
+        choices=FEEDBACK_TYPE_CHOICES,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+    )
+
+    class Meta:
+        model = Feedback
+        fields = [
+            "team_member", "feedback_type",
+            "situation", "behavior", "impact",
+        ]
+        widgets = {
+            "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
+            "situation": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 2,
+                "placeholder": "When/where did this happen?",
+            }),
+            "behavior": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 2,
+                "placeholder": "What specifically did they do?",
+            }),
+            "impact": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 2,
+                "placeholder": "What was the result or effect?",
+            }),
+        }
+
+    def __init__(self, *args, manager_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager_id is not None:
+            self.fields["team_member"].queryset = (
+                TeamMember.objects.active_for_manager(manager_id).order_by("name")
+            )
+            self.fields["team_member"].required = True
+            self.fields["team_member"].empty_label = "Select team member"
