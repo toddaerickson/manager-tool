@@ -12,3 +12,5 @@ ics_exports/
 *.pdf
 .encryption_key
 backups/
+.claude/
+*.code-workspace
