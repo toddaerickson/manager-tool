@@ -10,7 +10,7 @@ from django import forms
 
 from .models import (
     CareerConversation, Decision, Delegation, DevelopmentPlan, Event,
-    Feedback, Goal, Milestone, RunningNote, Skill, TeamMember,
+    Feedback, Goal, Manager, Milestone, RunningNote, Skill, TeamMember,
 )
 
 
@@ -843,3 +843,34 @@ class FeedbackForm(forms.ModelForm):
             )
             self.fields["team_member"].required = True
             self.fields["team_member"].empty_label = "Select team member"
+
+
+# Phase 5.7 — Settings
+
+COMMON_TIMEZONES = [
+    ("America/New_York", "Eastern (New York)"),
+    ("America/Chicago", "Central (Chicago)"),
+    ("America/Denver", "Mountain (Denver)"),
+    ("America/Los_Angeles", "Pacific (Los Angeles)"),
+    ("America/Phoenix", "Arizona (no DST)"),
+    ("America/Anchorage", "Alaska"),
+    ("Pacific/Honolulu", "Hawaii"),
+    ("UTC", "UTC"),
+]
+
+
+class ManagerSettingsForm(forms.ModelForm):
+    timezone = forms.ChoiceField(
+        choices=COMMON_TIMEZONES,
+        required=False,
+        widget=forms.Select(attrs={"class": _INPUT_CLS}),
+    )
+
+    class Meta:
+        model = Manager
+        fields = ["display_name", "timezone"]
+        widgets = {
+            "display_name": forms.TextInput(attrs={
+                "class": _INPUT_CLS, "placeholder": "Your name",
+            }),
+        }

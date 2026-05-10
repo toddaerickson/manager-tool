@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Settings</h1>
+  </header>
+
+  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6 mb-6">
+    <h2 class="text-sm font-semibold text-slate-700 mb-3">Account</h2>
+    <dl class="text-sm space-y-2">
+      <div class="flex justify-between">
+        <dt class="text-slate-500">Email</dt>
+        <dd class="text-slate-800">{{ manager.email|default:"—" }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-slate-500">Username</dt>
+        <dd class="text-slate-800">{{ manager.username }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-slate-500">Manager ID</dt>
+        <dd class="text-slate-800 tabular-nums">{{ manager.id }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-slate-500">Auth provider</dt>
+        <dd class="text-slate-800">Google OAuth</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
+    <h2 class="text-sm font-semibold text-slate-700 mb-3">Profile</h2>
+    <form method="post" class="space-y-3">
+      {% csrf_token %}
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Display name</label>
+        {{ form.display_name }}
+        {% if form.display_name.errors %}<p class="text-xs text-red-600 mt-1">{{ form.display_name.errors.0 }}</p>{% endif %}
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Timezone</label>
+        {{ form.timezone }}
+      </div>
+
+      <div class="flex justify-end pt-2">
+        <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">
+          Save
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

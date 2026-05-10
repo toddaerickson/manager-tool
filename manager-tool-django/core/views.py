@@ -10,8 +10,8 @@ from django.shortcuts import get_object_or_404
 from .forms import (
     ActionItemForm, CareerConversationForm, DecisionForm, DelegationForm,
     DevelopmentPlanForm, EventEditForm, EventForm, FeedbackForm, GoalForm,
-    JournalEntryForm, MilestoneForm, RunningNoteForm, SkillForm,
-    TeamMemberForm,
+    JournalEntryForm, ManagerSettingsForm, MilestoneForm, RunningNoteForm,
+    SkillForm, TeamMemberForm,
 )
 from .models import (
     ActionItem, CareerConversation, Decision, Delegation, DevelopmentPlan,
@@ -1326,3 +1326,29 @@ def feedback_delete(request, feedback_id: int):
     if deleted == 0:
         return HttpResponse(status=404)
     return HttpResponse(status=200)
+
+
+# ============================================================
+# Phase 5.7 — Settings
+# ============================================================
+
+
+@login_required
+def settings_page(request):
+    """Manager settings: display name, timezone. Email is read-only
+    (set by Google OAuth). Password management is handled by allauth.
+    SMTP and API key config deferred to Phase 6."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    if request.method == "POST":
+        form = ManagerSettingsForm(request.POST, instance=manager)
+        if form.is_valid():
+            form.save()
+            return redirect("settings")
+    else:
+        form = ManagerSettingsForm(instance=manager)
+    return render(request, "settings.html", {
+        "form": form,
+        "manager": manager,
+    })
