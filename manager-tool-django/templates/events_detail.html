@@ -90,16 +90,18 @@
     <span id="copy-link-feedback" class="text-xs text-emerald-600 hidden">Copied!</span>
 
     {% if ev.team_member and ev.team_member.email and ev.status == "scheduled" %}
-    <form method="post" action="{% url 'events-invite' ev.id %}" class="inline">
-      {% csrf_token %}
-      <button type="submit"
-              class="bg-white border border-slate-300 text-sm px-4 py-2 rounded hover:bg-slate-50">
-        Send invite to {{ ev.team_member.name }}
-      </button>
-    </form>
-    {% if ev.calendar_invite_sent %}
-    <span class="text-xs text-slate-500">Invite sent</span>
-    {% endif %}
+      {% if ev.calendar_invite_sent %}
+      <span class="text-xs text-slate-500">&#10003; Invite sent to {{ ev.team_member.name }}</span>
+      {% else %}
+      <form method="post" action="{% url 'events-invite' ev.id %}" class="inline"
+            onsubmit="return confirm('Send a calendar invite to {{ ev.team_member.name }} ({{ ev.team_member.email }})?')">
+        {% csrf_token %}
+        <button type="submit"
+                class="bg-white border border-slate-300 text-sm px-4 py-2 rounded hover:bg-slate-50">
+          Send invite to {{ ev.team_member.name }}
+        </button>
+      </form>
+      {% endif %}
     {% endif %}
   </div>
 </div>
