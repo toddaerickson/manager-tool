@@ -47,7 +47,7 @@
             {% if m.days_ago is None %}
               <span class="text-red-600 font-medium">Never met</span>
             {% elif m.days_ago > 14 %}
-              <span class="text-amber-600 font-medium">Overdue</span>
+              <span class="text-amber-600 font-medium">Overdue (&gt;14 days)</span>
             {% else %}
               <span class="text-green-600">On track</span>
             {% endif %}
