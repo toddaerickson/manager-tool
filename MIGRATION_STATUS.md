@@ -2,7 +2,7 @@
 
 Snapshot of where the Streamlit → Django migration stands. Update this doc when phase boundaries move; re-merge to main so it stays the source of truth for "where are we right now."
 
-**Last updated:** 2026-05-10
+**Last updated:** 2026-05-11
 **Live Django app:** https://manager-tool-django.onrender.com
 **Plan:** `MIGRATION_PLAN.md` · **Gates:** `PHASE_GATES.md` · **Open design questions:** `manager-tool-django/ARCHITECTURE_DEFICITS.md`
 
@@ -66,6 +66,20 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - Analytics, History, Resources pages — PRs #71–#73
 - D1–D4 architecture deficits — all closed
 - Send invite button — shipped in events_detail.html
+
+## Post-cutover features
+
+### Meetings page (PR #84) — shipped 2026-05-11
+
+10/10/10 structured meeting recorder. Centerpiece of the Directs section.
+
+**Gaps / v2 items:**
+- **Prep mode**: auto-populate "Your Agenda" with open delegations/action items for the direct before the meeting starts
+- **Tags + FTS search** across meeting notes (Django ORM search or django-watson)
+- **Soft gate on "Their Agenda" first**: collapse "Your Agenda" by default to reinforce the MT direct-first principle
+- **Meeting duration tracking**: actual duration vs scheduled
+- **Deploy SHA in health endpoint**: `/verify-deploy` cannot confirm exact deployed version — add `git_sha` to the landing page or a `/health` JSON endpoint
+- **1:1 Notes clarification**: "1:1 Notes" (RunningNote) and "Meetings" (OneOnOneSession) coexist in the sidebar. Notes = async between-meeting jots; Meetings = structured session records. Consider renaming "1:1 Notes" to just "Notes" or adding tooltip text to clarify the distinction. Evaluate whether Notes should eventually fold into the Meetings workflow.
 
 ## Architecture deficits
 
