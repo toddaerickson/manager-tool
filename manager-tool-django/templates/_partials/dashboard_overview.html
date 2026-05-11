@@ -1,71 +1,105 @@
-{# HTMX partial — returned by core.views.dashboard_overview. #}
+{# HTMX partial — returned by core.views.events.dashboard_overview #}
 
-{# ---- Quick stats cards ---- #}
-<div class="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-6">
-  <a href="{% url 'team' %}" class="block hover:ring-2 hover:ring-slate-300 rounded-lg transition">
-    <div class="text-xs uppercase tracking-wider text-slate-500">Team</div>
-    <div class="text-3xl font-semibold mt-1">{{ team_member_count }}</div>
-  </a>
-  <a href="{% url 'events-upcoming' %}" class="block hover:ring-2 hover:ring-slate-300 rounded-lg transition">
-    <div class="text-xs uppercase tracking-wider text-slate-500">Upcoming (7d)</div>
-    <div class="text-3xl font-semibold mt-1">{{ upcoming_count }}</div>
-  </a>
-  <a href="{% url 'todos' %}" class="block hover:ring-2 hover:ring-slate-300 rounded-lg transition">
-    <div class="text-xs uppercase tracking-wider text-slate-500">Pending</div>
-    <div class="text-3xl font-semibold mt-1">{{ pending_count }}</div>
-  </a>
-  <a href="{% url 'todos' %}" class="block hover:ring-2 hover:ring-slate-300 rounded-lg transition">
-    <div class="text-xs uppercase tracking-wider text-slate-500">Overdue</div>
-    <div class="text-3xl font-semibold mt-1 {% if overdue_count %}text-red-600{% endif %}">{{ overdue_count }}</div>
-  </a>
-  <a href="{% url 'journal' %}" class="block hover:ring-2 hover:ring-slate-300 rounded-lg transition">
-    <div class="text-xs uppercase tracking-wider text-slate-500">Streak</div>
-    <div class="text-3xl font-semibold mt-1">{{ streak }}<span class="text-base ml-1">day{{ streak|pluralize }}</span></div>
-  </a>
-</div>
-
-{# ---- Detail sections ---- #}
-<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-  {# Upcoming events #}
-  <div>
-    <h3 class="text-sm font-semibold text-slate-700 mb-2">Upcoming events</h3>
-    {% if next_events %}
-    <table class="min-w-full text-sm">
-      <tbody class="divide-y divide-slate-100">
-        {% for ev in next_events %}
-        <tr>
-          <td class="py-1.5 pr-3 tabular-nums text-slate-500">{{ ev.scheduled_date }}{% if ev.scheduled_time %} {{ ev.scheduled_time }}{% endif %}</td>
-          <td class="py-1.5">
-            <a href="{% url 'events-detail' ev.id %}" class="text-slate-800 hover:underline">{{ ev.title }}</a>
-            {% if ev.team_member %}<span class="text-xs text-slate-500 ml-1">with {{ ev.team_member.name }}</span>{% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="text-sm text-slate-400">No upcoming events.</p>
-    {% endif %}
+{# ---- 1. Next Actions ---- #}
+<section class="mb-8">
+  <h2 class="text-sm font-semibold text-slate-700 mb-3">Next actions</h2>
+  {% if actions %}
+  <div class="space-y-2">
+    {% for a in actions %}
+    <a href="{{ a.url }}" class="block bg-white rounded-lg border border-slate-200 px-4 py-3 hover:bg-slate-50 transition">
+      <div class="flex items-center gap-3">
+        <span class="w-6 h-6 flex items-center justify-center rounded-full text-xs font-bold shrink-0
+          {% if a.icon == '!' %}bg-red-100 text-red-700{% elif a.icon == '?' %}bg-amber-100 text-amber-700{% elif a.icon == '~' %}bg-blue-100 text-blue-700{% else %}bg-slate-100 text-slate-600{% endif %}">
+          {{ a.icon }}
+        </span>
+        <div class="min-w-0">
+          <div class="text-sm font-medium text-slate-800 truncate">{{ a.text }}</div>
+          <div class="text-xs text-slate-500">{{ a.detail }}</div>
+        </div>
+      </div>
+    </a>
+    {% endfor %}
   </div>
-
-  {# Overdue to-dos #}
-  <div>
-    <h3 class="text-sm font-semibold text-slate-700 mb-2">Overdue to-dos</h3>
-    {% if overdue_list %}
-    <table class="min-w-full text-sm">
-      <tbody class="divide-y divide-slate-100">
-        {% for t in overdue_list %}
-        <tr>
-          <td class="py-1.5 pr-3 tabular-nums text-red-600">{{ t.due_date }}</td>
-          <td class="py-1.5 text-slate-800">{{ t.description }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="text-sm text-slate-400">No overdue to-dos. You're caught up.</p>
-    {% endif %}
+  {% else %}
+  <div class="bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 text-sm text-emerald-800">
+    All clear. No actions needed right now.
   </div>
+  {% endif %}
+</section>
 
-</div>
+{# ---- 2. Team Health ---- #}
+{% if team_health %}
+<section class="mb-8">
+  <h2 class="text-sm font-semibold text-slate-700 mb-3">Team health</h2>
+  <table class="min-w-full bg-white rounded-lg border border-slate-200 overflow-hidden">
+    <thead class="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+      <tr>
+        <th class="px-4 py-2">Member</th>
+        <th class="px-4 py-2">Last 1:1</th>
+        <th class="px-4 py-2">Last feedback</th>
+        <th class="px-4 py-2">Goals</th>
+        <th class="px-4 py-2">Delegations</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100 text-sm">
+      {% for m in team_health %}
+      <tr>
+        <td class="px-4 py-2 font-medium">
+          <a href="{% url 'notes' %}?member={{ m.id }}" class="text-slate-800 hover:underline">{{ m.name }}</a>
+        </td>
+        <td class="px-4 py-2">
+          <span class="inline-block w-2 h-2 rounded-full mr-1
+            {% if m.meeting_status == 'red' %}bg-red-500{% elif m.meeting_status == 'yellow' %}bg-amber-400{% else %}bg-emerald-500{% endif %}"></span>
+          {% if m.meeting_days != None %}{{ m.meeting_days }}d ago{% else %}Never{% endif %}
+        </td>
+        <td class="px-4 py-2">
+          <span class="inline-block w-2 h-2 rounded-full mr-1
+            {% if m.fb_status == 'red' %}bg-red-500{% elif m.fb_status == 'yellow' %}bg-amber-400{% else %}bg-emerald-500{% endif %}"></span>
+          {% if m.fb_days != None %}{{ m.fb_days }}d ago{% else %}Never{% endif %}
+        </td>
+        <td class="px-4 py-2 tabular-nums">
+          <a href="{% url 'goals' %}?member={{ m.id }}" class="hover:underline">{{ m.goals }}</a>
+        </td>
+        <td class="px-4 py-2 tabular-nums">
+          <a href="{% url 'delegations' %}?member={{ m.id }}" class="hover:underline">{{ m.delegations }}</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{# ---- 3. Weekly Recap ---- #}
+<section>
+  <h2 class="text-sm font-semibold text-slate-700 mb-3">This week</h2>
+  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+    <div class="bg-white rounded-lg border border-slate-200 px-3 py-2 text-center">
+      <div class="text-xl font-semibold">{{ recap.meetings }}</div>
+      <div class="text-xs text-slate-500">Meetings</div>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 px-3 py-2 text-center">
+      <div class="text-xl font-semibold">{{ recap.feedback_total }}</div>
+      <div class="text-xs text-slate-500">Feedback</div>
+      {% if recap.feedback_total %}
+      <div class="text-xs text-slate-400">{{ recap.feedback_positive }}+ {{ recap.feedback_constructive }}-</div>
+      {% endif %}
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 px-3 py-2 text-center">
+      <div class="text-xl font-semibold">{{ recap.journal_entries }}</div>
+      <div class="text-xs text-slate-500">Journal</div>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 px-3 py-2 text-center">
+      <div class="text-xl font-semibold">{{ recap.delegations_completed }}</div>
+      <div class="text-xs text-slate-500">Delegations done</div>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 px-3 py-2 text-center">
+      <div class="text-xl font-semibold">{{ recap.decisions_reviewed }}</div>
+      <div class="text-xs text-slate-500">Decisions reviewed</div>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 px-3 py-2 text-center">
+      <div class="text-xl font-semibold">{{ streak }}</div>
+      <div class="text-xs text-slate-500">Streak</div>
+    </div>
+  </div>
+</section>

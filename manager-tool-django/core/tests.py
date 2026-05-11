@@ -228,7 +228,7 @@ class TestDashboardView:
         assert "overview-panel" in body
         assert "/dashboard/panels/overview/" in body
 
-    def test_overview_panel_returns_per_tenant_count(self, client):
+    def test_overview_panel_returns_per_tenant_data(self, client):
         m = Manager.objects.create(
             username="todd", display_name="Todd",
             password_hash="x", email="todd@example.com",
@@ -246,8 +246,10 @@ class TestDashboardView:
         resp = client.get("/dashboard/panels/overview/")
         assert resp.status_code == 200
         body = resp.content.decode()
-        # Per-tenant count is 2 (Todd's), not 3 (all rows)
-        assert ">2<" in body, body
+        # Team Health shows Todd's 2 members, not m2's
+        assert "report A" in body
+        assert "report B" in body
+        assert "other report" not in body
 
     def test_overview_shows_overdue_count(self, client):
         from datetime import date, timedelta
@@ -271,22 +273,23 @@ class TestDashboardView:
         assert "Overdue" in body
         assert "Overdue task" in body  # appears in overdue list
 
-    def test_overview_shows_upcoming_events(self, client):
+    def test_overview_shows_next_actions(self, client):
         from datetime import date, timedelta
         m = Manager.objects.create(
             username="todd_dash3", display_name="Todd",
             password_hash="x", email="todd_dash3@example.com",
         )
         self._login_as(client, "todd_dash3@example.com")
-        Event.objects.create(
-            title="Weekly sync", event_type="one_on_one",
-            scheduled_date=(date.today() + timedelta(days=1)).isoformat(),
-            scheduled_time="10:00", status="scheduled",
-            manager_id=m.id,
+        # Overdue todo should appear as a next action
+        ActionItem.objects.create(
+            description="Write quarterly report", manager_id=m.id,
+            status="pending",
+            due_date=(date.today() - timedelta(days=2)).isoformat(),
         )
         resp = client.get("/dashboard/panels/overview/")
         body = resp.content.decode()
-        assert "Weekly sync" in body
+        assert "Write quarterly report" in body
+        assert "Next actions" in body
 
     def test_overview_cross_tenant_isolation(self, client):
         from datetime import date
@@ -3336,19 +3339,22 @@ class TestAuditLogging:
             password_hash="h", email="audit@example.com",
         )
         log_mutation(m.id, "create", "TeamMember", 99, "Added team member: Alice")
-        entries = AuditLog.objects.for_manager(m.id)
+        # Filter by entity_type+entity_id to avoid interference from
+        # background coaching threads that also write audit entries.
+        entries = AuditLog.objects.for_manager(m.id).filter(
+            entity_type="TeamMember", entity_id=99,
+        )
         assert entries.count() == 1
         entry = entries.first()
         assert entry.action == "create"
-        assert entry.entity_type == "TeamMember"
-        assert entry.entity_id == 99
         assert "Alice" in entry.summary
 
     def test_log_mutation_none_manager_skipped(self):
         from core.models import AuditLog
         from core.services.audit import log_mutation
+        baseline = AuditLog.objects.count()
         log_mutation(None, "create", "TeamMember", 1, "should not save")
-        assert AuditLog.objects.count() == 0
+        assert AuditLog.objects.count() == baseline
 
     def test_log_mutation_caps_summary(self):
         from core.models import AuditLog
@@ -3358,7 +3364,10 @@ class TestAuditLogging:
             password_hash="h",
         )
         log_mutation(m.id, "update", "Goal", 1, "x" * 600)
-        entry = AuditLog.objects.for_manager(m.id).first()
+        entry = AuditLog.objects.for_manager(m.id).filter(
+            entity_type="Goal", entity_id=1,
+        ).first()
+        assert entry is not None
         assert len(entry.summary) == 500
 
     def test_team_member_add_creates_audit(self, client):
@@ -3389,8 +3398,9 @@ class TestAuditLogging:
         )
         log_mutation(m1.id, "create", "Goal", 1, "M1's goal")
         log_mutation(m2.id, "create", "Goal", 2, "M2's goal")
-        assert AuditLog.objects.for_manager(m1.id).count() == 1
-        assert AuditLog.objects.for_manager(m2.id).count() == 1
+        # Filter by entity_type to avoid coaching thread interference
+        assert AuditLog.objects.for_manager(m1.id).filter(entity_type="Goal").count() == 1
+        assert AuditLog.objects.for_manager(m2.id).filter(entity_type="Goal").count() == 1
 
 
 # ============================================================

@@ -298,57 +298,207 @@ def events_send_invite(request, event_id: int):
 
 @login_required
 def dashboard_overview(request):
-    """HTMX partial — returns the overview panel HTML fragment.
-
-    Mirrors the Streamlit `_dashboard_bundle` pattern (one cached call per
-    manager_id) but with lazy loading so the page shell renders before
-    any DB work happens.
-
-    Panels use data from completed Phase 5 pages: team members, events,
-    todos, journal. Coaching/AI panels deferred to Phase 6.
+    """HTMX partial — actionable dashboard with three sections:
+    1. Next Actions — prioritized queue of things to do right now
+    2. Team Health — per-direct status indicators
+    3. Weekly Recap — what happened in the last 7 days
     """
+    from django.db.models import Max, Count, Q
+    from core.models import (
+        Decision, Delegation, Feedback, Goal, JournalEntry, RunningNote,
+    )
+
     if request.manager is None:
         return HttpResponseForbidden("No manager profile.")
     mid = request.manager.id
-    today_iso = date.today().isoformat()
-    week_end_iso = (date.today() + timedelta(days=7)).isoformat()
+    today = date.today()
+    today_iso = today.isoformat()
+    week_ago_iso = (today - timedelta(days=7)).isoformat()
 
-    # Quick stats
-    team_count = TeamMember.objects.active_for_manager(mid).count()
-    upcoming_events = (
-        Event.objects.for_manager(mid)
-        .filter(status="scheduled", scheduled_date__gte=today_iso)
-    )
-    upcoming_count = upcoming_events.filter(
-        scheduled_date__lt=week_end_iso,
-    ).count()
-    pending_todos = (
+    members = list(TeamMember.objects.active_for_manager(mid).order_by("name"))
+
+    # ── Next Actions ─────────────────────────────────────────
+    actions = []
+
+    # Overdue to-dos
+    overdue_todos = (
         ActionItem.objects.for_manager(mid)
-        .filter(status="pending")
+        .filter(status="pending", due_date__isnull=False, due_date__lt=today_iso)
+        .order_by("due_date")[:5]
     )
-    pending_count = pending_todos.count()
-    overdue_todos = pending_todos.filter(
-        due_date__isnull=False, due_date__lt=today_iso,
-    )
-    overdue_count = overdue_todos.count()
-    streak = _journal_streak(mid, today_iso)
+    for t in overdue_todos:
+        actions.append({
+            "urgency": 1, "icon": "!",
+            "text": f"Overdue: {t.description[:50]}",
+            "detail": f"Due {t.due_date}",
+            "url": "/todos/",
+        })
 
-    # Lists for detail sections
-    next_events = (
-        upcoming_events
-        .select_related("team_member")
-        .order_by("scheduled_date", "scheduled_time")[:5]
+    # Overdue delegation check-ins
+    overdue_delegations = (
+        Delegation.objects.for_manager(mid)
+        .filter(status="active", check_in_date__isnull=False, check_in_date__lt=today_iso)
+        .select_related("team_member")[:5]
     )
-    overdue_list = overdue_todos.order_by("due_date")[:5]
+    for d in overdue_delegations:
+        name = d.team_member.name if d.team_member else "unassigned"
+        actions.append({
+            "urgency": 2, "icon": "!",
+            "text": f"Delegation check-in overdue: {d.task[:40]}",
+            "detail": f"{name} — due {d.check_in_date}",
+            "url": f"/delegations/{d.id}/edit/",
+        })
+
+    # Decisions due for review
+    decisions_due = (
+        Decision.objects.for_manager(mid)
+        .filter(status="active", review_date__isnull=False, review_date__lte=today_iso)
+        [:5]
+    )
+    for d in decisions_due:
+        actions.append({
+            "urgency": 3, "icon": "?",
+            "text": f"Decision due for review: {d.title[:40]}",
+            "detail": f"Review date {d.review_date}",
+            "url": f"/decisions/{d.id}/edit/",
+        })
+
+    # Meeting cadence — members with no meeting in 14+ days
+    cadence_qs = (
+        Event.objects.for_manager(mid)
+        .filter(status__in=["completed", "scheduled"], scheduled_date__lte=today_iso)
+        .values("team_member_id")
+        .annotate(last_date=Max("scheduled_date"))
+    )
+    cadence_map = {r["team_member_id"]: r["last_date"] for r in cadence_qs}
+    for m in members:
+        last = cadence_map.get(m.id)
+        if last:
+            days = (today - date.fromisoformat(last)).days
+            if days >= 14:
+                actions.append({
+                    "urgency": 4, "icon": "~",
+                    "text": f"1:1 with {m.name} overdue ({days} days)",
+                    "detail": f"Last meeting {last}",
+                    "url": "/events/schedule/",
+                })
+        else:
+            actions.append({
+                "urgency": 4, "icon": "~",
+                "text": f"Never met with {m.name}",
+                "detail": "Schedule a first 1:1",
+                "url": "/events/schedule/",
+            })
+
+    # Feedback staleness — members with no feedback in 30+ days
+    fb_qs = (
+        Feedback.objects.for_manager(mid)
+        .values("team_member_id")
+        .annotate(last_at=Max("created_at"))
+    )
+    fb_map = {r["team_member_id"]: r["last_at"] for r in fb_qs}
+    for m in members:
+        last_fb = fb_map.get(m.id)
+        if last_fb:
+            from django.utils import timezone as _tz
+            days_fb = (_tz.now() - last_fb).days
+            if days_fb >= 30:
+                actions.append({
+                    "urgency": 5, "icon": "~",
+                    "text": f"No feedback for {m.name} in {days_fb} days",
+                    "detail": "Consider giving positive or constructive feedback",
+                    "url": f"/feedback/?member={m.id}",
+                })
+        else:
+            actions.append({
+                "urgency": 5, "icon": "~",
+                "text": f"No feedback recorded for {m.name}",
+                "detail": "Start with positive feedback",
+                "url": f"/feedback/?member={m.id}",
+            })
+
+    # Journal streak
+    streak = _journal_streak(mid, today_iso)
+    if streak == 0:
+        actions.append({
+            "urgency": 6, "icon": "+",
+            "text": "Write today's journal entry",
+            "detail": "Keep your streak going",
+            "url": "/journal/",
+        })
+
+    actions.sort(key=lambda a: a["urgency"])
+
+    # ── Team Health ──────────────────────────────────────────
+    # Per-member: days since last meeting, days since last feedback,
+    # open goals count, active delegations count
+    goal_counts = dict(
+        Goal.objects.for_manager(mid)
+        .values("team_member_id")
+        .annotate(c=Count("id"))
+        .values_list("team_member_id", "c")
+    )
+    del_counts = dict(
+        Delegation.objects.for_manager(mid)
+        .filter(status="active")
+        .values("team_member_id")
+        .annotate(c=Count("id"))
+        .values_list("team_member_id", "c")
+    )
+    team_health = []
+    for m in members:
+        last_meeting = cadence_map.get(m.id)
+        meeting_days = None
+        if last_meeting:
+            meeting_days = (today - date.fromisoformat(last_meeting)).days
+
+        last_fb = fb_map.get(m.id)
+        fb_days = None
+        if last_fb:
+            from django.utils import timezone as _tz
+            fb_days = (_tz.now() - last_fb).days
+
+        team_health.append({
+            "name": m.name,
+            "id": m.id,
+            "meeting_days": meeting_days,
+            "meeting_status": "red" if meeting_days is None or meeting_days > 14 else ("yellow" if meeting_days > 7 else "green"),
+            "fb_days": fb_days,
+            "fb_status": "red" if fb_days is None or fb_days > 30 else ("yellow" if fb_days > 14 else "green"),
+            "goals": goal_counts.get(m.id, 0),
+            "delegations": del_counts.get(m.id, 0),
+        })
+
+    # ── Weekly Recap ─────────────────────────────────────────
+    recap = {
+        "meetings": Event.objects.for_manager(mid).filter(
+            status__in=["completed", "scheduled"],
+            scheduled_date__gte=week_ago_iso, scheduled_date__lte=today_iso,
+        ).count(),
+        "feedback_positive": Feedback.objects.for_manager(mid).filter(
+            created_at__date__gte=week_ago_iso, feedback_type="positive",
+        ).count(),
+        "feedback_constructive": Feedback.objects.for_manager(mid).filter(
+            created_at__date__gte=week_ago_iso, feedback_type="constructive",
+        ).count(),
+        "journal_entries": JournalEntry.objects.for_manager(mid).filter(
+            entry_date__gte=week_ago_iso,
+        ).count(),
+        "delegations_completed": Delegation.objects.for_manager(mid).filter(
+            status="completed", completed_at__date__gte=week_ago_iso,
+        ).count(),
+        "decisions_reviewed": Decision.objects.for_manager(mid).filter(
+            status__in=["validated", "revised", "reversed"],
+            updated_at__date__gte=week_ago_iso,
+        ).count(),
+    }
+    recap["feedback_total"] = recap["feedback_positive"] + recap["feedback_constructive"]
 
     ctx = {
-        "team_member_count": team_count,
-        "upcoming_count": upcoming_count,
-        "pending_count": pending_count,
-        "overdue_count": overdue_count,
+        "actions": actions,
+        "team_health": team_health,
+        "recap": recap,
         "streak": streak,
-        "next_events": next_events,
-        "overdue_list": overdue_list,
         "today_iso": today_iso,
     }
     return render(request, "_partials/dashboard_overview.html", ctx)
