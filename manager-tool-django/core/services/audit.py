@@ -38,10 +38,15 @@ def log_mutation(manager_id, action, entity_type, entity_id, summary=""):
         logger.warning("audit: skipping log with manager_id=None")
         return
 
-    AuditLog.objects.create(
-        manager_id=manager_id,
-        action=action,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        summary=summary[:500],  # cap summary length
-    )
+    try:
+        AuditLog.objects.create(
+            manager_id=manager_id,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            summary=summary[:500],  # cap summary length
+        )
+    except Exception:
+        # Audit log is fire-and-forget — a DB error here must not
+        # surface as a 500 after the mutation has already committed.
+        logger.exception("audit: failed to log %s on %s(%s)", action, entity_type, entity_id)

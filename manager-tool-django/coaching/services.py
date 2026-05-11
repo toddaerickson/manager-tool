@@ -114,6 +114,7 @@ def _load_wisdom():
         return _WISDOM_CACHE
     path = _wisdom_file_path()
     if not os.path.exists(path):
+        logger.warning("Wisdom file not found at %s; coaching will degrade", path)
         _WISDOM_CACHE = []
         _WISDOM_SECTIONS = {}
         return _WISDOM_CACHE
@@ -413,7 +414,7 @@ def get_coaching_response(notes, manager_id, context_type="journal",
         )
         return message.content[0].text
     except Exception as e:
-        logger.error("Claude API call failed: %s", e)
+        logger.exception("Claude API call failed")
         return (
             "*Coaching unavailable — API error. Check server logs.*\n\n"
             + (_local_fallback(notes, context_type, member_name) or "")
@@ -740,7 +741,7 @@ def generate_ai_suggestion(manager_id):
         )
         return message.content[0].text
     except Exception as e:
-        logger.error("Daily coach AI suggestion failed: %s", e)
+        logger.exception("Daily coach AI suggestion failed")
         return None
 
 

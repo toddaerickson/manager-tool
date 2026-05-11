@@ -107,7 +107,7 @@ DATABASES = {"default": env.db("DATABASE_URL")}
 # --- Auth ---------------------------------------------------------------
 
 AUTHENTICATION_BACKENDS = [
-    "django.contrib.auth.backends.ModelBackend",
+    # ModelBackend removed — Google OAuth only via allauth.
     "allauth.account.auth_backends.AuthenticationBackend",
 ]
 
