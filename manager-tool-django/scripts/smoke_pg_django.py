@@ -98,7 +98,9 @@ def _exercise_orm() -> None:
     django.setup()
 
     from coaching.models import CoachSuggestion
-    from core.models import Config, JournalEntry, Manager, TeamMember
+    from core.models import (
+        ActionItem, Config, JournalEntry, Manager, OneOnOneSession, TeamMember,
+    )
 
     _step("creating two managers via ORM")
     m1 = Manager.objects.create(
@@ -161,6 +163,25 @@ def _exercise_orm() -> None:
         _bail("creating duplicate (manager_id, key) should have raised IntegrityError")
     except IntegrityError:
         pass
+
+    _step("exercising OneOnOneSession + ActionItem FK")
+    tm1 = TeamMember.objects.for_manager(m1.id).first()
+    session = OneOnOneSession.objects.create(
+        manager=m1, team_member=tm1, session_date="2026-05-10",
+        status="draft", direct_notes="Smoke test notes",
+    )
+    assert OneOnOneSession.objects.for_manager(m1.id).count() == 1
+    assert OneOnOneSession.objects.for_manager(m2.id).count() == 0, \
+        "m2 sees m1's meeting session — TenantManager regression"
+
+    action = ActionItem.objects.create(
+        manager_id=m1.id, one_on_one_session=session,
+        description="Smoke action item", status="pending",
+    )
+    assert action.one_on_one_session_id == session.id
+    assert ActionItem.objects.for_manager(m1.id).filter(
+        one_on_one_session=session,
+    ).count() == 1
 
     _exercise_recurring_events_no_orphan(m1)
 

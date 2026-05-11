@@ -26,6 +26,7 @@ from core.models import (
     JournalEntry,
     Manager,
     Milestone,
+    OneOnOneSession,
     RunningNote,
     Skill,
     TeamMember,
@@ -3502,3 +3503,192 @@ class TestReferencePages:
         client.force_login(u)
         resp = client.get("/history/")
         assert resp.status_code == 403
+
+
+# ── One-on-One Meetings ──────────────────────────────────────────────
+
+
+@pytest.mark.django_db
+class TestOneOnOneSessions:
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(username=email, email=email, password="x")
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_mtg", display_name="Todd",
+            password_hash="x", email="todd_mtg@example.com",
+        )
+        self._login_as(client, "todd_mtg@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_meetings_list_200(self, client):
+        self._setup(client)
+        assert client.get("/meetings/").status_code == 200
+
+    def test_meetings_list_requires_login(self, client):
+        resp = client.get("/meetings/")
+        assert resp.status_code == 302
+        assert "/accounts/login/" in resp.url or "/accounts/google/login/" in resp.url
+
+    def test_create_redirects_to_detail(self, client):
+        m, tm = self._setup(client)
+        resp = client.post("/meetings/add/", {
+            "team_member": tm.id,
+            "session_date": "2026-05-10",
+        })
+        assert resp.status_code == 302
+        session = OneOnOneSession.objects.for_manager(m.id).first()
+        assert session is not None
+        assert session.status == "draft"
+        assert session.team_member_id == tm.id
+        assert f"/meetings/{session.id}/" in resp.url
+
+    def test_detail_shows_context(self, client):
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft",
+        )
+        Delegation.objects.create(
+            manager_id=m.id, team_member=tm, task="Review deck",
+            status="active",
+        )
+        resp = client.get(f"/meetings/{session.id}/")
+        assert resp.status_code == 200
+        assert b"Review deck" in resp.content
+
+    def test_autosave_updates_notes(self, client):
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft",
+        )
+        resp = client.post(f"/meetings/{session.id}/autosave/", {
+            "direct_notes": "They want to discuss promotion",
+            "manager_notes": "Review Q2 goals",
+            "followup_notes": "Career plan update",
+        })
+        assert resp.status_code == 200
+        session.refresh_from_db()
+        assert session.direct_notes == "They want to discuss promotion"
+        assert session.manager_notes == "Review Q2 goals"
+        assert session.followup_notes == "Career plan update"
+
+    def test_complete_toggles_status(self, client):
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft",
+        )
+        # Mark complete
+        resp = client.post(f"/meetings/{session.id}/complete/")
+        assert resp.status_code == 302
+        session.refresh_from_db()
+        assert session.status == "completed"
+
+        # Reopen
+        resp = client.post(f"/meetings/{session.id}/complete/")
+        assert resp.status_code == 302
+        session.refresh_from_db()
+        assert session.status == "draft"
+
+    def test_delete_removes_session(self, client):
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft",
+        )
+        resp = client.delete(f"/meetings/{session.id}/delete/")
+        assert resp.status_code == 200
+        assert OneOnOneSession.objects.for_manager(m.id).count() == 0
+
+    def test_add_action_item(self, client):
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft",
+        )
+        resp = client.post(f"/meetings/{session.id}/action/", {
+            "description": "Follow up on training",
+        })
+        assert resp.status_code == 200
+        items = ActionItem.objects.for_manager(m.id).filter(one_on_one_session=session)
+        assert items.count() == 1
+        assert items.first().description == "Follow up on training"
+
+    def test_duplicate_date_redirects_to_existing(self, client):
+        m, tm = self._setup(client)
+        existing = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft",
+        )
+        resp = client.post("/meetings/add/", {
+            "team_member": tm.id,
+            "session_date": "2026-05-10",
+        })
+        assert resp.status_code == 302
+        assert f"/meetings/{existing.id}/" in resp.url
+        # No new session created
+        assert OneOnOneSession.objects.for_manager(m.id).count() == 1
+
+    def test_cross_tenant_detail_404(self, client):
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft",
+        )
+        # Login as a different user with no manager profile
+        from django.contrib.auth import get_user_model
+        u2 = get_user_model().objects.create_user(
+            username="stranger_mtg@example.com",
+            email="stranger_mtg@example.com",
+            password="x",
+        )
+        client.force_login(u2)
+        resp = client.get(f"/meetings/{session.id}/")
+        # Either 403 (no manager) or 404 (wrong manager)
+        assert resp.status_code in (403, 404)
+
+
+@pytest.mark.django_db
+class TestOneOnOneSessionScoping:
+    """Cross-manager isolation for OneOnOneSession."""
+
+    def _two_managers(self):
+        m1 = Manager.objects.create(
+            username="mtg_m1", display_name="M1",
+            password_hash="h1", email="mtg_m1@example.com",
+        )
+        m2 = Manager.objects.create(
+            username="mtg_m2", display_name="M2",
+            password_hash="h2", email="mtg_m2@example.com",
+        )
+        return m1, m2
+
+    def test_sessions_isolated_bidirectionally(self):
+        m1, m2 = self._two_managers()
+        tm1 = TeamMember.objects.create(name="M1 report", manager_id=m1.id)
+        tm2 = TeamMember.objects.create(name="M2 report", manager_id=m2.id)
+
+        OneOnOneSession.objects.create(
+            manager=m1, team_member=tm1, session_date="2026-05-10",
+            status="completed",
+        )
+        OneOnOneSession.objects.create(
+            manager=m2, team_member=tm2, session_date="2026-05-10",
+            status="completed",
+        )
+
+        m1_rows = OneOnOneSession.objects.for_manager(m1.id)
+        m2_rows = OneOnOneSession.objects.for_manager(m2.id)
+
+        assert m1_rows.count() == 1
+        assert m2_rows.count() == 1
+        assert m1_rows.first().team_member.name == "M1 report"
+        assert m2_rows.first().team_member.name == "M2 report"
+        assert not m1_rows.filter(team_member__name="M2 report").exists()
+        assert not m2_rows.filter(team_member__name="M1 report").exists()

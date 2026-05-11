@@ -8,7 +8,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from core.models import (
-    ActionItem, Event, TeamMember,
+    ActionItem, Event, OneOnOneSession, TeamMember,
 )
 from core.forms import (
     EventEditForm, EventForm,
@@ -207,7 +207,18 @@ def events_detail(request, event_id: int):
         Event.objects.for_manager(manager.id).select_related("team_member"),
         pk=event_id,
     )
-    return render(request, "events_detail.html", {"ev": ev})
+    # For one_on_one events, check if a meeting session is linked
+    meeting_session = None
+    if ev.event_type == "one_on_one":
+        meeting_session = (
+            OneOnOneSession.objects.for_manager(manager.id)
+            .filter(event=ev)
+            .first()
+        )
+    return render(request, "events_detail.html", {
+        "ev": ev,
+        "meeting_session": meeting_session,
+    })
 
 
 @login_required

@@ -55,6 +55,8 @@
 
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Directs</div>
+          <a href="{% url 'meetings' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'meetings' or request.resolver_match.url_name == 'meetings-detail' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Meetings</a>
           <a href="{% url 'notes' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'notes' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">1:1 Notes</a>
           <a href="{% url 'delegations' %}"

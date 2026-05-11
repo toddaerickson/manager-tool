@@ -245,6 +245,9 @@ class Event(models.Model):
 class ActionItem(models.Model):
     manager_id = models.IntegerField(blank=True, null=True, db_index=True)
     event = models.ForeignKey(Event, models.DO_NOTHING, blank=True, null=True)
+    one_on_one_session = models.ForeignKey(
+        "OneOnOneSession", models.SET_NULL, blank=True, null=True,
+    )
     description = models.TextField()
     # `assignee` stays in DB for back-compat with existing rows but is
     # no longer exposed in the form — to-dos are the manager's own list,
@@ -279,6 +282,10 @@ class OneOnOneSession(models.Model):
     direct_notes = models.TextField(blank=True, null=True)
     manager_notes = models.TextField(blank=True, null=True)
     followup_notes = models.TextField(blank=True, null=True)
+    status = models.TextField(
+        default="draft",
+        choices=[("draft", "Draft"), ("completed", "Completed")],
+    )
     created_at = models.DateTimeField(blank=True, null=True)
     updated_at = models.DateTimeField(blank=True, null=True)
 

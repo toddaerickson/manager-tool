@@ -81,6 +81,31 @@
   </div>
   {% endif %}
 
+  {% if ev.event_type == "one_on_one" %}
+  <div class="mt-4">
+    {% if meeting_session %}
+      <a href="{% url 'meetings-detail' meeting_session.id %}"
+         class="inline-flex items-center gap-1.5 bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">
+        Open meeting notes
+        {% if meeting_session.status == "draft" %}
+          <span class="text-xs px-1.5 py-0.5 rounded bg-amber-400/30">Draft</span>
+        {% endif %}
+      </a>
+    {% elif ev.team_member %}
+      <form method="post" action="{% url 'meetings-add' %}" class="inline">
+        {% csrf_token %}
+        <input type="hidden" name="team_member" value="{{ ev.team_member_id }}">
+        <input type="hidden" name="session_date" value="{{ ev.scheduled_date }}">
+        <input type="hidden" name="event" value="{{ ev.id }}">
+        <button type="submit"
+                class="inline-flex items-center gap-1.5 bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">
+          Start meeting notes
+        </button>
+      </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <div class="mt-4 flex items-center gap-3">
     <button type="button" id="copy-link"
             data-url="{{ request.scheme }}://{{ request.get_host }}{% url 'events-detail' ev.id %}"

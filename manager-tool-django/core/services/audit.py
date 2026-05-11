@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 HR_SENSITIVE_MODELS = {
     "TeamMember", "Feedback", "Goal", "CareerConversation",
     "DevelopmentPlan", "Milestone", "Skill", "Delegation",
-    "Decision", "RunningNote",
+    "Decision", "RunningNote", "OneOnOneSession",
 }
 
 

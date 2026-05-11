@@ -5,6 +5,14 @@ from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, HttpResponseForbidden, HttpResponseNotFound
 from django.shortcuts import redirect, render
 
+from core.models import (
+    ActionItem,
+    Delegation,
+    Feedback,
+    Goal,
+    OneOnOneSession,
+)
+
 
 def hello(request):
     """Public landing page. Redirects authenticated users to dashboard
@@ -56,3 +64,29 @@ def _parse_member_filter(request):
         except ValueError:
             return None
     return None
+
+
+def get_member_context(manager_id, team_member):
+    """Context panel data for a team member.
+
+    Returns a dict of querysets for the meeting detail page's side column.
+    Reusable across meeting detail and team pages.
+    """
+    return {
+        "open_delegations": Delegation.objects.for_manager(manager_id).filter(
+            team_member=team_member, status="active",
+        ),
+        "recent_feedback": Feedback.objects.for_manager(manager_id).filter(
+            team_member=team_member,
+        ).order_by("-created_at")[:5],
+        "active_goals": Goal.objects.for_manager(manager_id).filter(
+            team_member=team_member,
+        ).exclude(status__in=["met", "not_met"]),
+        "open_actions": ActionItem.objects.for_manager(manager_id).filter(
+            one_on_one_session__team_member=team_member,
+            status__in=["pending", "in_progress"],
+        ),
+        "last_4_meetings": OneOnOneSession.objects.for_manager(manager_id).filter(
+            team_member=team_member, status="completed",
+        ).order_by("-session_date")[:4],
+    }
