@@ -50,6 +50,7 @@ def send_smtp(smtp_cfg, msg):
 
     Used by both calendar invites and weekly digest.
     """
+    server = None
     try:
         server = smtplib.SMTP(smtp_cfg["server"], smtp_cfg["port"],
                               timeout=SMTP_TIMEOUT)
@@ -63,6 +64,7 @@ def send_smtp(smtp_cfg, msg):
             msg.as_string(),
         )
         server.quit()
+        server = None  # quit succeeded, no cleanup needed
         return True, f"Email sent to {msg['To']}"
     except smtplib.SMTPAuthenticationError:
         logger.exception("SMTP auth failed for %s", smtp_cfg["user"])
@@ -76,3 +78,9 @@ def send_smtp(smtp_cfg, msg):
     except Exception:
         logger.exception("Failed to send email")
         return False, "Failed to send email. Check the server logs for details."
+    finally:
+        if server is not None:
+            try:
+                server.quit()
+            except Exception:
+                pass

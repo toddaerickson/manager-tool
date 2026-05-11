@@ -37,6 +37,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "mt.settings")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import django
+import django.db.utils
 django.setup()
 
 from psycopg import sql as psql
@@ -115,10 +116,11 @@ def raw_count(conn, table, manager_id):
 
 def orm_count(model, manager_id):
     """Count rows via Django ORM's TenantManager.
-    Returns None if the table doesn't exist yet."""
+    Returns None only if the table doesn't exist yet (Django-only tables
+    like audit_log before migrate runs). Any other error propagates."""
     try:
         return model.objects.for_manager(manager_id).count()
-    except Exception:
+    except (django.db.utils.OperationalError, django.db.utils.ProgrammingError):
         # Table doesn't exist — Django migration hasn't run on this DB
         from django.db import connection
         connection.ensure_connection()  # reset after error
