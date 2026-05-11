@@ -9,8 +9,9 @@ forms convert from native date/time input to ISO/HH:MM strings on save.
 from django import forms
 
 from .models import (
-    CareerConversation, Decision, Delegation, DevelopmentPlan, Event,
-    Feedback, Goal, Manager, Milestone, RunningNote, Skill, TeamMember,
+    ActionItem, CareerConversation, Decision, Delegation, DevelopmentPlan,
+    Event, Feedback, Goal, Manager, Milestone, OneOnOneSession, RunningNote,
+    Skill, TeamMember,
 )
 
 
@@ -888,3 +889,76 @@ class ManagerSettingsForm(forms.ModelForm):
                 "class": _INPUT_CLS, "placeholder": "Your name",
             }),
         }
+
+
+# ── One-on-One Meetings ──────────────────────────────────────────────
+
+
+class OneOnOneSessionForm(forms.ModelForm):
+    session_date = forms.DateField(
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )
+
+    class Meta:
+        model = OneOnOneSession
+        fields = [
+            "team_member", "session_date", "event",
+            "direct_notes", "manager_notes", "followup_notes",
+        ]
+        labels = {
+            "direct_notes": "Their Agenda",
+            "manager_notes": "Your Agenda",
+            "followup_notes": "Coaching / Their Future",
+        }
+        widgets = {
+            "team_member": forms.Select(attrs={"class": _INPUT_CLS}),
+            "event": forms.Select(attrs={"class": _INPUT_CLS}),
+            "direct_notes": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 6,
+                "placeholder": "Their 10 minutes — what's on their mind? Start here.",
+            }),
+            "manager_notes": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 6,
+                "placeholder": "Your 10 minutes — what you need to cover.",
+            }),
+            "followup_notes": forms.Textarea(attrs={
+                "class": _INPUT_CLS, "rows": 6,
+                "placeholder": "Development, coaching, career growth.",
+            }),
+        }
+
+    def __init__(self, *args, manager_id=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if manager_id is not None:
+            self.fields["team_member"].queryset = (
+                TeamMember.objects.active_for_manager(manager_id)
+                .order_by("name")
+            )
+            self.fields["event"].queryset = (
+                Event.objects.for_manager(manager_id)
+                .filter(event_type="one_on_one")
+                .order_by("-scheduled_date")
+            )
+        self.fields["team_member"].empty_label = "Select team member"
+        self.fields["event"].required = False
+        self.fields["event"].empty_label = "(no linked event)"
+        self.fields["direct_notes"].required = False
+        self.fields["manager_notes"].required = False
+        self.fields["followup_notes"].required = False
+
+    def clean_session_date(self):
+        d = self.cleaned_data["session_date"]
+        return d.isoformat()
+
+
+class MeetingActionItemForm(forms.Form):
+    description = forms.CharField(
+        widget=forms.TextInput(attrs={
+            "class": _INPUT_CLS,
+            "placeholder": "Action item description",
+        }),
+    )
+    due_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"type": "date", "class": _INPUT_CLS}),
+    )

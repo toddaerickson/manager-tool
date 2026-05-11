@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}Meetings — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Meetings</h1>
+    <p class="text-sm text-slate-500 mt-1">Structured 1:1 meeting records using the 10/10/10 format.</p>
+  </header>
+
+  {# ── Cadence health ── #}
+  {% if cadence %}
+  <div class="mb-5 bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-3">
+    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Meeting cadence</div>
+    <div class="flex flex-wrap gap-3">
+      {% for c in cadence %}
+      <div class="flex items-center gap-1.5 text-sm">
+        <span class="font-medium">{{ c.member.name }}</span>
+        {% if c.days_since is None %}
+          <span class="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">never</span>
+        {% elif c.days_since > 14 %}
+          <span class="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700">{{ c.days_since }}d ago</span>
+        {% elif c.days_since > 7 %}
+          <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">{{ c.days_since }}d ago</span>
+        {% else %}
+          <span class="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">{{ c.days_since }}d ago</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Member filter ── #}
+  <div class="flex items-center gap-3 mb-4">
+    <label class="text-sm text-slate-600">Filter by member:</label>
+    <select onchange="window.location=this.value?'?member='+this.value:window.location.pathname"
+            class="text-sm border border-slate-300 rounded px-2 py-1">
+      <option value="">All meetings</option>
+      {% for m in members %}
+        <option value="{{ m.id }}" {% if selected_member == m.id %}selected{% endif %}>{{ m.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  {# ── Start new meeting ── #}
+  <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not drafts and not completed %}open{% endif %}>
+    <summary class="px-6 py-3 cursor-pointer select-none font-medium">Start new meeting</summary>
+    <div class="px-6 pb-6">
+      {% include "_partials/meeting_form.html" %}
+    </div>
+  </details>
+
+  {# ── Draft meetings ── #}
+  {% if drafts %}
+  <div class="mb-4">
+    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">In progress</div>
+    <div class="space-y-3">
+      {% for s in drafts %}
+      <div id="meeting-row-{{ s.id }}" class="bg-white rounded-lg shadow-sm border border-amber-200 px-5 py-4">
+        <div class="flex items-center justify-between mb-1">
+          <div class="text-sm">
+            <span class="font-medium">{{ s.team_member.name }}</span>
+            <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 ml-2">Draft</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-slate-500 tabular-nums">{{ s.session_date }}</span>
+            <a href="{% url 'meetings-detail' s.id %}" class="text-xs text-blue-600 hover:text-blue-800 underline">Open</a>
+            <button type="button"
+                    hx-delete="{% url 'meetings-delete' s.id %}"
+                    hx-target="#meeting-row-{{ s.id }}"
+                    hx-swap="outerHTML"
+                    hx-confirm="Delete this meeting?"
+                    hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                    class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+          </div>
+        </div>
+        {% if s.direct_notes %}
+          <p class="text-sm text-slate-600 truncate">{{ s.direct_notes|truncatechars:80 }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Completed meetings ── #}
+  {% if completed %}
+  <div>
+    {% if drafts %}<div class="text-xs uppercase tracking-wider text-slate-500 mb-2 mt-4">Completed</div>{% endif %}
+    <div class="space-y-3">
+      {% for s in completed %}
+      <div id="meeting-row-{{ s.id }}" class="bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-4">
+        <div class="flex items-center justify-between mb-1">
+          <div class="text-sm">
+            <span class="font-medium">{{ s.team_member.name }}</span>
+            <span class="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700 ml-2">Completed</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-slate-500 tabular-nums">{{ s.session_date }}</span>
+            <a href="{% url 'meetings-detail' s.id %}" class="text-xs text-blue-600 hover:text-blue-800 underline">Open</a>
+            <button type="button"
+                    hx-delete="{% url 'meetings-delete' s.id %}"
+                    hx-target="#meeting-row-{{ s.id }}"
+                    hx-swap="outerHTML"
+                    hx-confirm="Delete this meeting?"
+                    hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                    class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+          </div>
+        </div>
+        {% if s.direct_notes %}
+          <p class="text-sm text-slate-600 truncate">{{ s.direct_notes|truncatechars:80 }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if not drafts and not completed %}
+  <div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
+    No meetings yet. Start one above.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,33 @@
+<div class="text-sm font-medium text-slate-700 mb-3">Action items</div>
+
+{% if action_items %}
+<ul class="space-y-2 mb-4">
+  {% for a in action_items %}
+  <li class="flex items-center justify-between text-sm">
+    <span class="text-slate-700">{{ a.description }}</span>
+    <span class="text-xs text-slate-400 ml-2 shrink-0">
+      {% if a.due_date %}due {{ a.due_date }}{% endif %}
+      <span class="px-1.5 py-0.5 rounded {% if a.status == 'completed' %}bg-green-100 text-green-700{% else %}bg-slate-100 text-slate-600{% endif %}">{{ a.status }}</span>
+    </span>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="text-sm text-slate-400 mb-4">No action items yet.</p>
+{% endif %}
+
+<form hx-post="{% url 'meetings-add-action' session.id %}"
+      hx-target="#meeting-actions"
+      hx-swap="innerHTML"
+      hx-disabled-elt="find button[type='submit']"
+      class="flex items-end gap-2">
+  {% csrf_token %}
+  <div class="flex-1">
+    {{ action_form.description }}
+  </div>
+  <div class="w-36">
+    {{ action_form.due_date }}
+  </div>
+  <button type="submit"
+          class="bg-slate-900 text-white text-sm px-3 py-1.5 rounded hover:bg-slate-700 shrink-0">Add</button>
+</form>

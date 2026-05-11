@@ -65,6 +65,15 @@ from core.views.decisions import (  # noqa: F401
     decisions_edit,
     decisions_list,
 )
+from core.views.one_on_ones import (  # noqa: F401
+    one_on_ones_add,
+    one_on_ones_add_action,
+    one_on_ones_autosave,
+    one_on_ones_complete,
+    one_on_ones_delete,
+    one_on_ones_detail,
+    one_on_ones_list,
+)
 from core.views.notes import (  # noqa: F401
     notes_add,
     notes_delete,
