@@ -184,6 +184,45 @@ def _exercise_orm() -> None:
     ).count() == 1
 
     _exercise_recurring_events_no_orphan(m1)
+    _exercise_dashboard_naive_timestamp(m1)
+
+
+def _exercise_dashboard_naive_timestamp(manager) -> None:
+    """Regression: feedback.created_at (and most other *_at columns) is
+    declared `TIMESTAMP` (no tz) in schema_postgres.sql. psycopg2 returns
+    those as naive datetimes; Django's `timezone.now()` is aware. The
+    dashboard overview view subtracts the two — naive minus aware was
+    raising TypeError ("can't subtract offset-naive and offset-aware
+    datetimes") on PG only. SQLite returns aware values for the same
+    field, so the pytest suite cannot catch this class of bug."""
+    from core.models import Feedback, TeamMember
+    from core.views.events import dashboard_overview
+    from django.test import RequestFactory
+
+    _step("dashboard overview tolerates naive feedback timestamps (PG TIMESTAMP)")
+    tm = TeamMember.objects.for_manager(manager.id).first()
+    Feedback.objects.create(
+        team_member=tm, feedback_type="positive",
+        situation="smoke fb", manager_id=manager.id,
+    )
+
+    from django.contrib.auth import get_user_model
+    user = get_user_model().objects.create_user(
+        username=f"smoke_dashboard_{manager.id}",
+        email=manager.email, password="x",
+    )
+    rf = RequestFactory()
+    req = rf.get("/dashboard/panels/overview/")
+    # Bypass middleware: @login_required reads request.user;
+    # dashboard_overview reads request.manager. Wire both manually.
+    req.user = user
+    req.manager = manager
+    resp = dashboard_overview(req)
+    if resp.status_code != 200:
+        _bail(
+            f"dashboard overview returned {resp.status_code} on PG — "
+            f"naive/aware datetime subtraction regression?"
+        )
 
 
 def _exercise_recurring_events_no_orphan(manager) -> None:

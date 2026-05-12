@@ -14,6 +14,8 @@ import random
 import re
 from datetime import date, datetime, timedelta
 
+from django.utils import timezone
+
 from core.models import (
     ActionItem, Decision, Delegation, Event, JournalEntry,
     TeamMember,
@@ -774,7 +776,7 @@ def get_daily_suggestion(manager_id):
                 "suggestion": suggestion_text,
                 "action_page": action_page,
                 "dismissed": 0,
-                "created_at": datetime.now(),
+                "created_at": timezone.now(),
             },
         )
 
@@ -789,7 +791,7 @@ def get_daily_suggestion(manager_id):
                 "suggestion": ai_text,
                 "action_page": action_page,
                 "dismissed": 0,
-                "created_at": datetime.now(),
+                "created_at": timezone.now(),
             },
         )
 

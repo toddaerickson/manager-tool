@@ -334,6 +334,32 @@ class TestDashboardView:
         assert resp.status_code == 302
         assert "/accounts/google/login/" in resp["Location"]
 
+    def test_overview_handles_naive_feedback_timestamp(self, client):
+        """Regression: feedback.created_at is TIMESTAMP (no tz) on PG, so
+        psycopg2 returns naive datetimes. The overview view subtracts
+        `timezone.now()` (aware) from it — naive minus aware was raising
+        TypeError before the fix."""
+        from datetime import datetime
+        from core.models import Feedback
+        m = Manager.objects.create(
+            username="todd_naive", display_name="Todd",
+            password_hash="x", email="todd_naive@example.com",
+        )
+        tm = TeamMember.objects.create(name="report", manager_id=m.id)
+        # Force a naive created_at — mirrors what PG returns for the
+        # TIMESTAMP column even though SQLite (used by pytest) normally
+        # returns aware values.
+        fb = Feedback.objects.create(
+            team_member=tm, feedback_type="positive",
+            situation="ok", manager_id=m.id,
+        )
+        Feedback.objects.filter(pk=fb.id).update(
+            created_at=datetime(2026, 5, 1, 12, 0, 0),  # naive
+        )
+        self._login_as(client, "todd_naive@example.com")
+        resp = client.get("/dashboard/panels/overview/")
+        assert resp.status_code == 200
+
 
 # ============================================================
 # Phase 5.1: Team Members CRUD
