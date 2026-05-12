@@ -1,6 +1,6 @@
 """Views: events."""
 
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone as _dt_tz
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, HttpResponseForbidden
@@ -412,6 +412,11 @@ def dashboard_overview(request):
         last_fb = fb_map.get(m.id)
         if last_fb:
             from django.utils import timezone as _tz
+            # feedback.created_at is TIMESTAMP (no tz) in PG, so psycopg2
+            # returns naive datetimes. _tz.now() is aware. Coerce stored
+            # values to UTC — Render's server clock is UTC.
+            if last_fb.tzinfo is None:
+                last_fb = last_fb.replace(tzinfo=_dt_tz.utc)
             days_fb = (_tz.now() - last_fb).days
             if days_fb >= 30:
                 actions.append({
@@ -467,6 +472,8 @@ def dashboard_overview(request):
         fb_days = None
         if last_fb:
             from django.utils import timezone as _tz
+            if last_fb.tzinfo is None:
+                last_fb = last_fb.replace(tzinfo=_dt_tz.utc)
             fb_days = (_tz.now() - last_fb).days
 
         team_health.append({
