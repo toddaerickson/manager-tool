@@ -196,6 +196,8 @@ def _exercise_dashboard_naive_timestamp(manager) -> None:
     datetimes") on PG only. SQLite returns aware values for the same
     field, so the pytest suite cannot catch this class of bug."""
     from core.models import Feedback, TeamMember
+    from core.views.events import dashboard_overview
+    from django.test import RequestFactory
 
     _step("dashboard overview tolerates naive feedback timestamps (PG TIMESTAMP)")
     tm = TeamMember.objects.for_manager(manager.id).first()
@@ -204,14 +206,18 @@ def _exercise_dashboard_naive_timestamp(manager) -> None:
         situation="smoke fb", manager_id=manager.id,
     )
 
-    from django.test import Client
     from django.contrib.auth import get_user_model
     user = get_user_model().objects.create_user(
-        username=manager.email, email=manager.email, password="x",
+        username=f"smoke_dashboard_{manager.id}",
+        email=manager.email, password="x",
     )
-    client = Client()
-    client.force_login(user)
-    resp = client.get("/dashboard/panels/overview/")
+    rf = RequestFactory()
+    req = rf.get("/dashboard/panels/overview/")
+    # Bypass middleware: @login_required reads request.user;
+    # dashboard_overview reads request.manager. Wire both manually.
+    req.user = user
+    req.manager = manager
+    resp = dashboard_overview(req)
     if resp.status_code != 200:
         _bail(
             f"dashboard overview returned {resp.status_code} on PG — "
