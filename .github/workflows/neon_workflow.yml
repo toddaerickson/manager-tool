@@ -26,7 +26,7 @@ jobs:
     name: Create Neon Branch
     outputs:
       db_url: ${{ steps.create_neon_branch.outputs.db_url }}
-      db_url_with_pooler: ${{ steps.create_neon_branch.outputs.db_url_with_pooler }}
+      db_url_with_pooler: ${{ steps.create_neon_branch.outputs.db_url_pooled }}
     needs: setup
     if: |
       github.event_name == 'pull_request' && (
@@ -51,17 +51,17 @@ jobs:
 # You may want to do something with the new branch, such as run migrations, run tests
 # on it, or send the connection details to a hosting platform environment.
 # The branch DATABASE_URL is available to you via:
-# "${{ steps.create_neon_branch.outputs.db_url_with_pooler }}".
+# "${{ steps.create_neon_branch.outputs.db_url }}".
 # It's important you don't log the DATABASE_URL as output as it contains a username and
 # password for your database.
 # For example, you can uncomment the lines below to run a database migration command:
 #      - name: Run Migrations
 #        run: npm run db:migrate
 #        env:
-#          # to use pooled connection
-#          DATABASE_URL: "${{ steps.create_neon_branch.outputs.db_url_with_pooler }}"
-#          # OR to use unpooled connection
-#          # DATABASE_URL: "${{ steps.create_neon_branch.outputs.db_url }}"
+#          # to use unpooled connection
+#          DATABASE_URL: "${{ steps.create_neon_branch.outputs.db_url }}"
+#          # OR to use pooled connection
+#          # DATABASE_URL: "${{ steps.create_neon_branch.outputs.db_url_pooled }}"
 
 # Following the step above, which runs database migrations, you may want to check
 # for schema changes in your database. We recommend using the following action to
@@ -100,10 +100,24 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -r requirements.txt
+      - name: Reset Neon branch database
+        run: |
+          python -c "
+          import psycopg2, os
+          conn = psycopg2.connect(os.environ['DATABASE_URL'])
+          conn.autocommit = True
+          cur = conn.cursor()
+          cur.execute('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;')
+          cur.close()
+          conn.close()
+          print('[ok] public schema reset')
+          "
+        env:
+          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Streamlit smoke test against Neon branch
         run: python scripts/smoke_pg.py
         env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url_with_pooler }}
+          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
 
   smoke_pg_django_neon:
     name: Postgres smoke Django (Neon branch)
@@ -126,10 +140,20 @@ jobs:
           cache-dependency-path: manager-tool-django/requirements.txt
       - name: Install
         run: pip install -r requirements.txt
+      - name: Reset Neon branch database
+        run: |
+          python -c "
+          import psycopg, os
+          with psycopg.connect(os.environ['DATABASE_URL'], autocommit=True) as conn:
+              conn.execute('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;')
+          print('[ok] public schema reset')
+          "
+        env:
+          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Django smoke test against Neon branch
         run: python scripts/smoke_pg_django.py
         env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url_with_pooler }}
+          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
 
   delete_neon_branch:
     name: Delete Neon Branch
