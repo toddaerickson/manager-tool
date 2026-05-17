@@ -102,16 +102,12 @@ jobs:
         run: pip install -r requirements.txt
       - name: Reset Neon branch database
         run: |
-          python -c "
-          import psycopg2, os
-          conn = psycopg2.connect(os.environ['DATABASE_URL'])
-          conn.autocommit = True
-          cur = conn.cursor()
-          cur.execute('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;')
-          cur.close()
-          conn.close()
-          print('[ok] public schema reset')
-          "
+          [ -z "${DATABASE_URL}" ] && { echo "FAIL: DATABASE_URL is empty"; exit 1; }
+          echo "Resetting public schema (url len=${#DATABASE_URL})..."
+          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
+            -c "DROP SCHEMA IF EXISTS public CASCADE" \
+            -c "CREATE SCHEMA public"
+          echo "[ok] public schema reset"
         env:
           DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Streamlit smoke test against Neon branch
@@ -142,12 +138,12 @@ jobs:
         run: pip install -r requirements.txt
       - name: Reset Neon branch database
         run: |
-          python -c "
-          import psycopg, os
-          with psycopg.connect(os.environ['DATABASE_URL'], autocommit=True) as conn:
-              conn.execute('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;')
-          print('[ok] public schema reset')
-          "
+          [ -z "${DATABASE_URL}" ] && { echo "FAIL: DATABASE_URL is empty"; exit 1; }
+          echo "Resetting public schema (url len=${#DATABASE_URL})..."
+          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
+            -c "DROP SCHEMA IF EXISTS public CASCADE" \
+            -c "CREATE SCHEMA public"
+          echo "[ok] public schema reset"
         env:
           DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Django smoke test against Neon branch
