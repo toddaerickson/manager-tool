@@ -89,51 +89,6 @@ jobs:
 # It's important you don't log the DATABASE_URL as output as it contains a username and
 # password for your database.
 
-  smoke_pg_neon:
-    name: Postgres smoke (Neon branch)
-    needs: create_neon_branch
-    if: |
-      github.event_name == 'pull_request' && (
-      github.event.action == 'synchronize'
-      || github.event.action == 'opened'
-      || github.event.action == 'reopened')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      - name: Install
-        run: pip install -r requirements.txt
-      - name: Decode DATABASE_URL from create_neon_branch
-        env:
-          ENC_DB_URL: ${{ needs.create_neon_branch.outputs.db_url }}
-        run: |
-          if [ -z "${ENC_DB_URL}" ]; then
-            echo "FAIL: encoded db_url is empty — create_neon_branch job output not propagated"
-            exit 1
-          fi
-          DECODED=$(printf '%s' "$ENC_DB_URL" | base64 -d)
-          echo "::add-mask::$DECODED"
-          echo "DATABASE_URL=$DECODED" >> "$GITHUB_ENV"
-          echo "DATABASE_URL decoded (${#DECODED} chars)"
-      - name: Reset Neon branch database
-        run: |
-          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 <<'EOSQL'
-          DO $body$
-          DECLARE r RECORD;
-          BEGIN
-            FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
-              EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-            END LOOP;
-          END
-          $body$;
-          EOSQL
-          echo "[ok] public tables dropped"
-      - name: Run Streamlit smoke test against Neon branch
-        run: python scripts/smoke_pg.py
-
   smoke_pg_django_neon:
     name: Postgres smoke Django (Neon branch)
     needs: create_neon_branch
