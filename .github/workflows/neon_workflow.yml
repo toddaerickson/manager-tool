@@ -92,9 +92,21 @@ jobs:
         run: pip install -r requirements.txt
       - name: Reset Neon branch database
         run: |
-          [ -z "${DATABASE_URL}" ] && { echo "FAIL: DATABASE_URL is empty"; exit 1; }
-          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c \
-            "DO \$\$DECLARE r RECORD; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname='public') LOOP EXECUTE 'DROP TABLE IF EXISTS public.'||quote_ident(r.tablename)||' CASCADE'; END LOOP; END\$\$;"
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "FAIL: DATABASE_URL is empty — create_neon_branch job output not propagated"
+            exit 1
+          fi
+          echo "DATABASE_URL is set (${#DATABASE_URL} chars)"
+          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 <<'EOSQL'
+          DO $body$
+          DECLARE r RECORD;
+          BEGIN
+            FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+              EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+            END LOOP;
+          END
+          $body$;
+          EOSQL
           echo "[ok] public tables dropped"
         env:
           DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
@@ -126,9 +138,21 @@ jobs:
         run: pip install -r requirements.txt
       - name: Reset Neon branch database
         run: |
-          [ -z "${DATABASE_URL}" ] && { echo "FAIL: DATABASE_URL is empty"; exit 1; }
-          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c \
-            "DO \$\$DECLARE r RECORD; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname='public') LOOP EXECUTE 'DROP TABLE IF EXISTS public.'||quote_ident(r.tablename)||' CASCADE'; END LOOP; END\$\$;"
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "FAIL: DATABASE_URL is empty — create_neon_branch job output not propagated"
+            exit 1
+          fi
+          echo "DATABASE_URL is set (${#DATABASE_URL} chars)"
+          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 <<'EOSQL'
+          DO $body$
+          DECLARE r RECORD;
+          BEGIN
+            FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+              EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+            END LOOP;
+          END
+          $body$;
+          EOSQL
           echo "[ok] public tables dropped"
         env:
           DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
