@@ -90,6 +90,7 @@ jobs:
       run:
         working-directory: manager-tool-django
     steps:
+      - uses: actions/checkout@v4
       - name: Get branch expiration date
         run: echo "EXPIRES_AT=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
       - name: Create Neon Branch
@@ -119,7 +120,6 @@ jobs:
           done
           echo "FAIL: Neon compute not ready after 30s"
           exit 1
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
