@@ -90,24 +90,21 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -r requirements.txt
-      - name: Reset Neon branch database
+      - name: Check DATABASE_URL
         run: |
           if [ -z "${DATABASE_URL}" ]; then
-            echo "FAIL: DATABASE_URL is empty — create_neon_branch job output not propagated"
+            echo "FAIL: DATABASE_URL is empty"
             exit 1
           fi
-          echo "DATABASE_URL is set (${#DATABASE_URL} chars)"
-          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 <<'EOSQL'
-          DO $body$
-          DECLARE r RECORD;
-          BEGIN
-            FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
-              EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-            END LOOP;
-          END
-          $body$;
-          EOSQL
-          echo "[ok] public tables dropped"
+          echo "ok: DATABASE_URL is set (${#DATABASE_URL} chars)"
+        env:
+          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
+      - name: Reset Neon branch database
+        run: |
+          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
+            -c "DROP OWNED BY CURRENT_USER CASCADE" \
+            -c "CREATE SCHEMA IF NOT EXISTS public"
+          echo "[ok] database reset"
         env:
           DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Streamlit smoke test against Neon branch
@@ -136,24 +133,21 @@ jobs:
           cache-dependency-path: manager-tool-django/requirements.txt
       - name: Install
         run: pip install -r requirements.txt
-      - name: Reset Neon branch database
+      - name: Check DATABASE_URL
         run: |
           if [ -z "${DATABASE_URL}" ]; then
-            echo "FAIL: DATABASE_URL is empty — create_neon_branch job output not propagated"
+            echo "FAIL: DATABASE_URL is empty"
             exit 1
           fi
-          echo "DATABASE_URL is set (${#DATABASE_URL} chars)"
-          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 <<'EOSQL'
-          DO $body$
-          DECLARE r RECORD;
-          BEGIN
-            FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
-              EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
-            END LOOP;
-          END
-          $body$;
-          EOSQL
-          echo "[ok] public tables dropped"
+          echo "ok: DATABASE_URL is set (${#DATABASE_URL} chars)"
+        env:
+          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
+      - name: Reset Neon branch database
+        run: |
+          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
+            -c "DROP OWNED BY CURRENT_USER CASCADE" \
+            -c "CREATE SCHEMA IF NOT EXISTS public"
+          echo "[ok] database reset"
         env:
           DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Django smoke test against Neon branch
