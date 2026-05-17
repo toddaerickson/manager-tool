@@ -25,8 +25,8 @@ jobs:
   create_neon_branch:
     name: Create Neon Branch
     outputs:
-      db_url: ${{ steps.create_neon_branch_encode.outputs.db_url }}
-      db_url_with_pooler: ${{ steps.create_neon_branch_encode.outputs.db_url_with_pooler }}
+      db_url: ${{ steps.create_neon_branch.outputs.db_url }}
+      db_url_with_pooler: ${{ steps.create_neon_branch.outputs.db_url_with_pooler }}
     needs: setup
     if: |
       github.event_name == 'pull_request' && (
@@ -82,6 +82,54 @@ jobs:
 #          project_id: ${{ vars.NEON_PROJECT_ID }}
 #          compare_branch: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}
 #          api_key: ${{ secrets.NEON_API_KEY }}
+
+  smoke_pg_neon:
+    name: Postgres smoke (Neon branch)
+    needs: create_neon_branch
+    if: |
+      github.event_name == 'pull_request' && (
+      github.event.action == 'synchronize'
+      || github.event.action == 'opened'
+      || github.event.action == 'reopened')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Run Streamlit smoke test against Neon branch
+        run: python scripts/smoke_pg.py
+        env:
+          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url_with_pooler }}
+
+  smoke_pg_django_neon:
+    name: Postgres smoke Django (Neon branch)
+    needs: create_neon_branch
+    if: |
+      github.event_name == 'pull_request' && (
+      github.event.action == 'synchronize'
+      || github.event.action == 'opened'
+      || github.event.action == 'reopened')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: manager-tool-django
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: manager-tool-django/requirements.txt
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Run Django smoke test against Neon branch
+        run: python scripts/smoke_pg_django.py
+        env:
+          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url_with_pooler }}
 
   delete_neon_branch:
     name: Delete Neon Branch
