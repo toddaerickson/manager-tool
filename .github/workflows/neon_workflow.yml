@@ -22,13 +22,8 @@ jobs:
         id: branch_name
         uses: tj-actions/branch-names@v8
 
-  create_neon_branch:
-    name: Create Neon Branch
-    outputs:
-      db_url: ${{ steps.create_neon_branch.outputs.db_url }}
-      db_url_with_pooler: ${{ steps.create_neon_branch.outputs.db_url_pooled }}
-      # base64-encoded copy so the URL survives cross-job masking
-      db_url_b64: ${{ steps.export_url.outputs.db_url_b64 }}
+  smoke_pg_neon:
+    name: Postgres smoke (Neon branch)
     needs: setup
     if: |
       github.event_name == 'pull_request' && (
@@ -37,24 +32,24 @@ jobs:
       || github.event.action == 'reopened')
     runs-on: ubuntu-latest
     steps:
-      - name: Get branch expiration date as an env variable (2 weeks from now)
-        id: get_expiration_date
+      - name: Get branch expiration date
         run: echo "EXPIRES_AT=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
       - name: Create Neon Branch
         id: create_neon_branch
         uses: neondatabase/create-branch-action@v6
         with:
           project_id: ${{ vars.NEON_PROJECT_ID }}
-          branch_name: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}
+          branch_name: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}-streamlit
           api_key: ${{ secrets.NEON_API_KEY }}
           expires_at: ${{ env.EXPIRES_AT }}
-      - name: Wait for Neon compute
+      - name: Set DATABASE_URL and wait for compute
         run: |
           DB_URL="${{ steps.create_neon_branch.outputs.db_url }}"
           if [ -z "${DB_URL}" ]; then
             echo "FAIL: db_url output is empty — check NEON_PROJECT_ID and NEON_API_KEY"
             exit 1
           fi
+          echo "DATABASE_URL=${DB_URL}" >> "$GITHUB_ENV"
           echo "Polling compute readiness (url len=${#DB_URL})..."
           for i in $(seq 1 10); do
             if psql "${DB_URL}" -c "SELECT 1" >/dev/null 2>&1; then
@@ -66,32 +61,6 @@ jobs:
           done
           echo "FAIL: Neon compute not ready after 30s"
           exit 1
-      - name: Export db_url for downstream jobs
-        id: export_url
-        env:
-          DB_URL: ${{ steps.create_neon_branch.outputs.db_url }}
-        run: |
-          B64=$(printf '%s' "${DB_URL}" | base64 -w 0)
-          echo "db_url_b64=${B64}" >> "$GITHUB_OUTPUT"
-
-# The step above creates a new Neon branch.
-# You may want to do something with the new branch, such as run migrations, run tests
-# on it, or send the connection details to a hosting platform environment.
-# The branch DATABASE_URL is available to you via:
-# "${{ steps.create_neon_branch.outputs.db_url }}".
-# It's important you don't log the DATABASE_URL as output as it contains a username and
-# password for your database.
-
-  smoke_pg_neon:
-    name: Postgres smoke (Neon branch)
-    needs: create_neon_branch
-    if: |
-      github.event_name == 'pull_request' && (
-      github.event.action == 'synchronize'
-      || github.event.action == 'opened'
-      || github.event.action == 'reopened')
-    runs-on: ubuntu-latest
-    steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -99,15 +68,6 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -r requirements.txt
-      - name: Decode DATABASE_URL
-        run: |
-          DATABASE_URL=$(echo "${{ needs.create_neon_branch.outputs.db_url_b64 }}" | base64 -d)
-          if [ -z "${DATABASE_URL}" ]; then
-            echo "FAIL: DATABASE_URL empty after decode — db_url_b64 job output missing"
-            exit 1
-          fi
-          echo "ok: DATABASE_URL decoded (${#DATABASE_URL} chars)"
-          echo "DATABASE_URL=${DATABASE_URL}" >> "$GITHUB_ENV"
       - name: Reset Neon branch database
         run: |
           psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
@@ -119,7 +79,7 @@ jobs:
 
   smoke_pg_django_neon:
     name: Postgres smoke Django (Neon branch)
-    needs: create_neon_branch
+    needs: setup
     if: |
       github.event_name == 'pull_request' && (
       github.event.action == 'synchronize'
@@ -130,6 +90,35 @@ jobs:
       run:
         working-directory: manager-tool-django
     steps:
+      - name: Get branch expiration date
+        run: echo "EXPIRES_AT=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+      - name: Create Neon Branch
+        id: create_neon_branch
+        uses: neondatabase/create-branch-action@v6
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch_name: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}-django
+          api_key: ${{ secrets.NEON_API_KEY }}
+          expires_at: ${{ env.EXPIRES_AT }}
+      - name: Set DATABASE_URL and wait for compute
+        run: |
+          DB_URL="${{ steps.create_neon_branch.outputs.db_url }}"
+          if [ -z "${DB_URL}" ]; then
+            echo "FAIL: db_url output is empty — check NEON_PROJECT_ID and NEON_API_KEY"
+            exit 1
+          fi
+          echo "DATABASE_URL=${DB_URL}" >> "$GITHUB_ENV"
+          echo "Polling compute readiness (url len=${#DB_URL})..."
+          for i in $(seq 1 10); do
+            if psql "${DB_URL}" -c "SELECT 1" >/dev/null 2>&1; then
+              echo "Compute ready (attempt $i)"
+              exit 0
+            fi
+            echo "Not ready (attempt $i/10), waiting 3s..."
+            sleep 3
+          done
+          echo "FAIL: Neon compute not ready after 30s"
+          exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -138,15 +127,6 @@ jobs:
           cache-dependency-path: manager-tool-django/requirements.txt
       - name: Install
         run: pip install -r requirements.txt
-      - name: Decode DATABASE_URL
-        run: |
-          DATABASE_URL=$(echo "${{ needs.create_neon_branch.outputs.db_url_b64 }}" | base64 -d)
-          if [ -z "${DATABASE_URL}" ]; then
-            echo "FAIL: DATABASE_URL empty after decode — db_url_b64 job output missing"
-            exit 1
-          fi
-          echo "ok: DATABASE_URL decoded (${#DATABASE_URL} chars)"
-          echo "DATABASE_URL=${DATABASE_URL}" >> "$GITHUB_ENV"
       - name: Reset Neon branch database
         run: |
           psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
@@ -162,9 +142,15 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
-      - name: Delete Neon Branch
+      - name: Delete Neon Branch (Streamlit)
         uses: neondatabase/delete-branch-action@v3
         with:
           project_id: ${{ vars.NEON_PROJECT_ID }}
-          branch: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}
+          branch: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}-streamlit
+          api_key: ${{ secrets.NEON_API_KEY }}
+      - name: Delete Neon Branch (Django)
+        uses: neondatabase/delete-branch-action@v3
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}-django
           api_key: ${{ secrets.NEON_API_KEY }}
