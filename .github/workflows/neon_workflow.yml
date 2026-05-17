@@ -27,6 +27,8 @@ jobs:
     outputs:
       db_url: ${{ steps.create_neon_branch.outputs.db_url }}
       db_url_with_pooler: ${{ steps.create_neon_branch.outputs.db_url_pooled }}
+      # base64-encoded copy so the URL survives cross-job masking
+      db_url_b64: ${{ steps.export_url.outputs.db_url_b64 }}
     needs: setup
     if: |
       github.event_name == 'pull_request' && (
@@ -64,6 +66,13 @@ jobs:
           done
           echo "FAIL: Neon compute not ready after 30s"
           exit 1
+      - name: Export db_url for downstream jobs
+        id: export_url
+        env:
+          DB_URL: ${{ steps.create_neon_branch.outputs.db_url }}
+        run: |
+          B64=$(printf '%s' "${DB_URL}" | base64 -w 0)
+          echo "db_url_b64=${B64}" >> "$GITHUB_OUTPUT"
 
 # The step above creates a new Neon branch.
 # You may want to do something with the new branch, such as run migrations, run tests
@@ -90,27 +99,23 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -r requirements.txt
-      - name: Check DATABASE_URL
+      - name: Decode DATABASE_URL
         run: |
+          DATABASE_URL=$(echo "${{ needs.create_neon_branch.outputs.db_url_b64 }}" | base64 -d)
           if [ -z "${DATABASE_URL}" ]; then
-            echo "FAIL: DATABASE_URL is empty"
+            echo "FAIL: DATABASE_URL empty after decode — db_url_b64 job output missing"
             exit 1
           fi
-          echo "ok: DATABASE_URL is set (${#DATABASE_URL} chars)"
-        env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
+          echo "ok: DATABASE_URL decoded (${#DATABASE_URL} chars)"
+          echo "DATABASE_URL=${DATABASE_URL}" >> "$GITHUB_ENV"
       - name: Reset Neon branch database
         run: |
           psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
             -c "DROP OWNED BY CURRENT_USER CASCADE" \
             -c "CREATE SCHEMA IF NOT EXISTS public"
           echo "[ok] database reset"
-        env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Streamlit smoke test against Neon branch
         run: python scripts/smoke_pg.py
-        env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
 
   smoke_pg_django_neon:
     name: Postgres smoke Django (Neon branch)
@@ -133,27 +138,23 @@ jobs:
           cache-dependency-path: manager-tool-django/requirements.txt
       - name: Install
         run: pip install -r requirements.txt
-      - name: Check DATABASE_URL
+      - name: Decode DATABASE_URL
         run: |
+          DATABASE_URL=$(echo "${{ needs.create_neon_branch.outputs.db_url_b64 }}" | base64 -d)
           if [ -z "${DATABASE_URL}" ]; then
-            echo "FAIL: DATABASE_URL is empty"
+            echo "FAIL: DATABASE_URL empty after decode — db_url_b64 job output missing"
             exit 1
           fi
-          echo "ok: DATABASE_URL is set (${#DATABASE_URL} chars)"
-        env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
+          echo "ok: DATABASE_URL decoded (${#DATABASE_URL} chars)"
+          echo "DATABASE_URL=${DATABASE_URL}" >> "$GITHUB_ENV"
       - name: Reset Neon branch database
         run: |
           psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
             -c "DROP OWNED BY CURRENT_USER CASCADE" \
             -c "CREATE SCHEMA IF NOT EXISTS public"
           echo "[ok] database reset"
-        env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Django smoke test against Neon branch
         run: python scripts/smoke_pg_django.py
-        env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
 
   delete_neon_branch:
     name: Delete Neon Branch
