@@ -72,34 +72,6 @@ jobs:
 # "${{ steps.create_neon_branch.outputs.db_url }}".
 # It's important you don't log the DATABASE_URL as output as it contains a username and
 # password for your database.
-# For example, you can uncomment the lines below to run a database migration command:
-#      - name: Run Migrations
-#        run: npm run db:migrate
-#        env:
-#          # to use unpooled connection
-#          DATABASE_URL: "${{ steps.create_neon_branch.outputs.db_url }}"
-#          # OR to use pooled connection
-#          # DATABASE_URL: "${{ steps.create_neon_branch.outputs.db_url_pooled }}"
-
-# Following the step above, which runs database migrations, you may want to check
-# for schema changes in your database. We recommend using the following action to
-# post a comment to your pull request with the schema diff. For this action to work,
-# you also need to give permissions to the workflow job to be able to post comments
-# and read your repository contents. Add the following permissions to the workflow job:
-#
-# permissions:
-#   contents: read
-#   pull-requests: write
-#
-# You can also check out https://github.com/neondatabase/schema-diff-action for more
-# information on how to use the schema diff action.
-# You can uncomment the lines below to enable the schema diff action.
-#      - name: Post Schema Diff Comment to PR
-#        uses: neondatabase/schema-diff-action@v1
-#        with:
-#          project_id: ${{ vars.NEON_PROJECT_ID }}
-#          compare_branch: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}
-#          api_key: ${{ secrets.NEON_API_KEY }}
 
   smoke_pg_neon:
     name: Postgres smoke (Neon branch)
@@ -121,10 +93,9 @@ jobs:
       - name: Reset Neon branch database
         run: |
           [ -z "${DATABASE_URL}" ] && { echo "FAIL: DATABASE_URL is empty"; exit 1; }
-          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
-            -c "DROP SCHEMA IF EXISTS public CASCADE" \
-            -c "CREATE SCHEMA public"
-          echo "[ok] public schema reset"
+          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c \
+            "DO \$\$DECLARE r RECORD; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname='public') LOOP EXECUTE 'DROP TABLE IF EXISTS public.'||quote_ident(r.tablename)||' CASCADE'; END LOOP; END\$\$;"
+          echo "[ok] public tables dropped"
         env:
           DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Streamlit smoke test against Neon branch
@@ -156,10 +127,9 @@ jobs:
       - name: Reset Neon branch database
         run: |
           [ -z "${DATABASE_URL}" ] && { echo "FAIL: DATABASE_URL is empty"; exit 1; }
-          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
-            -c "DROP SCHEMA IF EXISTS public CASCADE" \
-            -c "CREATE SCHEMA public"
-          echo "[ok] public schema reset"
+          psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c \
+            "DO \$\$DECLARE r RECORD; BEGIN FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname='public') LOOP EXECUTE 'DROP TABLE IF EXISTS public.'||quote_ident(r.tablename)||' CASCADE'; END LOOP; END\$\$;"
+          echo "[ok] public tables dropped"
         env:
           DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Django smoke test against Neon branch
