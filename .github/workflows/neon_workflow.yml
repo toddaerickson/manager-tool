@@ -103,7 +103,16 @@ jobs:
       - name: Reset Neon branch database
         run: |
           [ -z "${DATABASE_URL}" ] && { echo "FAIL: DATABASE_URL is empty"; exit 1; }
-          echo "Resetting public schema (url len=${#DATABASE_URL})..."
+          echo "Polling Neon compute readiness (url len=${#DATABASE_URL})..."
+          for i in $(seq 1 10); do
+            if psql "${DATABASE_URL}" -c "SELECT 1" >/dev/null 2>&1; then
+              echo "  Compute ready (attempt $i)"
+              break
+            fi
+            [ "$i" -eq 10 ] && { echo "FAIL: Neon compute not ready after 30s"; exit 1; }
+            echo "  Not ready (attempt $i/10), sleeping 3s..."
+            sleep 3
+          done
           psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
             -c "DROP SCHEMA IF EXISTS public CASCADE" \
             -c "CREATE SCHEMA public"
@@ -139,7 +148,16 @@ jobs:
       - name: Reset Neon branch database
         run: |
           [ -z "${DATABASE_URL}" ] && { echo "FAIL: DATABASE_URL is empty"; exit 1; }
-          echo "Resetting public schema (url len=${#DATABASE_URL})..."
+          echo "Polling Neon compute readiness (url len=${#DATABASE_URL})..."
+          for i in $(seq 1 10); do
+            if psql "${DATABASE_URL}" -c "SELECT 1" >/dev/null 2>&1; then
+              echo "  Compute ready (attempt $i)"
+              break
+            fi
+            [ "$i" -eq 10 ] && { echo "FAIL: Neon compute not ready after 30s"; exit 1; }
+            echo "  Not ready (attempt $i/10), sleeping 3s..."
+            sleep 3
+          done
           psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
             -c "DROP SCHEMA IF EXISTS public CASCADE" \
             -c "CREATE SCHEMA public"
