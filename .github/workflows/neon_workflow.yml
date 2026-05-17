@@ -46,6 +46,24 @@ jobs:
           branch_name: preview/pr-${{ github.event.number }}-${{ needs.setup.outputs.branch }}
           api_key: ${{ secrets.NEON_API_KEY }}
           expires_at: ${{ env.EXPIRES_AT }}
+      - name: Wait for Neon compute
+        run: |
+          DB_URL="${{ steps.create_neon_branch.outputs.db_url }}"
+          if [ -z "${DB_URL}" ]; then
+            echo "FAIL: db_url output is empty — check NEON_PROJECT_ID and NEON_API_KEY"
+            exit 1
+          fi
+          echo "Polling compute readiness (url len=${#DB_URL})..."
+          for i in $(seq 1 10); do
+            if psql "${DB_URL}" -c "SELECT 1" >/dev/null 2>&1; then
+              echo "Compute ready (attempt $i)"
+              exit 0
+            fi
+            echo "Not ready (attempt $i/10), waiting 3s..."
+            sleep 3
+          done
+          echo "FAIL: Neon compute not ready after 30s"
+          exit 1
 
 # The step above creates a new Neon branch.
 # You may want to do something with the new branch, such as run migrations, run tests
@@ -103,16 +121,6 @@ jobs:
       - name: Reset Neon branch database
         run: |
           [ -z "${DATABASE_URL}" ] && { echo "FAIL: DATABASE_URL is empty"; exit 1; }
-          echo "Polling Neon compute readiness (url len=${#DATABASE_URL})..."
-          for i in $(seq 1 10); do
-            if psql "${DATABASE_URL}" -c "SELECT 1" >/dev/null 2>&1; then
-              echo "  Compute ready (attempt $i)"
-              break
-            fi
-            [ "$i" -eq 10 ] && { echo "FAIL: Neon compute not ready after 30s"; exit 1; }
-            echo "  Not ready (attempt $i/10), sleeping 3s..."
-            sleep 3
-          done
           psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
             -c "DROP SCHEMA IF EXISTS public CASCADE" \
             -c "CREATE SCHEMA public"
@@ -148,16 +156,6 @@ jobs:
       - name: Reset Neon branch database
         run: |
           [ -z "${DATABASE_URL}" ] && { echo "FAIL: DATABASE_URL is empty"; exit 1; }
-          echo "Polling Neon compute readiness (url len=${#DATABASE_URL})..."
-          for i in $(seq 1 10); do
-            if psql "${DATABASE_URL}" -c "SELECT 1" >/dev/null 2>&1; then
-              echo "  Compute ready (attempt $i)"
-              break
-            fi
-            [ "$i" -eq 10 ] && { echo "FAIL: Neon compute not ready after 30s"; exit 1; }
-            echo "  Not ready (attempt $i/10), sleeping 3s..."
-            sleep 3
-          done
           psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 \
             -c "DROP SCHEMA IF EXISTS public CASCADE" \
             -c "CREATE SCHEMA public"
