@@ -25,8 +25,8 @@ jobs:
   create_neon_branch:
     name: Create Neon Branch
     outputs:
-      db_url: ${{ steps.create_neon_branch.outputs.db_url }}
-      db_url_with_pooler: ${{ steps.create_neon_branch.outputs.db_url_pooled }}
+      db_url: ${{ steps.create_neon_branch_encode.outputs.db_url }}
+      db_url_with_pooler: ${{ steps.create_neon_branch_encode.outputs.db_url_with_pooler }}
     needs: setup
     if: |
       github.event_name == 'pull_request' && (
@@ -47,8 +47,9 @@ jobs:
           api_key: ${{ secrets.NEON_API_KEY }}
           expires_at: ${{ env.EXPIRES_AT }}
       - name: Wait for Neon compute
+        env:
+          DB_URL: ${{ steps.create_neon_branch.outputs.db_url }}
         run: |
-          DB_URL="${{ steps.create_neon_branch.outputs.db_url }}"
           if [ -z "${DB_URL}" ]; then
             echo "FAIL: db_url output is empty — check NEON_PROJECT_ID and NEON_API_KEY"
             exit 1
@@ -64,6 +65,21 @@ jobs:
           done
           echo "FAIL: Neon compute not ready after 30s"
           exit 1
+      - name: Encode db_url for cross-job propagation
+        # neondatabase/create-branch-action masks db_url as a secret. GitHub
+        # replaces masked values with the empty string when they cross job
+        # boundaries via `outputs`, which is why downstream `needs.*.outputs.db_url`
+        # arrives blank. Base64-encode here so the propagated string is opaque
+        # to the mask scanner; downstream jobs decode and re-mask before use.
+        id: create_neon_branch_encode
+        env:
+          DB_URL: ${{ steps.create_neon_branch.outputs.db_url }}
+          DB_URL_WITH_POOLER: ${{ steps.create_neon_branch.outputs.db_url_with_pooler }}
+        run: |
+          enc_db=$(printf '%s' "$DB_URL" | base64 -w 0)
+          enc_pool=$(printf '%s' "$DB_URL_WITH_POOLER" | base64 -w 0)
+          echo "db_url=$enc_db" >> "$GITHUB_OUTPUT"
+          echo "db_url_with_pooler=$enc_pool" >> "$GITHUB_OUTPUT"
 
 # The step above creates a new Neon branch.
 # You may want to do something with the new branch, such as run migrations, run tests
@@ -90,13 +106,20 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -r requirements.txt
-      - name: Reset Neon branch database
+      - name: Decode DATABASE_URL from create_neon_branch
+        env:
+          ENC_DB_URL: ${{ needs.create_neon_branch.outputs.db_url }}
         run: |
-          if [ -z "${DATABASE_URL}" ]; then
-            echo "FAIL: DATABASE_URL is empty — create_neon_branch job output not propagated"
+          if [ -z "${ENC_DB_URL}" ]; then
+            echo "FAIL: encoded db_url is empty — create_neon_branch job output not propagated"
             exit 1
           fi
-          echo "DATABASE_URL is set (${#DATABASE_URL} chars)"
+          DECODED=$(printf '%s' "$ENC_DB_URL" | base64 -d)
+          echo "::add-mask::$DECODED"
+          echo "DATABASE_URL=$DECODED" >> "$GITHUB_ENV"
+          echo "DATABASE_URL decoded (${#DECODED} chars)"
+      - name: Reset Neon branch database
+        run: |
           psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 <<'EOSQL'
           DO $body$
           DECLARE r RECORD;
@@ -108,12 +131,8 @@ jobs:
           $body$;
           EOSQL
           echo "[ok] public tables dropped"
-        env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Streamlit smoke test against Neon branch
         run: python scripts/smoke_pg.py
-        env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
 
   smoke_pg_django_neon:
     name: Postgres smoke Django (Neon branch)
@@ -136,13 +155,20 @@ jobs:
           cache-dependency-path: manager-tool-django/requirements.txt
       - name: Install
         run: pip install -r requirements.txt
-      - name: Reset Neon branch database
+      - name: Decode DATABASE_URL from create_neon_branch
+        env:
+          ENC_DB_URL: ${{ needs.create_neon_branch.outputs.db_url }}
         run: |
-          if [ -z "${DATABASE_URL}" ]; then
-            echo "FAIL: DATABASE_URL is empty — create_neon_branch job output not propagated"
+          if [ -z "${ENC_DB_URL}" ]; then
+            echo "FAIL: encoded db_url is empty — create_neon_branch job output not propagated"
             exit 1
           fi
-          echo "DATABASE_URL is set (${#DATABASE_URL} chars)"
+          DECODED=$(printf '%s' "$ENC_DB_URL" | base64 -d)
+          echo "::add-mask::$DECODED"
+          echo "DATABASE_URL=$DECODED" >> "$GITHUB_ENV"
+          echo "DATABASE_URL decoded (${#DECODED} chars)"
+      - name: Reset Neon branch database
+        run: |
           psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 <<'EOSQL'
           DO $body$
           DECLARE r RECORD;
@@ -154,12 +180,8 @@ jobs:
           $body$;
           EOSQL
           echo "[ok] public tables dropped"
-        env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
       - name: Run Django smoke test against Neon branch
         run: python scripts/smoke_pg_django.py
-        env:
-          DATABASE_URL: ${{ needs.create_neon_branch.outputs.db_url }}
 
   delete_neon_branch:
     name: Delete Neon Branch
