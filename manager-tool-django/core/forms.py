@@ -891,6 +891,65 @@ class ManagerSettingsForm(forms.ModelForm):
         }
 
 
+class ConfigSettingsForm(forms.Form):
+    """Non-model settings stored in the Config table (one row per
+    key, per manager). Sensitive fields use PasswordInput and an
+    empty submission means 'keep existing value'."""
+
+    anthropic_api_key = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(attrs={
+            "class": _INPUT_CLS,
+            "placeholder": "sk-ant-... (leave blank to keep existing key)",
+            "autocomplete": "new-password",
+        }),
+    )
+    manager_name = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            "class": _INPUT_CLS, "placeholder": "Your name (used in email From:)",
+        }),
+    )
+    manager_email = forms.EmailField(
+        required=False,
+        widget=forms.EmailInput(attrs={
+            "class": _INPUT_CLS, "placeholder": "you@example.com",
+        }),
+    )
+    smtp_server = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            "class": _INPUT_CLS, "placeholder": "smtp.gmail.com",
+        }),
+    )
+    smtp_port = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            "class": _INPUT_CLS, "placeholder": "587",
+        }),
+    )
+    smtp_user = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            "class": _INPUT_CLS, "placeholder": "you@gmail.com",
+        }),
+    )
+    smtp_password = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(attrs={
+            "class": _INPUT_CLS,
+            "placeholder": "App password (leave blank to keep existing)",
+            "autocomplete": "new-password",
+        }),
+    )
+
+    def clean_smtp_port(self):
+        port = self.cleaned_data.get("smtp_port", "").strip()
+        if port and not port.isdigit():
+            raise forms.ValidationError("Port must be numeric.")
+        return port
+
+
 # ── One-on-One Meetings ──────────────────────────────────────────────
 
 

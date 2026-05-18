@@ -8,20 +8,11 @@ import logging
 import smtplib
 from email.utils import parseaddr
 
-from core.models import Config
+from core.services.config import get_config  # noqa: F401  (re-export)
 
 logger = logging.getLogger(__name__)
 
 SMTP_TIMEOUT = 30  # seconds — prevents indefinite hangs (#9)
-
-
-def get_config(key, manager_id, default=None):
-    """Read a single config value for a manager."""
-    try:
-        row = Config.objects.get(manager_id=manager_id, key=key)
-        return row.value or default
-    except Config.DoesNotExist:
-        return default
 
 
 def get_smtp_settings(manager_id):

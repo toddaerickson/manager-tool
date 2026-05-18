@@ -14,7 +14,12 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("DJANGO_SECRET_KEY", "test-only-not-secret")
 os.environ.setdefault("MANAGER_TOOL_ENV", "dev")
 os.environ.setdefault("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
-os.environ.setdefault("CONFIG_ENCRYPTION_KEY", "")
+# Fixed, non-production Fernet key so the encryption helper round-trips
+# in unit tests. Real prod uses a value injected via Render env vars.
+os.environ.setdefault(
+    "CONFIG_ENCRYPTION_KEY",
+    "Wn1B-jL_-1uDuv6V4iH5b4n_NunIp1Vt7lkM2Yp9JEM=",
+)
 os.environ.setdefault("SENTRY_DSN", "")  # disable Sentry in tests
 
 from .settings import *  # noqa: E402, F401, F403
