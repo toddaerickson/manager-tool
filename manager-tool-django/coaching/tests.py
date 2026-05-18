@@ -5,6 +5,7 @@ import pytest
 from coaching.models import CoachSuggestion
 from coaching.services import (
     _generate_template_questions,
+    _get_client,
     _local_fallback,
     _sanitize_user_text,
     generate_rule_based_suggestion,
@@ -12,7 +13,7 @@ from coaching.services import (
     match_wisdom_to_text,
 )
 from core.models import (
-    ActionItem, Delegation, Event, JournalEntry, Manager, TeamMember,
+    ActionItem, Config, Delegation, Event, JournalEntry, Manager, TeamMember,
 )
 
 
@@ -98,6 +99,42 @@ class TestLocalFallback:
         result = _local_fallback("")
         # Empty notes should still produce generic questions
         assert result is not None
+
+
+@pytest.mark.django_db
+class TestGetClientEnvVarFallback:
+    """ANTHROPIC_API_KEY env var should provide a working client when
+    no per-manager DB key is configured (the Django settings page does
+    not yet expose an API key field)."""
+
+    def _mgr(self):
+        return Manager.objects.create(
+            username="coach_envvar", display_name="Env Var",
+            password_hash="x", email="coach_envvar@example.com",
+        )
+
+    def test_returns_none_when_no_key_anywhere(self, monkeypatch):
+        m = self._mgr()
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        assert _get_client(m.id) is None
+
+    def test_uses_env_var_when_db_empty(self, monkeypatch):
+        m = self._mgr()
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-env")
+        client = _get_client(m.id)
+        assert client is not None  # Anthropic client constructed
+        # Verify the key from env was used.
+        assert client.api_key == "sk-ant-test-env"
+
+    def test_db_key_wins_over_env_var(self, monkeypatch):
+        m = self._mgr()
+        Config.objects.create(
+            manager_id=m.id, key="anthropic_api_key", value="sk-ant-db-key",
+        )
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env-key")
+        client = _get_client(m.id)
+        assert client is not None
+        assert client.api_key == "sk-ant-db-key"
 
 
 @pytest.mark.django_db

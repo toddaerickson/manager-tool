@@ -26,6 +26,7 @@ urlpatterns = [
     path("todos/<int:todo_id>/delete/", core_views.todos_delete, name="todos-delete"),
     path("journal/", core_views.journal_list, name="journal"),
     path("journal/add/", core_views.journal_add, name="journal-add"),
+    path("journal/<int:entry_id>/coaching/", core_views.journal_coaching, name="journal-coaching"),
     path("journal/<int:entry_id>/edit/", core_views.journal_edit, name="journal-edit"),
     path("goals/", core_views.goals_list, name="goals"),
     path("goals/add/", core_views.goals_add, name="goals-add"),
