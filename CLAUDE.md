@@ -126,6 +126,7 @@ Indexes get the same treatment: in the migration AND in `schema_postgres.sql`'s 
 - Passwords use bcrypt; sensitive config values use Fernet encryption (fail-closed — refuses to write plaintext on init failure).
 - Server-side sessions in the `sessions` table (`session_token` cookie + `expires_at` + UA hash binding). Persistent rate-limited login via `login_attempts`.
 - `MANAGER_TOOL_ENV=prod` is required in production: it gates encryption-key auto-generation off and forces the SQLite fallback off when `DATABASE_URL` is set but Postgres is unreachable.
+- **Anthropic API key handling.** Never paste, echo, or log a real `ANTHROPIC_API_KEY` in chat, terminal output, commits, PRs, or tests — use placeholders like `sk-ant-test-...` when an assertion needs a value. If the key lives in a `.env` file, that file must be gitignored (`.env` and `.env.*` are already covered at repo root and `manager-tool-django/`). The Django coaching client (`coaching/services.py:_get_client`) reads a per-manager DB key first and falls back to the env var.
 
 ### Recurring events (PR 4)
 - `events.recurrence_rule`, `events.parent_event_id` (FK with `ON DELETE SET NULL`), `events.recurrence_warned_at`.

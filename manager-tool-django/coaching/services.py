@@ -327,10 +327,15 @@ RULES:
 # ---------------------------------------------------------------------------
 
 def _get_client(manager_id):
-    """Get an Anthropic client using this manager's stored API key."""
+    """Get an Anthropic client. Per-manager DB key wins; falls back to
+    the ANTHROPIC_API_KEY env var so the platform can ship with a
+    working default (the Django settings page does not yet expose a
+    per-manager API-key field)."""
     if Anthropic is None:
         return None
-    api_key = _get_config("anthropic_api_key", manager_id)
+    api_key = _get_config("anthropic_api_key", manager_id) or os.environ.get(
+        "ANTHROPIC_API_KEY"
+    )
     if not api_key:
         return None
     return Anthropic(api_key=api_key)
