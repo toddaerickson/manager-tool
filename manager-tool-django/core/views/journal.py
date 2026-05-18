@@ -3,6 +3,7 @@
 from datetime import date
 
 from django.contrib.auth.decorators import login_required
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
@@ -138,14 +139,15 @@ def journal_add(request):
             daemon=True,
         )
         t.start()
-    # Return refreshed form + history via OOB.
+    # Return a fresh empty form + refreshed history via OOB. The form
+    # always resets after save so the user gets a clean slate; subsequent
+    # submits create new entries. In-place editing is available via the
+    # Edit link on each entry in the Recent entries list.
     today_iso = date.today().isoformat()
-    new_form = JournalEntryForm(instance=entry)
-    new_form.initial["entry_date"] = date.fromisoformat(entry.entry_date)
-    if entry.mood is not None:
-        new_form.initial["mood"] = str(entry.mood)
-    if entry.energy is not None:
-        new_form.initial["energy"] = str(entry.energy)
+    new_form = JournalEntryForm(initial={
+        "entry_date": date.today(),
+        "entry_type": "daily",
+    })
     entries = (
         JournalEntry.objects.for_manager(manager.id)
         .order_by("-entry_date", "-created_at")[:30]
@@ -154,10 +156,38 @@ def journal_add(request):
         "form": new_form,
         "entries": entries,
         "today_iso": today_iso,
-        "existing_id": entry.id,
+        "existing_id": None,
+        "just_saved_id": entry.id,
         "streak": _journal_streak(manager.id, today_iso),
         "mood_emoji": _MOOD_EMOJI,
         "energy_emoji": _ENERGY_EMOJI,
+    })
+
+
+@login_required
+def journal_coaching(request, entry_id: int):
+    """HTMX polling endpoint: returns the coaching response partial
+    once the background generation has populated it, or a pending
+    placeholder that triggers itself again every 2 seconds.
+
+    Polling stops automatically when the swapped-in fragment lacks
+    hx-trigger (the 'ready' partial)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    entry = (
+        JournalEntry.objects.for_manager(manager.id)
+        .filter(pk=entry_id)
+        .first()
+    )
+    if not entry:
+        return HttpResponse(status=404)
+    if entry.coaching_response:
+        return render(request, "_partials/journal_coaching_ready.html", {
+            "coaching_response": entry.coaching_response,
+        })
+    return render(request, "_partials/journal_coaching_pending.html", {
+        "entry": entry,
     })
 
 

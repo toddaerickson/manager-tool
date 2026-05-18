@@ -34,6 +34,7 @@ from core.views.todos import (  # noqa: F401
 )
 from core.views.journal import (  # noqa: F401
     journal_add,
+    journal_coaching,
     journal_edit,
     journal_list,
 )

@@ -2189,6 +2189,165 @@ class TestJournalEdit:
 
 
 @pytest.mark.django_db
+class TestJournalAddFormReset:
+    """After save, the returned form must be empty (no existing_id, no
+    pre-filled content) so the next submit creates a fresh entry, and
+    the just-saved entry must include the coaching-polling placeholder."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_jreset", display_name="Todd",
+            password_hash="x", email="todd_jreset@example.com",
+        )
+        self._login_as(client, "todd_jreset@example.com")
+        return m
+
+    def test_save_returns_empty_form(self, client):
+        self._setup(client)
+        resp = client.post("/journal/add/", {
+            "entry_date": "2026-05-09",
+            "entry_type": "daily",
+            "content": "Some private thought about delegation",
+        })
+        assert resp.status_code == 200
+        # Form's textarea should not echo the just-saved content.
+        body = resp.content.decode()
+        form_start = body.find('id="journal-form"')
+        form_end = body.find("</form>", form_start)
+        form_html = body[form_start:form_end]
+        assert "Some private thought about delegation" not in form_html
+        # No existing_id hidden input means subsequent submits create new.
+        assert 'name="existing_id"' not in form_html
+        # Button should say "Save entry", not "Update entry".
+        assert "Save entry" in form_html
+        assert "Update entry" not in form_html
+
+    def test_save_resets_even_when_updating_existing(self, client):
+        m = self._setup(client)
+        entry = JournalEntry.objects.create(
+            entry_date="2026-05-09", entry_type="daily",
+            content="Original", manager_id=m.id,
+        )
+        resp = client.post("/journal/add/", {
+            "existing_id": str(entry.id),
+            "entry_date": "2026-05-09",
+            "entry_type": "daily",
+            "content": "Revised content",
+        })
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        form_start = body.find('id="journal-form"')
+        form_end = body.find("</form>", form_start)
+        form_html = body[form_start:form_end]
+        assert "Revised content" not in form_html
+        assert 'name="existing_id"' not in form_html
+
+    def test_save_includes_coaching_polling_placeholder(self, client):
+        self._setup(client)
+        resp = client.post("/journal/add/", {
+            "entry_date": "2026-05-09",
+            "entry_type": "daily",
+            "content": "Something to coach me on",
+        })
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        entry = JournalEntry.objects.first()
+        # The polling placeholder targets the just-saved entry.
+        assert f"/journal/{entry.id}/coaching/" in body
+        assert "Generating coaching response" in body
+
+    def test_save_with_blank_content_no_polling_placeholder(self, client):
+        self._setup(client)
+        resp = client.post("/journal/add/", {
+            "entry_date": "2026-05-09",
+            "entry_type": "daily",
+            "content": "",
+            "mood": "3",
+        })
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        # No content => no coaching generation kicked off => no placeholder.
+        assert "Generating coaching response" not in body
+
+
+@pytest.mark.django_db
+class TestJournalCoaching:
+    """GET /journal/<id>/coaching/ — polling endpoint that returns
+    pending placeholder or ready response depending on entry state."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_jcoach", display_name="Todd",
+            password_hash="x", email="todd_jcoach@example.com",
+        )
+        self._login_as(client, "todd_jcoach@example.com")
+        return m
+
+    def test_pending_when_coaching_response_empty(self, client):
+        m = self._setup(client)
+        entry = JournalEntry.objects.create(
+            entry_date="2026-05-09", entry_type="daily",
+            content="Notes", manager_id=m.id,
+        )
+        resp = client.get(f"/journal/{entry.id}/coaching/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Generating coaching response" in body
+        assert 'hx-trigger="every 2s"' in body
+        # Must not include the ready response.
+        assert "Coaching response</summary>" not in body
+
+    def test_ready_when_coaching_response_populated(self, client):
+        m = self._setup(client)
+        entry = JournalEntry.objects.create(
+            entry_date="2026-05-09", entry_type="daily",
+            content="Notes", manager_id=m.id,
+            coaching_response="Try asking what success looks like.",
+        )
+        resp = client.get(f"/journal/{entry.id}/coaching/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Try asking what success looks like." in body
+        # No hx-trigger on the ready partial => polling stops.
+        assert "hx-trigger" not in body
+
+    def test_cross_tenant_returns_404(self, client):
+        self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_jcoach", display_name="Other",
+            password_hash="x", email="other_jcoach@example.com",
+        )
+        other_entry = JournalEntry.objects.create(
+            entry_date="2026-05-09", entry_type="daily",
+            content="Secret", manager_id=m2.id,
+            coaching_response="Secret coaching",
+        )
+        resp = client.get(f"/journal/{other_entry.id}/coaching/")
+        assert resp.status_code == 404
+
+    def test_missing_entry_returns_404(self, client):
+        self._setup(client)
+        resp = client.get("/journal/99999/coaching/")
+        assert resp.status_code == 404
+
+
+@pytest.mark.django_db
 class TestJournalStreak:
     """Streak calculation in journal_list view."""
 
