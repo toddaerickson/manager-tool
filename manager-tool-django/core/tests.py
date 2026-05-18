@@ -3877,3 +3877,295 @@ class TestOneOnOneSessionScoping:
         assert m2_rows.first().team_member.name == "M2 report"
         assert not m1_rows.filter(team_member__name="M2 report").exists()
         assert not m2_rows.filter(team_member__name="M1 report").exists()
+
+
+# ============================================================
+# Phase 6 — Settings: encryption, config CRUD, settings page
+# ============================================================
+
+
+class TestEncryption:
+    """Fernet round-trip and prefix handling for sensitive config."""
+
+    def test_round_trip(self):
+        from core.services.encryption import encrypt_value, decrypt_value
+        plain = "sk-ant-test-roundtrip-value"
+        encrypted = encrypt_value(plain)
+        assert encrypted.startswith("enc:")
+        assert plain not in encrypted
+        assert decrypt_value(encrypted) == plain
+
+    def test_empty_string_passes_through(self):
+        from core.services.encryption import encrypt_value, decrypt_value
+        assert encrypt_value("") == ""
+        assert decrypt_value("") == ""
+        assert encrypt_value(None) is None
+
+    def test_plaintext_decrypt_returns_unchanged(self):
+        # Legacy / migration path: values without 'enc:' prefix should
+        # return as-is so we don't break existing plaintext Config rows.
+        from core.services.encryption import decrypt_value
+        assert decrypt_value("plaintext-value") == "plaintext-value"
+
+    def test_decrypt_garbage_raises(self):
+        from core.services.encryption import (
+            EncryptionUnavailableError, decrypt_value,
+        )
+        with pytest.raises(EncryptionUnavailableError):
+            decrypt_value("enc:not-real-ciphertext")
+
+    def test_is_encrypted(self):
+        from core.services.encryption import encrypt_value, is_encrypted
+        assert is_encrypted(encrypt_value("hello"))
+        assert not is_encrypted("plain")
+        assert not is_encrypted("")
+        assert not is_encrypted(None)
+
+
+@pytest.mark.django_db
+class TestConfigService:
+    """get_config / set_config / get_all_config with encryption."""
+
+    def _mgr(self):
+        return Manager.objects.create(
+            username="cfg_mgr", display_name="Cfg",
+            password_hash="x", email="cfg@example.com",
+        )
+
+    def test_set_then_get_nonsensitive(self):
+        from core.services.config import get_config, set_config
+        m = self._mgr()
+        set_config("manager_name", m.id, "Alice")
+        assert get_config("manager_name", m.id) == "Alice"
+
+    def test_set_then_get_sensitive_round_trips(self):
+        from core.models import Config
+        from core.services.config import get_config, set_config
+        m = self._mgr()
+        set_config("anthropic_api_key", m.id, "sk-ant-test-secret")
+        # Retrieved value is decrypted plaintext.
+        assert get_config("anthropic_api_key", m.id) == "sk-ant-test-secret"
+        # Stored value on disk is encrypted (ciphertext, not plain).
+        row = Config.objects.get(manager_id=m.id, key="anthropic_api_key")
+        assert row.value.startswith("enc:")
+        assert "sk-ant-test-secret" not in row.value
+
+    def test_set_empty_clears_value(self):
+        from core.services.config import get_config, set_config
+        m = self._mgr()
+        set_config("smtp_user", m.id, "old@example.com")
+        set_config("smtp_user", m.id, "")
+        assert get_config("smtp_user", m.id, default="fallback") == "fallback"
+
+    def test_get_missing_returns_default(self):
+        from core.services.config import get_config
+        m = self._mgr()
+        assert get_config("nonexistent", m.id) is None
+        assert get_config("nonexistent", m.id, default="x") == "x"
+
+    def test_get_all_masks_sensitive(self):
+        from core.services.config import get_all_config, set_config
+        m = self._mgr()
+        set_config("manager_name", m.id, "Alice")
+        set_config("anthropic_api_key", m.id, "sk-ant-test-mask")
+        set_config("smtp_password", m.id, "app-pass-test")
+        all_cfg = get_all_config(m.id)
+        assert all_cfg["manager_name"] == "Alice"
+        assert all_cfg["anthropic_api_key"] == "********"
+        assert all_cfg["smtp_password"] == "********"
+
+    def test_upsert_overwrites(self):
+        from core.services.config import get_config, set_config
+        m = self._mgr()
+        set_config("manager_name", m.id, "First")
+        set_config("manager_name", m.id, "Second")
+        assert get_config("manager_name", m.id) == "Second"
+
+    def test_cross_tenant_isolation(self):
+        from core.services.config import get_config, set_config
+        m1 = self._mgr()
+        m2 = Manager.objects.create(
+            username="cfg_m2", display_name="Cfg2",
+            password_hash="x", email="cfg2@example.com",
+        )
+        set_config("anthropic_api_key", m1.id, "sk-ant-m1")
+        set_config("anthropic_api_key", m2.id, "sk-ant-m2")
+        assert get_config("anthropic_api_key", m1.id) == "sk-ant-m1"
+        assert get_config("anthropic_api_key", m2.id) == "sk-ant-m2"
+        # Each manager only sees their own keys.
+        from core.services.config import get_all_config
+        assert "anthropic_api_key" in get_all_config(m1.id)
+
+
+@pytest.mark.django_db
+class TestSettingsPage:
+    """GET/POST /settings/ — Manager profile + Config table fields."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_s", display_name="Todd",
+            password_hash="x", email="todd_s@example.com",
+        )
+        self._login_as(client, "todd_s@example.com")
+        return m
+
+    def test_get_renders_form(self, client):
+        self._setup(client)
+        resp = client.get("/settings/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Anthropic API Key" in body
+        assert "Email &amp; SMTP" in body or "Email & SMTP" in body
+        assert "Send weekly digest" in body
+
+    def test_get_prefills_non_sensitive_config(self, client):
+        from core.services.config import set_config
+        m = self._setup(client)
+        set_config("smtp_server", m.id, "smtp.example.com")
+        set_config("manager_email", m.id, "todd@example.com")
+        resp = client.get("/settings/")
+        body = resp.content.decode()
+        assert "smtp.example.com" in body
+        assert "todd@example.com" in body
+
+    def test_get_never_echoes_anthropic_key(self, client):
+        from core.services.config import set_config
+        m = self._setup(client)
+        set_config("anthropic_api_key", m.id, "sk-ant-test-secret-marker")
+        resp = client.get("/settings/")
+        body = resp.content.decode()
+        assert "sk-ant-test-secret-marker" not in body
+
+    def test_post_saves_profile_and_config(self, client):
+        from core.services.config import get_config
+        m = self._setup(client)
+        resp = client.post("/settings/", {
+            "display_name": "Todd Erickson",
+            "timezone": "America/New_York",
+            "anthropic_api_key": "sk-ant-test-new-key",
+            "manager_name": "Todd",
+            "manager_email": "todd@example.com",
+            "smtp_server": "smtp.gmail.com",
+            "smtp_port": "587",
+            "smtp_user": "todd@gmail.com",
+            "smtp_password": "app-pass-test-12345",
+        })
+        assert resp.status_code == 302
+        assert resp.url == "/settings/"
+        m.refresh_from_db()
+        assert m.display_name == "Todd Erickson"
+        assert get_config("anthropic_api_key", m.id) == "sk-ant-test-new-key"
+        assert get_config("smtp_server", m.id) == "smtp.gmail.com"
+        assert get_config("smtp_password", m.id) == "app-pass-test-12345"
+
+    def test_post_blank_anthropic_key_preserves_existing(self, client):
+        from core.services.config import get_config, set_config
+        m = self._setup(client)
+        set_config("anthropic_api_key", m.id, "sk-ant-test-original")
+        client.post("/settings/", {
+            "display_name": "Todd",
+            "timezone": "UTC",
+            "anthropic_api_key": "",  # blank — should keep existing
+            "manager_name": "",
+            "manager_email": "",
+            "smtp_server": "",
+            "smtp_port": "",
+            "smtp_user": "",
+            "smtp_password": "",
+        })
+        assert get_config("anthropic_api_key", m.id) == "sk-ant-test-original"
+
+    def test_post_blank_smtp_password_preserves_existing(self, client):
+        from core.services.config import get_config, set_config
+        m = self._setup(client)
+        set_config("smtp_password", m.id, "original-pass")
+        client.post("/settings/", {
+            "display_name": "Todd",
+            "timezone": "UTC",
+            "anthropic_api_key": "",
+            "manager_name": "",
+            "manager_email": "",
+            "smtp_server": "",
+            "smtp_port": "",
+            "smtp_user": "",
+            "smtp_password": "",
+        })
+        assert get_config("smtp_password", m.id) == "original-pass"
+
+    def test_post_invalid_port_rejected(self, client):
+        self._setup(client)
+        resp = client.post("/settings/", {
+            "display_name": "Todd",
+            "timezone": "UTC",
+            "anthropic_api_key": "",
+            "manager_name": "",
+            "manager_email": "",
+            "smtp_server": "",
+            "smtp_port": "not-a-number",
+            "smtp_user": "",
+            "smtp_password": "",
+        })
+        assert resp.status_code == 200  # re-renders form with errors
+        assert b"Port must be numeric" in resp.content
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger_s@example.com")
+        assert client.get("/settings/").status_code == 403
+
+
+@pytest.mark.django_db
+class TestSettingsSendDigest:
+    """POST /settings/send-digest/ — on-demand weekly-digest sender."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_sd", display_name="Todd",
+            password_hash="x", email="todd_sd@example.com",
+        )
+        self._login_as(client, "todd_sd@example.com")
+        return m
+
+    def test_get_not_allowed(self, client):
+        self._setup(client)
+        assert client.get("/settings/send-digest/").status_code == 405
+
+    def test_post_calls_send_weekly_digest(self, client, mocker):
+        m = self._setup(client)
+        mocked = mocker.patch(
+            "core.views.settings_views.send_weekly_digest",
+            return_value=(True, "Digest sent."),
+        )
+        resp = client.post("/settings/send-digest/")
+        assert resp.status_code == 302
+        assert resp.url == "/settings/"
+        mocked.assert_called_once_with(m.id)
+
+    def test_post_propagates_failure_message(self, client, mocker):
+        self._setup(client)
+        mocker.patch(
+            "core.views.settings_views.send_weekly_digest",
+            return_value=(False, "SMTP not configured for this manager."),
+        )
+        resp = client.post("/settings/send-digest/", follow=True)
+        assert resp.status_code == 200
+        assert b"SMTP not configured" in resp.content
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger_sd@example.com")
+        assert client.post("/settings/send-digest/").status_code == 403

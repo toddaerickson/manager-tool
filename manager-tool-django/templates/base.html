@@ -95,6 +95,19 @@
          onclick="document.getElementById('sidebar').classList.add('-translate-x-full'); this.classList.add('hidden')"></div>
 
     <main class="flex-1 px-4 py-6 md:px-8 pt-14 md:pt-6">
+      {% if messages %}
+        <div class="max-w-3xl mb-4 space-y-2">
+          {% for m in messages %}
+            <div class="rounded-md px-4 py-2 text-sm border
+              {% if m.tags == 'success' %}bg-emerald-50 border-emerald-200 text-emerald-800
+              {% elif m.tags == 'error' %}bg-red-50 border-red-200 text-red-800
+              {% elif m.tags == 'warning' %}bg-amber-50 border-amber-200 text-amber-800
+              {% else %}bg-slate-50 border-slate-200 text-slate-800{% endif %}">
+              {{ m }}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
       {% block content %}{% endblock %}
     </main>
   </div>

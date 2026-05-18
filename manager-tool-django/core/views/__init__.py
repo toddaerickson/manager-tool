@@ -87,6 +87,7 @@ from core.views.feedback import (  # noqa: F401
 )
 from core.views.settings_views import (  # noqa: F401
     settings_page,
+    settings_send_digest,
 )
 from core.views.reference import (  # noqa: F401
     analytics,
