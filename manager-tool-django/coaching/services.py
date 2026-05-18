@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from django.utils import timezone
 
 from core.models import (
-    ActionItem, Decision, Delegation, Event, JournalEntry,
+    ActionItem, Decision, Delegation, Event, Goal, JournalEntry,
     TeamMember,
 )
 from core.services.email import get_config as _get_config
@@ -318,6 +318,28 @@ RULES:
 - Vary the type: sometimes a meeting, sometimes journaling, sometimes feedback,
   sometimes a delegation check-in, sometimes celebration.
 - End with a brief reason WHY this matters (reference a management principle).
+
+""" + _PROMPT_INJECTION_GUARD
+
+
+WEEKLY_PLAN_SYSTEM = """You are an expert management coach producing this week's
+action plan for a manager. They will read this in an email on Monday morning.
+
+OUTPUT FORMAT (strict — the email parser depends on it):
+Return ONLY a numbered list of 3-5 actions, one per line, in this exact form:
+
+1. **Action title** — Specific rationale referencing their data and a principle from the management corpus.
+2. **Action title** — ...
+
+RULES:
+- 3 to 5 actions total. Prioritize highest-leverage first.
+- Reference specific people, dates, journal themes, overdue items from the
+  DATA section. Generic advice is worthless.
+- Each rationale cites a book/principle: "Grove: detect problems at lowest-value
+  stage", "Horstman: weekly 1-on-1s are the single most important behavior",
+  etc.
+- No preamble, no closing remarks, no markdown headers — just the numbered list.
+- Each line under ~250 characters so the email reads cleanly.
 
 """ + _PROMPT_INJECTION_GUARD
 
@@ -750,6 +772,181 @@ def generate_ai_suggestion(manager_id):
     except Exception as e:
         logger.exception("Daily coach AI suggestion failed")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Weekly Plan — forward-looking 3-5 actions for the upcoming week
+# ---------------------------------------------------------------------------
+
+
+def _weekly_plan_user_message(manager_id):
+    """Build the user-message body for the weekly-plan prompt: trusted
+    metadata outside <user_input>, user-controlled text inside."""
+    today = date.today()
+    today_iso = today.isoformat()
+    week_ago_iso = (today - timedelta(days=7)).isoformat()
+
+    trusted_parts = []
+    user_parts = []
+
+    streak = _journal_streak(manager_id, today_iso)
+    trusted_parts.append(f"JOURNAL STREAK: {streak} days")
+
+    members = TeamMember.objects.active_for_manager(manager_id)
+    trusted_parts.append(f"TEAM SIZE: {members.count()} direct reports")
+
+    recent_journal = (
+        JournalEntry.objects.for_manager(manager_id)
+        .filter(entry_type="daily", entry_date__gte=week_ago_iso)
+        .order_by("-entry_date")[:7]
+    )
+    if recent_journal:
+        user_parts.append("RECENT JOURNAL ENTRIES (last 7 days):")
+        for j in recent_journal:
+            mood_label = {1: "very low", 2: "low", 3: "neutral",
+                          4: "good", 5: "great"}.get(j.mood, "—")
+            content = _sanitize_user_text((j.content or "")[:300])
+            user_parts.append(
+                f"  {j.entry_date} (mood: {mood_label}): {content}"
+            )
+
+    overdue_actions = (
+        ActionItem.objects.for_manager(manager_id)
+        .filter(status="pending", due_date__lt=today_iso)
+        .order_by("due_date")[:10]
+    )
+    if overdue_actions:
+        user_parts.append("OVERDUE ACTION ITEMS:")
+        for a in overdue_actions:
+            desc = _sanitize_user_text((a.description or "")[:120])
+            user_parts.append(f"  due {a.due_date}: {desc}")
+
+    overdue_dels = (
+        Delegation.objects.for_manager(manager_id)
+        .filter(status="active", check_in_date__lt=today_iso)
+        .select_related("team_member")[:5]
+    )
+    if overdue_dels:
+        user_parts.append("OVERDUE DELEGATIONS:")
+        for d in overdue_dels:
+            name = _sanitize_user_text(
+                d.team_member.name if d.team_member else "?"
+            )
+            task = _sanitize_user_text((d.task or "")[:100])
+            user_parts.append(
+                f"  {name} (check-in was {d.check_in_date}): {task}"
+            )
+
+    decisions_due = (
+        Decision.objects.for_manager(manager_id)
+        .filter(status="active", review_date__lte=today_iso)[:5]
+    )
+    if decisions_due:
+        user_parts.append("DECISIONS DUE FOR REVIEW:")
+        for d in decisions_due:
+            title = _sanitize_user_text((d.title or "")[:100])
+            user_parts.append(f"  review by {d.review_date}: {title}")
+
+    active_goals = (
+        Goal.objects.for_manager(manager_id)
+        .filter(status="active")[:10]
+    )
+    if active_goals:
+        user_parts.append("ACTIVE GOALS:")
+        for g in active_goals:
+            desc = _sanitize_user_text((g.description or "")[:120])
+            user_parts.append(f"  Q{g.quarter}: {desc}")
+
+    # Meeting cadence per direct
+    cadence_lines = []
+    for m in members[:8]:
+        last_event = (
+            Event.objects.for_manager(manager_id)
+            .filter(team_member=m, status__in=["completed", "scheduled"])
+            .order_by("-scheduled_date")
+            .first()
+        )
+        if last_event and last_event.scheduled_date:
+            try:
+                days = (today - date.fromisoformat(last_event.scheduled_date)).days
+                label = f"last met {days} days ago"
+            except ValueError:
+                label = "last met date unknown"
+        else:
+            label = "never met"
+        cadence_lines.append(
+            f"  {_sanitize_user_text(m.name)}: {label}"
+        )
+    if cadence_lines:
+        user_parts.append("MEETING CADENCE:")
+        user_parts.extend(cadence_lines)
+
+    parts = list(trusted_parts)
+    if user_parts:
+        parts.append(
+            _USER_INPUT_OPEN + "\n"
+            + "\n".join(user_parts) + "\n"
+            + _USER_INPUT_CLOSE
+        )
+    return "\n".join(parts)
+
+
+def generate_weekly_plan(manager_id):
+    """Return Claude's 3-5 action plan for the week, as raw model text.
+    None when no API key is configured (digest will skip the section)."""
+    client = _get_client(manager_id)
+    if not client:
+        return None
+
+    user_message = _weekly_plan_user_message(manager_id)
+
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=600,
+            system=WEEKLY_PLAN_SYSTEM,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        text = message.content[0].text if message.content else ""
+        return text.strip() or None
+    except Exception:
+        logger.exception("Weekly plan AI generation failed")
+        return None
+
+
+_PLAN_LINE_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
+_PLAN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+
+
+def render_weekly_plan_html(text):
+    """Convert Claude's numbered-list output into safe HTML for the
+    weekly digest email. The model is asked to emit `1. **Title** —
+    rationale` per line; this parser is defensive (escapes everything,
+    only re-introduces a fixed set of tags) so a prompt-injected line
+    can't smuggle markup through.
+
+    Returns an HTML `<ol>` string, or an `<pre>`-escaped fallback if
+    the output didn't match the expected format."""
+    from html import escape
+    if not text or not text.strip():
+        return ""
+    items = []
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+        m = _PLAN_LINE_RE.match(line)
+        if not m:
+            continue
+        body = m.group(2).strip()
+        escaped = escape(body)
+        # After escaping, the only re-introduced tag is <strong> from
+        # the **bold** markers the prompt explicitly asks for.
+        escaped = _PLAN_BOLD_RE.sub(r"<strong>\1</strong>", escaped)
+        items.append(f"<li>{escaped}</li>")
+    if not items:
+        return f"<pre style='white-space:pre-wrap'>{escape(text)}</pre>"
+    return "<ol>" + "".join(items) + "</ol>"
 
 
 def get_daily_suggestion(manager_id):

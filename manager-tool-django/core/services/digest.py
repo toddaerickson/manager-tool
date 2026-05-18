@@ -94,6 +94,22 @@ def generate_weekly_digest(manager_id):
         f"{streak} day{'s' if streak != 1 else ''}</p>"
     )
 
+    # AI-generated forward-looking plan (top section). Silently omitted
+    # when no Anthropic API key is configured \u2014 backwards-looking
+    # sections below still ship.
+    try:
+        from coaching.services import (
+            generate_weekly_plan, render_weekly_plan_html,
+        )
+        plan_text = generate_weekly_plan(manager_id)
+        if plan_text:
+            plan_html = render_weekly_plan_html(plan_text)
+            if plan_html:
+                sections.append("<h3>This week's plan</h3>")
+                sections.append(plan_html)
+    except Exception:
+        logger.exception("Weekly plan generation failed; digest will skip section")
+
     # Upcoming events
     if upcoming:
         sections.append(f"<h3>Upcoming Events ({upcoming.count()})</h3><ul>")
