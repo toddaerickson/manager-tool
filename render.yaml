@@ -39,6 +39,8 @@ services:
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_SECRET
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
 
       # Static config — committed values:
       - key: MANAGER_TOOL_ENV
