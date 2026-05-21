@@ -56,6 +56,11 @@ A private management coaching journal and team management platform that makes yo
 - **Running 1:1 Notes**: Persistent per-member notes (general, meeting prep, observation, follow-up, praise) that carry forward between meetings — most recent notes surface automatically during meeting prep
 - Career Development: conversation tracker, skills inventory with proficiency levels, development plans with milestones
 
+### Meetings (10/10/10 recorder)
+- Structured 1:1 recorder with three sections: Their Agenda → Your Agenda → Coaching/Their Future. Autosaves as you type (HTMX).
+- Side panel surfaces the direct's context: recent meetings, open delegations, active goals, recent feedback, carried-over action items.
+- **Prep mode**: when Your Agenda is empty, one click pulls the direct's open delegations + action items into the box as a checklist — non-destructive, never overwrites.
+
 ### Delegation Tracker
 - Track what you've delegated, to whom, with expected outcomes
 - Three autonomy levels: Directed (step-by-step) → Guided (milestone check-ins) → Autonomous (deliver the result)
@@ -106,6 +111,7 @@ Schedule Event has an always-visible Repeats selector. Pick None / Weekly / Mont
 
 ### Email & Calendar
 - Weekly email digest: nudges, upcoming events, overdue actions, streak status (HTML + plain text)
+- **"This week's plan"** at the top of the Monday digest: an AI-generated, prioritized 3–5 action list grounded in your real data and the management corpus
 - iCalendar (.ics) generation for meeting invites via SMTP
 - "Send Weekly Digest Now" button in Settings
 
@@ -250,6 +256,9 @@ Deployed on **Render** (`render.yaml`), Postgres on **Neon**.
 - Start: `gunicorn mt.wsgi:application --bind 0.0.0.0:$PORT`
 - Env vars: `DATABASE_URL`, `DJANGO_SECRET_KEY`, `CONFIG_ENCRYPTION_KEY`, `MANAGER_TOOL_ENV=prod`, Google OAuth secrets, `SENTRY_DSN`
 - A Render Cron service runs `python manage.py send_weekly_digests`
+- Build runs migrations automatically, so merging to `main` applies pending Django migrations on deploy
+- **Confirm a deploy:** `GET /health/` returns `{"status": "ok", "git_sha": ...}` (the live commit, from Render's `RENDER_GIT_COMMIT`)
+- CI (`.github/workflows/`): Django pytest (SQLite) + PG smoke against `postgres:16`, plus a per-PR Neon-branch smoke that auto-creates/deletes a `preview/pr-<n>` branch
 
 ## Dependencies
 

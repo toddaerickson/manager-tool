@@ -367,12 +367,14 @@ If something is broken: point DNS back to the Streamlit URL. Both apps target th
 
 ## Phase 8 — Decommission (1 day, a week later)
 
+**Mostly complete (PR #93/#94, 2026-05-21).** See `MIGRATION_STATUS.md` for live status and the prod-migration runbook.
+
 After a week of running fine on Django:
-- Archive the Streamlit code (`git mv web_app.py legacy/`, etc.).
-- Delete `gui.py`, `manager_tool.py` (audit L5 finally honored).
-- Drop the obsolete tables: `sessions`, `login_attempts` (django-allauth replaced them). One Django migration.
-- Remove the Neon dev branch.
-- Update README.
+- [x] Archive the Streamlit code (`git mv web_app.py legacy/`, etc.). Note: `schema_postgres.sql`, `scripts/migrate_p2_config_to_id_pk.sql`, and `365_Great_Management_Ideas.md` stay at the repo root — the Django PG smoke and coaching engine still read them.
+- [x] Delete `gui.py`, `manager_tool.py` (audit L5 finally honored).
+- [x] Drop the obsolete tables `sessions`, `login_attempts` via one Django migration (`0006`) — merged; verify it applied to prod.
+- [ ] Remove the Neon dev branch.
+- [x] Update README.
 
 ---
 
