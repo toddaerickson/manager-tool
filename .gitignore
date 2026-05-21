@@ -12,5 +12,8 @@ ics_exports/
 *.pdf
 .encryption_key
 backups/
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+.claude/settings.local.json
 *.code-workspace
