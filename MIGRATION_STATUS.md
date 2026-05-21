@@ -93,6 +93,29 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 
 `schema_postgres.sql`, `scripts/migrate_p2_config_to_id_pk.sql`, and `365_Great_Management_Ideas.md` stay at the repo root: the Django PG smoke test bootstraps the schema from the first two (`smoke_pg_django.py` mirrors the cutover bootstrap), and the coaching engine reads the wisdom library from the last (`coaching/services.py:107`). The other Streamlit `scripts/migrate_p1_*.sql` and `fix_sequences.sql` are pure history and live in `legacy/scripts/`.
 
+### Runbook — apply migration 0006 to prod Neon
+
+`0006` drops `sessions` + `login_attempts`. It is idempotent (`DROP TABLE IF EXISTS`) but irreversible — the reverse op is a no-op, so the backup is the only undo. Back up first.
+
+1. **Back up prod (Neon branch snapshot).** Neon Console → project → Branches → Create branch → source = the production (Default) branch → name `backup-pre-0006`. Copy-on-write, instant. Optional file dump as well:
+   ```bash
+   pg_dump "$PROD_DATABASE_URL" -Fc -f backup_pre_0006.dump
+   pg_restore --list backup_pre_0006.dump   # confirm it's readable
+   ```
+   If Neon is out of branch slots, delete the orphaned `preview/pr-*` and `smoke-*` CI branches first — they hold no real data and auto-expire. Never delete the Default/primary branch or the dev branch.
+2. **Apply.** `render.yaml`'s build runs `manage.py migrate` on every deploy, so merging this work to `main` applies `0006` automatically. To do it deliberately instead, use Render → web service → Shell (prod `DATABASE_URL` is already in the env):
+   ```bash
+   python manage.py migrate core 0006 --plan   # preview
+   python manage.py migrate                     # apply
+   ```
+3. **Verify.** In the Neon SQL editor or `psql "$PROD_DATABASE_URL"`:
+   ```sql
+   \dt sessions          -- expect "Did not find any relation"
+   \dt login_attempts    -- expect "Did not find any relation"
+   ```
+   Then load the app and confirm login + a read/write still work (nothing in the Django app references those tables).
+4. **Rollback (only if broken).** Point Render's `DATABASE_URL` at the `backup-pre-0006` branch, or restore that branch over prod. No data lost — the snapshot predates the drop.
+
 ## Architecture deficits
 
 All closed:
