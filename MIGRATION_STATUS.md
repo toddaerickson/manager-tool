@@ -91,7 +91,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - [ ] **Run `manage.py migrate` against prod Neon** to apply `0006` (drops the orphaned tables in production) — backup first
 - [ ] Delete the Neon dev branch from the Neon console (manual — no API access from here)
 
-`schema_postgres.sql` and `365_Great_Management_Ideas.md` stay at the repo root: the Django PG smoke test bootstraps from the former, and the coaching engine reads the wisdom library from the latter (`coaching/services.py:107`).
+`schema_postgres.sql`, `scripts/migrate_p2_config_to_id_pk.sql`, and `365_Great_Management_Ideas.md` stay at the repo root: the Django PG smoke test bootstraps the schema from the first two (`smoke_pg_django.py` mirrors the cutover bootstrap), and the coaching engine reads the wisdom library from the last (`coaching/services.py:107`). The other Streamlit `scripts/migrate_p1_*.sql` and `fix_sequences.sql` are pure history and live in `legacy/scripts/`.
 
 ## Architecture deficits
 
