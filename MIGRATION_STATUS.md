@@ -2,18 +2,19 @@
 
 Snapshot of where the Streamlit → Django migration stands. Update this doc when phase boundaries move; re-merge to main so it stays the source of truth for "where are we right now."
 
-**Last updated:** 2026-05-11
+**Last updated:** 2026-05-21
 **Live Django app:** https://manager-tool-django.onrender.com
-**Plan:** `MIGRATION_PLAN.md` · **Gates:** `PHASE_GATES.md` · **Open design questions:** `manager-tool-django/ARCHITECTURE_DEFICITS.md`
+**Plan:** `MIGRATION_PLAN.md` · **Gates:** `PHASE_GATES.md` · **Open design questions:** `manager-tool-django/ARCHITECTURE_DEFICITS.md` · **Design system:** `manager-tool-django/DESIGN.md`
 
 ---
 
 ## TL;DR
 
-- **Phases 0–6 done.** Django app is feature-complete: all pages ported, coaching wired, crons running, analytics/history/resources live.
-- **Phase 7 in progress** — cutover prep. Data-validation diff script written (`scripts/cutover_diff.py`). Checklist below.
-- **Streamlit is FROZEN.** No new entries to `_MIGRATIONS` in `database.py`; no feature work on `web_app.py`.
-- **Render auto-deploys main.** `render.yaml` drives it; the build step runs `manage.py migrate`.
+- **Phases 0–7 done.** Django is the sole production app (cutover 2026-05-10). All pages ported, coaching wired, crons running.
+- **Phase 8 (decommission) mostly done.** Streamlit is archived to `legacy/`, the legacy CLI is deleted, the Streamlit CI jobs are gone, and migration `0006` (drops `sessions`+`login_attempts`) is merged. Remaining: verify `0006` applied to prod, then delete the Neon dev branch.
+- **Streamlit is RETIRED**, not just frozen — code lives in `legacy/` as a 30-day rollback option only; it is not deployed.
+- **Render auto-deploys main.** `render.yaml` drives it; the build step runs `manage.py migrate`, so merges to `main` apply pending migrations automatically.
+- **Verify a deploy** with `GET /health/` → `{status, git_sha}` (the live commit SHA).
 
 ## Phase progress
 
@@ -27,9 +28,11 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 | 5 — Page port | done | All sub-pages + dashboard + feedback + analytics/history/resources |
 | 6 — Background jobs | done | Calendar + coaching + digest cron + purge cron |
 | 7 — Cutover | **done** | Production live on Django as of 2026-05-10 |
-| 8 — Decommission | **in progress** | Streamlit archived to `legacy/`; `gui.py`/`manager_tool.py` deleted; Streamlit CI jobs removed; `0006` drops `sessions`+`login_attempts` (needs prod apply); Neon dev branch deletion pending |
+| 8 — Decommission | **mostly done** | Streamlit archived to `legacy/` (PR #93); `gui.py`/`manager_tool.py` deleted; Streamlit CI jobs removed; `0006` drops `sessions`+`login_attempts` (merged — verify it applied to prod); Neon dev branch deletion pending |
 
 ## Phase 7 — Cutover checklist
+
+**Completed 2026-05-10** — production traffic runs on Django. The operational steps below are kept as the historical runbook; any unchecked boxes were either done during the live cutover or superseded by the decommission (Phase 8).
 
 - [x] Django app is feature-complete vs Streamlit (all sidebar pages live)
 - [x] Send invite button on event detail page (D2 Option C)
@@ -73,13 +76,18 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 
 10/10/10 structured meeting recorder. Centerpiece of the Directs section.
 
-**Gaps / v2 items:**
-- **Prep mode**: auto-populate "Your Agenda" with open delegations/action items for the direct before the meeting starts
-- **Tags + FTS search** across meeting notes (Django ORM search or django-watson)
-- **Soft gate on "Their Agenda" first**: collapse "Your Agenda" by default to reinforce the MT direct-first principle
-- **Meeting duration tracking**: actual duration vs scheduled
-- **Deploy SHA in health endpoint**: `/verify-deploy` cannot confirm exact deployed version — add `git_sha` to the landing page or a `/health` JSON endpoint
-- **1:1 Notes clarification**: "1:1 Notes" (RunningNote) and "Meetings" (OneOnOneSession) coexist in the sidebar. Notes = async between-meeting jots; Meetings = structured session records. Consider renaming "1:1 Notes" to just "Notes" or adding tooltip text to clarify the distinction. Evaluate whether Notes should eventually fold into the Meetings workflow.
+### Shipped since cutover
+
+- **Meeting prep mode** (PR #94) — when a meeting's "Your Agenda" is empty, a one-click button pulls the direct's open delegations + carried-over action items into the box. Non-destructive; built server-side from the existing member context.
+- **`/health` deploy-SHA endpoint** (PR #94) — public JSON `{status, git_sha}` from `RENDER_GIT_COMMIT`, so the exact live commit is confirmable. Replaces the old `/verify-deploy` gap.
+- **"This week's plan" in the weekly digest** (PR #91) — AI-generated, prioritized 3–5 action list at the top of the Monday digest, grounded in real data + the management corpus.
+- **UI design system** (PR #94) — deliberate type + color identity (Fraunces/Public Sans, single teal `accent-*`, tightened radius) as cascading tokens in `base.html`. See `manager-tool-django/DESIGN.md`.
+
+**Remaining v2 gaps:**
+- **Soft gate on "Their Agenda" first**: collapse "Your Agenda" by default to reinforce the MT direct-first principle (pairs with prep mode).
+- **Tags + FTS search** across meeting notes (Django ORM search or django-watson).
+- **Meeting duration tracking**: actual duration vs scheduled.
+- **1:1 Notes clarification**: "1:1 Notes" (RunningNote) and "Meetings" (OneOnOneSession) coexist in the sidebar. Notes = async between-meeting jots; Meetings = structured session records. Consider renaming "1:1 Notes" to just "Notes" or adding tooltip text. Evaluate whether Notes should eventually fold into the Meetings workflow.
 
 ## Phase 8 — Decommission checklist
 
@@ -88,8 +96,10 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - [x] Streamlit CI jobs (`tests-sqlite`, `smoke-pg`) removed; Django jobs remain
 - [x] `sessions` + `login_attempts` models removed; `core/migrations/0006` drops the tables (`SeparateDatabaseAndState`, idempotent `DROP ... IF EXISTS`)
 - [x] README points contributors at the Django app
-- [ ] **Run `manage.py migrate` against prod Neon** to apply `0006` (drops the orphaned tables in production) — backup first
+- [ ] **Verify `0006` applied to prod.** It's merged, so the next Render deploy's `manage.py migrate` applies it automatically — confirm with `\dt sessions` / `\dt login_attempts` (both gone). Back up first (see runbook). 
 - [ ] Delete the Neon dev branch from the Neon console (manual — no API access from here)
+- [ ] Delete the orphaned `preview/pr-*` CI branches in Neon (one-time; the deterministic naming in `neon_workflow.yml` prevents new ones)
+- [ ] Delete the stale merged git branches `fix/event-dedupe` and `feat/event-time-dropdown` (GitHub UI)
 
 `schema_postgres.sql`, `scripts/migrate_p2_config_to_id_pk.sql`, and `365_Great_Management_Ideas.md` stay at the repo root: the Django PG smoke test bootstraps the schema from the first two (`smoke_pg_django.py` mirrors the cutover bootstrap), and the coaching engine reads the wisdom library from the last (`coaching/services.py:107`). The other Streamlit `scripts/migrate_p1_*.sql` and `fix_sequences.sql` are pure history and live in `legacy/scripts/`.
 

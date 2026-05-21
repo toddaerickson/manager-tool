@@ -84,12 +84,12 @@ The riskiest moment in the entire plan. **All five required:**
 
 ## Phase 8 done (Decommission complete)
 
-After **at least one full week** of running fine on Django:
-- [ ] Streamlit code moved to `legacy/` (not deleted — keep one rollback option in git for 30 days)
-- [ ] `sessions` and `login_attempts` tables dropped via Django migration that ran cleanly in prod (verified post-deploy with `\dt`)
+After **at least one full week** of running fine on Django (cutover was 2026-05-10):
+- [x] Streamlit code moved to `legacy/` (not deleted — keep one rollback option in git for 30 days) — PR #93
+- [~] `sessions` and `login_attempts` tables dropped via Django migration (`0006`) — merged; **verify it ran cleanly in prod with `\dt`** (applies on the next Render deploy)
 - [ ] Neon dev branch deleted from Neon console
-- [ ] README points new contributors at the Django app, not the Streamlit one
-- [ ] Audit L5 finally honored: `gui.py` and `manager_tool.py` deleted
+- [x] README points new contributors at the Django app, not the Streamlit one — PR #93
+- [x] Audit L5 finally honored: `gui.py` and `manager_tool.py` deleted — PR #93
 
 ---
 
