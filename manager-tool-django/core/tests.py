@@ -3746,6 +3746,39 @@ class TestOneOnOneSessions:
         assert resp.status_code == 200
         assert b"Review deck" in resp.content
 
+    def test_prep_mode_offered_when_agenda_empty(self, client):
+        """Prep mode: an empty Your Agenda offers a one-click pull of the
+        direct's open delegations + action items."""
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft", manager_notes="",
+        )
+        Delegation.objects.create(
+            manager_id=m.id, team_member=tm, task="Review deck",
+            status="active",
+        )
+        resp = client.get(f"/meetings/{session.id}/")
+        body = resp.content.decode()
+        assert "Prepare agenda from 1 open item" in body
+        assert 'id="prep-agenda-data"' in body
+        # The open delegation seeds the prep payload.
+        assert "Review deck" in body
+
+    def test_prep_mode_hidden_when_agenda_has_content(self, client):
+        """Never overwrite: once Your Agenda has notes, the prep button is gone."""
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft", manager_notes="Already drafted my points",
+        )
+        Delegation.objects.create(
+            manager_id=m.id, team_member=tm, task="Review deck",
+            status="active",
+        )
+        resp = client.get(f"/meetings/{session.id}/")
+        assert b"Prepare agenda from" not in resp.content
+
     def test_autosave_updates_notes(self, client):
         m, tm = self._setup(client)
         session = OneOnOneSession.objects.create(
@@ -4169,3 +4202,21 @@ class TestSettingsSendDigest:
     def test_no_manager_yields_403(self, client):
         self._login_as(client, "stranger_sd@example.com")
         assert client.post("/settings/send-digest/").status_code == 403
+
+
+@pytest.mark.django_db
+class TestHealthEndpoint:
+    """/health is public and reports the deployed git SHA so a deploy
+    can be confirmed exactly (the gap /verify-deploy left)."""
+
+    def test_health_is_public_and_ok(self, client):
+        resp = client.get("/health/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "git_sha" in data
+
+    def test_health_reports_render_git_commit(self, client, monkeypatch):
+        monkeypatch.setenv("RENDER_GIT_COMMIT", "abc1234")
+        resp = client.get("/health/")
+        assert resp.json()["git_sha"] == "abc1234"

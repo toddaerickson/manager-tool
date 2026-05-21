@@ -6,6 +6,7 @@ All public view functions are re-exported here so urls.py imports
 
 from core.views._common import (  # noqa: F401
     dashboard,
+    health,
     hello,
     sentry_debug,
 )

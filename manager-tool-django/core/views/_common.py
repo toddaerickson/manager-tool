@@ -1,8 +1,15 @@
 """Views: _common."""
 
+import os
+
 from django.conf import settings as _settings
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse, HttpResponseForbidden, HttpResponseNotFound
+from django.http import (
+    HttpResponse,
+    HttpResponseForbidden,
+    HttpResponseNotFound,
+    JsonResponse,
+)
 from django.shortcuts import redirect, render
 
 from core.models import (
@@ -12,6 +19,18 @@ from core.models import (
     Goal,
     OneOnOneSession,
 )
+
+
+def health(request):
+    """Public, unauthenticated health + version endpoint.
+
+    Reports the deployed git SHA so a deploy can be confirmed exactly
+    (the gap the old /verify-deploy left). Render injects RENDER_GIT_COMMIT
+    at build/run time; locally it falls back to "unknown"."""
+    return JsonResponse({
+        "status": "ok",
+        "git_sha": os.environ.get("RENDER_GIT_COMMIT", "unknown"),
+    })
 
 
 def hello(request):
