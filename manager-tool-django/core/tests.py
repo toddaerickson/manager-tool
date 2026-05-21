@@ -3465,6 +3465,46 @@ class TestDigestService:
         assert success is False
         assert "SMTP not configured" in msg
 
+    def test_weekly_plan_section_included_when_ai_returns_text(self, mocker):
+        from core.services.digest import generate_weekly_digest
+        m = self._seed()
+        mocker.patch(
+            "coaching.services.generate_weekly_plan",
+            return_value=(
+                "1. **Talk to Sarah** — Horstman: weekly 1-on-1s.\n"
+                "2. **Close decision #42** — Grove: detect problems early."
+            ),
+        )
+        subject, html = generate_weekly_digest(m.id)
+        assert "This week&#x27;s plan" in html or "This week's plan" in html
+        assert "<strong>Talk to Sarah</strong>" in html
+        assert "<strong>Close decision #42</strong>" in html
+
+    def test_weekly_plan_section_omitted_when_ai_returns_none(self, mocker):
+        from core.services.digest import generate_weekly_digest
+        m = self._seed()
+        mocker.patch(
+            "coaching.services.generate_weekly_plan",
+            return_value=None,
+        )
+        subject, html = generate_weekly_digest(m.id)
+        assert "This week's plan" not in html
+        # Backwards-looking sections still ship.
+        assert "Overdue" in html
+
+    def test_weekly_plan_failure_does_not_break_digest(self, mocker):
+        from core.services.digest import generate_weekly_digest
+        m = self._seed()
+        mocker.patch(
+            "coaching.services.generate_weekly_plan",
+            side_effect=RuntimeError("api down"),
+        )
+        subject, html = generate_weekly_digest(m.id)
+        # Digest still renders without the plan section.
+        assert "Weekly Digest" in subject
+        assert "Overdue" in html
+        assert "This week's plan" not in html
+
 
 # ============================================================
 # Phase 6 — Management commands tests
