@@ -4169,3 +4169,21 @@ class TestSettingsSendDigest:
     def test_no_manager_yields_403(self, client):
         self._login_as(client, "stranger_sd@example.com")
         assert client.post("/settings/send-digest/").status_code == 403
+
+
+@pytest.mark.django_db
+class TestHealthEndpoint:
+    """/health is public and reports the deployed git SHA so a deploy
+    can be confirmed exactly (the gap /verify-deploy left)."""
+
+    def test_health_is_public_and_ok(self, client):
+        resp = client.get("/health/")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "git_sha" in data
+
+    def test_health_reports_render_git_commit(self, client, monkeypatch):
+        monkeypatch.setenv("RENDER_GIT_COMMIT", "abc1234")
+        resp = client.get("/health/")
+        assert resp.json()["git_sha"] == "abc1234"

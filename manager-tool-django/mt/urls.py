@@ -6,6 +6,7 @@ from core import views as core_views
 
 urlpatterns = [
     path("", core_views.hello, name="hello"),
+    path("health/", core_views.health, name="health"),
     path("dashboard/", core_views.dashboard, name="dashboard"),
     path("dashboard/panels/overview/", core_views.dashboard_overview, name="dashboard-overview"),
     path("team/", core_views.team_members_list, name="team"),
