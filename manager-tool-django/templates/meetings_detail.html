@@ -59,6 +59,24 @@
         <div>
           <label class="block text-sm font-medium text-slate-700 mb-1">Your Agenda</label>
           <p class="text-xs text-slate-400 mb-1">Your 10 minutes — what you need to cover.</p>
+          {% if not session.manager_notes and prep_count %}
+            {# Prep mode: one-click pull of this direct's open items into the box. #}
+            {{ prep_agenda|json_script:"prep-agenda-data" }}
+            <button type="button" id="prep-agenda-btn"
+                    class="mb-2 inline-flex items-center gap-1.5 text-xs font-medium text-accent-700 border border-accent-200 bg-accent-50 rounded px-2.5 py-1 hover:bg-accent-100">
+              Prepare agenda from {{ prep_count }} open item{{ prep_count|pluralize }}
+            </button>
+            <script>
+              document.getElementById('prep-agenda-btn')?.addEventListener('click', function () {
+                const ta = document.querySelector("textarea[name='manager_notes']");
+                if (!ta) return;
+                ta.value = JSON.parse(document.getElementById('prep-agenda-data').textContent);
+                ta.dispatchEvent(new Event('keyup'));  // nudge HTMX autosave
+                ta.focus();
+                this.remove();
+              });
+            </script>
+          {% endif %}
           <textarea name="manager_notes"
                     hx-post="{% url 'meetings-autosave' session.id %}"
                     hx-trigger="keyup changed delay:2s"

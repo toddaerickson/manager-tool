@@ -134,11 +134,30 @@ def one_on_ones_detail(request, session_id: int):
     ).order_by("-created_at")
     action_form = MeetingActionItemForm()
 
+    # Prep mode: a draft agenda built from this direct's open delegations
+    # and carried-over action items, so "Your Agenda" starts as a checklist
+    # instead of a blank box. The template only offers it when manager_notes
+    # is empty, and it never overwrites — the manager clicks to pull it in.
+    prep_lines = []
+    for d in context["open_delegations"]:
+        line = f"- {d.task}"
+        if d.check_in_date:
+            line += f" (check-in {d.check_in_date})"
+        prep_lines.append(line)
+    for a in context["open_actions"]:
+        line = f"- {a.description}"
+        if a.due_date:
+            line += f" (due {a.due_date})"
+        prep_lines.append(line)
+    prep_agenda = "\n".join(prep_lines)
+
     return render(request, "meetings_detail.html", {
         "session": session,
         "form": form,
         "action_items": action_items,
         "action_form": action_form,
+        "prep_agenda": prep_agenda,
+        "prep_count": len(prep_lines),
         **context,
     })
 
