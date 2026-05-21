@@ -23,7 +23,7 @@
       <input type="text" name="q" value="{{ query|default:'' }}" placeholder="feedback, delegation, trust..."
              class="w-full text-sm border border-slate-300 rounded px-3 py-2">
     </div>
-    <button type="submit" class="bg-slate-900 text-white text-sm px-4 py-2 rounded hover:bg-slate-700">Search</button>
+    <button type="submit" class="bg-accent-700 text-white text-sm px-4 py-2 rounded hover:bg-accent-800">Search</button>
     {% if query %}<a href="{% url 'resources' %}" class="text-sm text-slate-500 hover:text-slate-700 underline">Clear</a>{% endif %}
   </form>
 
