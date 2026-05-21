@@ -81,27 +81,6 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - **Deploy SHA in health endpoint**: `/verify-deploy` cannot confirm exact deployed version — add `git_sha` to the landing page or a `/health` JSON endpoint
 - **1:1 Notes clarification**: "1:1 Notes" (RunningNote) and "Meetings" (OneOnOneSession) coexist in the sidebar. Notes = async between-meeting jots; Meetings = structured session records. Consider renaming "1:1 Notes" to just "Notes" or adding tooltip text to clarify the distinction. Evaluate whether Notes should eventually fold into the Meetings workflow.
 
-## Prose quality — deslop workstream (not started)
-
-The app ships prose on two surfaces, and both read like default AI output today. The `stop-slop` skill (installed at `~/.claude/skills/stop-slop/`) is the standard to hold them to: cut filler and adverbs, active voice with a human subject, no "not X, it's Y" contrasts, no em dashes, specific over vague, vary sentence rhythm. Score a sample against the skill's 1-10 rubric (Directness / Rhythm / Trust / Authenticity / Density); below 35/50 means revise.
-
-Two surfaces, two different fixes:
-
-**1. Generated coaching prose (the AI-authored surface).** Claude writes this fresh on every call, so the only durable lever is the system prompt. The prompts already say "No fluff. No corporate-speak." but don't encode the specific tells.
-- Bake a condensed house-style block into `manager-tool-django/coaching/services.py:278` (`SYSTEM_PROMPT`) and `:307` (`DAILY_COACH_SYSTEM`): active voice, no em dashes, no binary contrasts, cut adverbs, name the person/situation over vague nouns, vary sentence length. Keep the existing word caps (250 words / 1-2 sentences).
-- Mirror the same edit into Streamlit `coaching.py:137` so the two apps stay in parity until Phase 8 decommission (Streamlit is frozen for features, but a prompt-text edit to keep parity is a maintenance change, not a feature).
-- Acceptance: generate 5 sample suggestions against real anchor data (`manager_id=1`), score each on the rubric, land them all at 35+/50. No em dashes, no "not X, it's Y", no `-ly` filler in the sample.
-
-**2. Static prose (write-once, hand-edited).** No model in the loop — just run `/stop-slop` over the strings.
-- Django: `core/services/digest.py` (weekly digest body), `core/services/email.py` (subjects + bodies).
-- Streamlit: `templates.py` (email/notification templates).
-- UI microcopy: toasts, empty states, button labels, and tooltips in `manager-tool-django/templates/` and `_partials/` (and the equivalent strings in `web_app.py`).
-- Optional guard: a unit test or CI grep that fails on an em dash or a banned-phrase in template/email string literals. Static text can be checked statically; generated text can't, which is why surface 1 leans on the prompt instead.
-
-**Out of scope unless asked:** `365_Great_Management_Ideas.md` and the wisdom library are curated quotes from named authors — deslopping them would misattribute. Leave them. The planning docs (this file included) are internal; deslop them only if onboarding readability becomes a real complaint.
-
-**Coupling note:** surface 1 is the only place prose is generated, so it's the highest-leverage and the only one that needs ongoing attention. Surface 2 is edit-once and stays fixed.
-
 ## Architecture deficits
 
 All closed:
