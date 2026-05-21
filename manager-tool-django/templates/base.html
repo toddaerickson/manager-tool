@@ -4,7 +4,42 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Manager Tool{% endblock %}</title>
+
+  {# Deliberate type system — Fraunces (display) + Public Sans (body).
+     Not system-default sans; see DESIGN.md for the rules this enforces. #}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    // Design tokens. One accent (teal), a deliberate type pair, and a
+    // tightened radius scale so nothing renders as default-rounded slop.
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Public Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+            display: ['Fraunces', 'ui-serif', 'Georgia', 'serif'],
+          },
+          colors: {
+            accent: {
+              50: '#f0fdfa', 100: '#ccfbf1', 200: '#99f6e4', 300: '#5eead4',
+              400: '#2dd4bf', 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e',
+              800: '#115e59', 900: '#134e4a',
+            },
+          },
+          borderRadius: {
+            DEFAULT: '0.25rem', md: '0.375rem', lg: '0.375rem', xl: '0.5rem',
+          },
+        },
+      },
+    };
+  </script>
+  <style type="text/tailwindcss">
+    h1 { @apply font-display tracking-tight; }
+  </style>
+
   <script src="https://unpkg.com/htmx.org@2.0.4"
           integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
           crossorigin="anonymous"></script>
@@ -26,7 +61,7 @@
                   -translate-x-full md:translate-x-0
                   transition-transform duration-200 ease-in-out">
       <div class="px-4 py-5 border-b border-slate-800">
-        <div class="text-lg font-semibold">Manager Tool</div>
+        <div class="font-display text-xl font-semibold tracking-tight">Manager Tool</div>
         {% if request.manager %}
           <div class="text-xs text-slate-400 mt-1 truncate">{{ request.manager.display_name }}</div>
         {% endif %}
@@ -40,48 +75,48 @@
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Manager</div>
           <a href="{% url 'dashboard' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'dashboard' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Dashboard</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'dashboard' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Dashboard</a>
           <a href="{% url 'events-upcoming' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-upcoming' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Upcoming</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-upcoming' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Upcoming</a>
           <a href="{% url 'journal' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'journal' or request.resolver_match.url_name == 'journal-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Manager Journal</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'journal' or request.resolver_match.url_name == 'journal-edit' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Manager Journal</a>
           <a href="{% url 'events-schedule' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-schedule' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Schedule Event</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-schedule' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Schedule Event</a>
           <a href="{% url 'todos' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'todos' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">To Do</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'todos' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">To Do</a>
           <a href="{% url 'decisions' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'decisions' or request.resolver_match.url_name == 'decisions-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Decisions</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'decisions' or request.resolver_match.url_name == 'decisions-edit' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Decisions</a>
         </div>
 
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Directs</div>
           <a href="{% url 'meetings' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'meetings' or request.resolver_match.url_name == 'meetings-detail' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Meetings</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'meetings' or request.resolver_match.url_name == 'meetings-detail' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Meetings</a>
           <a href="{% url 'notes' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'notes' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">1:1 Notes</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'notes' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">1:1 Notes</a>
           <a href="{% url 'delegations' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'delegations' or request.resolver_match.url_name == 'delegations-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Delegations</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'delegations' or request.resolver_match.url_name == 'delegations-edit' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Delegations</a>
           <a href="{% url 'feedback' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'feedback' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Feedback</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'feedback' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Feedback</a>
           <a href="{% url 'goals' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'goals' or request.resolver_match.url_name == 'goals-edit' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Goals</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'goals' or request.resolver_match.url_name == 'goals-edit' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Goals</a>
           <a href="{% url 'career-dev' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'career-dev' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Career Dev</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'career-dev' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Career Dev</a>
         </div>
 
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Reference</div>
           <a href="{% url 'analytics' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'analytics' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Analytics</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'analytics' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Analytics</a>
           <a href="{% url 'history' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'history' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">History</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'history' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">History</a>
           <a href="{% url 'resources' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'resources' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Resources</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'resources' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Resources</a>
           <a href="{% url 'team' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'team' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Team</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'team' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Team</a>
           <hr class="border-slate-800 my-2">
           <a href="{% url 'settings' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'settings' %}bg-slate-700{% else %}hover:bg-slate-800{% endif %}">Settings</a>
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'settings' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Settings</a>
           {% if request.user.is_authenticated %}
             <a href="{% url 'account_logout' %}" class="block px-2 py-1.5 rounded hover:bg-slate-800">Log Out</a>
           {% endif %}

@@ -69,6 +69,8 @@ pip install -r requirements-dev.txt
 
 Django 5.1 + django-allauth (Google OAuth) + django-htmx + Tailwind CSS. Deployed on Render via `render.yaml`. PG via Neon.
 
+**Visual design:** deliberate type + color system documented in `manager-tool-django/DESIGN.md` (Fraunces/Public Sans, single teal `accent-*`, tightened radius). Tokens live in `templates/base.html` `tailwind.config` and cascade — build with `accent-*`/`font-display` rather than raw values, and check new UI against the forbidden-slop list in DESIGN.md.
+
 ### Project layout
 
 - `mt/` — Django project: settings, urls, wsgi. `settings_test.py` overrides DB to SQLite `:memory:` for pytest.
