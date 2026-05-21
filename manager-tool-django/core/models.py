@@ -4,8 +4,8 @@ Generated from `python manage.py inspectdb` against the Neon dev branch
 after applying scripts/migrate_p2_config_to_id_pk.sql, then hand-cleaned:
 
 - TenantManager wired on every tenant-scoped model (audit C1 parity).
-- `managed = False` on legacy auth tables (Session, LoginAttempt) — they
-  exist in DB but django-allauth replaces them; dropped in Phase 8.
+- The Streamlit-era `sessions` and `login_attempts` tables were dropped in
+  Phase 8 (migration 0006); django-allauth replaces both.
 - `managed = False` on Streamlit's schema_migrations ledger — Django uses
   django_migrations instead; the old ledger stays as a frozen artifact.
 - ON DELETE behavior matches the actual PG constraints:
@@ -65,36 +65,6 @@ class User(models.Model):
 
     class Meta:
         db_table = "users"
-
-
-class Session(models.Model):
-    """Streamlit's server-side session table (audit H2). django-allauth's
-    built-in session handling replaces this; table dropped in Phase 8."""
-
-    id = models.TextField(primary_key=True)
-    manager = models.ForeignKey(Manager, models.DO_NOTHING)
-    created_at = models.DateTimeField(blank=True, null=True)
-    last_seen = models.DateTimeField(blank=True, null=True)
-    expires_at = models.DateTimeField()
-    user_agent_hash = models.TextField(blank=True, null=True)
-
-    class Meta:
-        managed = False
-        db_table = "sessions"
-
-
-class LoginAttempt(models.Model):
-    """Streamlit's persistent rate-limit table (audit H3). django-allauth's
-    built-in rate limiting replaces this; table dropped in Phase 8."""
-
-    username = models.TextField(primary_key=True)
-    failed_count = models.IntegerField()
-    last_attempt_at = models.DateTimeField()
-    locked_until = models.DateTimeField(blank=True, null=True)
-
-    class Meta:
-        managed = False
-        db_table = "login_attempts"
 
 
 class SchemaMigration(models.Model):

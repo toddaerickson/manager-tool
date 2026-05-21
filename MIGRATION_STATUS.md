@@ -27,7 +27,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 | 5 — Page port | done | All sub-pages + dashboard + feedback + analytics/history/resources |
 | 6 — Background jobs | done | Calendar + coaching + digest cron + purge cron |
 | 7 — Cutover | **done** | Production live on Django as of 2026-05-10 |
-| 8 — Decommission | not started | Drop Streamlit, drop legacy auth tables |
+| 8 — Decommission | **in progress** | Streamlit archived to `legacy/`; `gui.py`/`manager_tool.py` deleted; Streamlit CI jobs removed; `0006` drops `sessions`+`login_attempts` (needs prod apply); Neon dev branch deletion pending |
 
 ## Phase 7 — Cutover checklist
 
@@ -80,6 +80,18 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - **Meeting duration tracking**: actual duration vs scheduled
 - **Deploy SHA in health endpoint**: `/verify-deploy` cannot confirm exact deployed version — add `git_sha` to the landing page or a `/health` JSON endpoint
 - **1:1 Notes clarification**: "1:1 Notes" (RunningNote) and "Meetings" (OneOnOneSession) coexist in the sidebar. Notes = async between-meeting jots; Meetings = structured session records. Consider renaming "1:1 Notes" to just "Notes" or adding tooltip text to clarify the distinction. Evaluate whether Notes should eventually fold into the Meetings workflow.
+
+## Phase 8 — Decommission checklist
+
+- [x] Streamlit code moved to `legacy/` (kept in git as a rollback option, not deleted)
+- [x] `gui.py` and `manager_tool.py` deleted (audit L5 finally honored)
+- [x] Streamlit CI jobs (`tests-sqlite`, `smoke-pg`) removed; Django jobs remain
+- [x] `sessions` + `login_attempts` models removed; `core/migrations/0006` drops the tables (`SeparateDatabaseAndState`, idempotent `DROP ... IF EXISTS`)
+- [x] README points contributors at the Django app
+- [ ] **Run `manage.py migrate` against prod Neon** to apply `0006` (drops the orphaned tables in production) — backup first
+- [ ] Delete the Neon dev branch from the Neon console (manual — no API access from here)
+
+`schema_postgres.sql` and `365_Great_Management_Ideas.md` stay at the repo root: the Django PG smoke test bootstraps from the former, and the coaching engine reads the wisdom library from the latter (`coaching/services.py:107`).
 
 ## Architecture deficits
 

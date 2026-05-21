@@ -99,13 +99,10 @@ Schedule Event has an always-visible Repeats selector. Pick None / Weekly / Mont
 - Coaching pane available on feedback entry
 
 ### Manager Profiles & Security
-- Individual login with username/password (bcrypt hashed, salted)
-- Transparent migration of legacy SHA-256 hashes on login
-- Password strength validation (8+ characters)
-- Login rate limiting (locked after 5 failed attempts in 15 minutes)
+- Google OAuth login via django-allauth (no passwords stored in the app)
 - Sensitive config values (API keys, SMTP passwords) encrypted at rest with Fernet
 - Work schedule and timezone configuration
-- Complete data isolation between managers (multi-tenancy)
+- Complete data isolation between managers (multi-tenancy via `TenantManager.for_manager`)
 
 ### Email & Calendar
 - Weekly email digest: nudges, upcoming events, overdue actions, streak status (HTML + plain text)
@@ -114,43 +111,44 @@ Schedule Event has an always-visible Repeats selector. Pick None / Weekly / Mont
 
 ## Architecture
 
-| File | Purpose |
+The production app is **Django 5.1 + HTMX + Tailwind**, deployed on Render with Postgres on Neon. It lives in `manager-tool-django/`. The original Streamlit app was archived to `legacy/` after the 2026-05 cutover (kept in git as a rollback option; see `MIGRATION_STATUS.md`).
+
+| Path | Purpose |
 |---|---|
-| `web_app.py` | Streamlit web application — all pages, navigation, and UI |
-| `database.py` | Dual-mode database layer (SQLite + Neon PostgreSQL); migration runner (`_MIGRATIONS` ledger); transactional `_materialize_in_txn` for recurring events |
-| `coaching.py` | Claude API integration for coaching sidebar + Next Step + daily coach (rule-based + AI tiers) |
-| `templates.py` | Wisdom engine, coaching provocations, anti-pattern detector, meeting agendas, behavioral design framework |
-| `calendar_service.py` | iCalendar generation (one VEVENT per row today; RRULE export deferred), SMTP email, weekly digest |
-| `auth.py` | Google OAuth 2.0 authentication |
-| `365_Great_Management_Ideas.md` | 620 management ideas from 23 books |
-| `schema_postgres.sql` | PostgreSQL schema (Neon or any standard Postgres) |
-| `scripts/smoke_pg.py` | End-to-end smoke test against real PG (init_db, sessions, aggregator, recurring materialization, cross-tenant) |
-| `.github/workflows/test.yml` | CI: pytest (SQLite) + smoke job (postgres:16 service) on every PR |
-| `tests/` | 251 tests covering database CRUD, multi-tenancy, aggregator isolation, recurring events, materialization rollback, expiry warning, XSS escape, coaching, templates, dispatch |
-| `manager_tool.py` | CLI interface (legacy) |
-| `gui.py` | Tkinter desktop GUI (legacy) |
+| `manager-tool-django/mt/` | Django project: settings, urls, wsgi. `settings_test.py` pins SQLite `:memory:` for pytest |
+| `manager-tool-django/core/` | Models, views, forms, middleware, services, management commands |
+| `manager-tool-django/coaching/` | Claude API integration — coaching sidebar, Next Step, daily coach (rule-based + AI tiers) |
+| `manager-tool-django/templates/` | Full-page templates; `_partials/` holds HTMX fragments swapped via `hx-target` |
+| `manager-tool-django/core/services/` | `calendar.py` (ICS + SMTP digest), `digest.py`, `email.py`, `audit.py`, `events.py`, etc. |
+| `manager-tool-django/scripts/smoke_pg_django.py` | End-to-end smoke test against real PG (allauth login, `for_manager` filters, cross-tenant isolation) |
+| `365_Great_Management_Ideas.md` | 620 management ideas from 23 books — the shared wisdom library, read by the coaching engine |
+| `schema_postgres.sql` | Postgres schema; used to bootstrap the Django PG smoke test |
+| `.github/workflows/test.yml` | CI: Django pytest (SQLite) + Django PG smoke (postgres:16 service) on every PR |
+| `render.yaml` | Render deploy config (build runs `manage.py migrate`) |
+| `legacy/` | Archived Streamlit app (`web_app.py`, `database.py`, `coaching.py`, `auth.py`, its `tests/` and `scripts/`) — frozen, not deployed |
 
 ## Database
 
-**Dual-mode**: SQLite for local development, Neon PostgreSQL for production. Auto-detects via `DATABASE_URL` environment variable. Neon's serverless proxy handles pooling; the app opens direct connections.
+**Neon PostgreSQL** in production; SQLite `:memory:` for the pytest suite (`mt/settings_test.py`). Neon's serverless proxy handles pooling; the app opens direct connections.
 
 ### Tables
 
 | Category | Tables |
 |---|---|
-| **Auth** | managers, users (Google OAuth), sessions, login_attempts |
+| **Auth** | managers, users (Google OAuth via allauth), `django_session` |
 | **Team** | team_members |
 | **Activities** | events (with recurrence_rule, parent_event_id, recurrence_warned_at), action_items, feedback, goals (with target_date) |
 | **Journal** | journal_entries, self_assessments |
 | **Career** | career_conversations, skills, development_plans, milestones |
-| **Workflow** | delegations, running_notes, decisions, coach_suggestions |
-| **System** | config (composite PK `(manager_id, key)`), schema_migrations |
+| **Meetings** | one_on_one_sessions |
+| **Workflow** | delegations, running_notes, decisions, coach_suggestions, audit_log |
+| **System** | config (autoincrement `id` PK + `unique_together (manager_id, key)`) |
 
-All user-owned tables filtered by `manager_id` for multi-tenant isolation. Aggregator helpers (`get_upcoming_aggregate`, `get_overdue_aggregate`, `find_expiring_recurring_series`, `get_recurring_series_template`) take `manager_id` as a required keyword argument and assert non-None, so an unauthenticated session can't slip through.
+The Streamlit-era `sessions` and `login_attempts` tables were dropped in Phase 8 (`core/migrations/0006`); django-allauth + `django_session` replace them. Every tenant-scoped model uses `TenantManager`; views call `.objects.for_manager(request.manager.id)` and `for_manager(None)` raises, so an unauthenticated request can't slip through.
 
 ### Migrations
 
-Homegrown migration runner at `database.py:_run_migrations` reads a `schema_migrations` ledger and applies any sequenced `_MIGRATIONS` entry not yet recorded. Current sequence: `0001_journal_coaching_response`, `0002_orphan_table_manager_id`, `0003_partition_config_table`, `0004_sole_manager_backfill`, `0005_sessions_and_login_attempts`, `0006_save_uniqueness_constraints`, `0007_hot_path_indexes`, `0008_goals_target_date`, `0009_events_recurrence`. Each migration is idempotent (column-existence checks + `IF NOT EXISTS` indexes) so re-runs are no-ops. Schema changes follow a three-location dual-write rule: migration entry, `schema_postgres.sql`, and the SQLite block in `database.py`.
+Django's own migration framework (`manager-tool-django/core/migrations/`). Render's build step runs `python manage.py migrate` on deploy. Streamlit's old `schema_migrations` ledger remains in the DB as a frozen artifact (modeled `managed = False`) and is not touched by Django.
 
 ## The Wisdom Library
 
@@ -221,81 +219,68 @@ REFERENCE
   Log Out
 ```
 
-Page keys in `_DISPATCH` are stable across label rename rounds, so a cached `nav_page` value from a prior deploy keeps resolving. Legacy `Timeline` and `Member Timeline` keys redirect to `page_team_roster`.
+The sidebar is rendered by `base.html`; member detail folds the standalone Timeline into the Team detail view.
 
 ## Quick Start
 
 ```bash
-# Install dependencies
+cd manager-tool-django
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Run the web app
-streamlit run web_app.py
+# Run the dev server
+python manage.py runserver
 ```
+
+Set `DATABASE_URL`, `DJANGO_SECRET_KEY`, `CONFIG_ENCRYPTION_KEY`, and the Google OAuth secrets in `manager-tool-django/.env` (see `.env.template`). Without `DATABASE_URL` the dev server falls back to local SQLite.
 
 ## Configuration
 
-1. **Create an account** — username, password, work schedule
+1. **Sign in with Google** — allauth creates the session; the bridge middleware maps your email to a `Manager` row
 2. **Add your team** — name, role, email
 3. **Start journaling** — the core habit. Even one sentence counts.
-4. **Optional: Add Anthropic API key** in Settings for Claude-powered coaching + AI daily suggestions
+4. **Optional: Add an Anthropic API key** in Settings for Claude-powered coaching + AI daily suggestions
 
 ## Deployment
 
-### Streamlit Community Cloud (simplest)
-1. Push to GitHub
-2. Go to [share.streamlit.io](https://share.streamlit.io)
-3. Connect your repo, set `web_app.py` as the main file
-4. Deploy
+Deployed on **Render** (`render.yaml`), Postgres on **Neon**.
 
-### Production (Neon)
-1. Create a Neon project (neon.tech)
-2. Copy the **pooled** connection string from the Neon dashboard (Connection Details → "Pooled connection"). It looks like:
-   ```
-   postgresql://USER:PASSWORD@ep-xxx-pooler.REGION.aws.neon.tech/neondb?sslmode=require&channel_binding=require
-   ```
-   Use the pooled endpoint (`-pooler` in the hostname) for Streamlit Cloud — it's serverless-friendly and handles connection churn.
-3. Apply the schema:
-   ```bash
-   psql "$DATABASE_URL" -f schema_postgres.sql
-   ```
-4. Set `DATABASE_URL` as a Streamlit secret:
-   ```toml
-   # .streamlit/secrets.toml (or Streamlit Cloud Secrets UI)
-   DATABASE_URL = "postgresql://USER:PASSWORD@ep-xxx-pooler.REGION.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-   ```
-5. Set `CONFIG_ENCRYPTION_KEY` for config value encryption (required when `MANAGER_TOOL_ENV=prod`)
-6. Set `MANAGER_TOOL_ENV=prod` so the SQLite fallback is disabled and a Postgres outage fails loud rather than silently splitting writes between backends
-7. Deploy to Streamlit Cloud or any Python hosting
+- Root directory: `manager-tool-django/`
+- Build: `pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate`
+- Start: `gunicorn mt.wsgi:application --bind 0.0.0.0:$PORT`
+- Env vars: `DATABASE_URL`, `DJANGO_SECRET_KEY`, `CONFIG_ENCRYPTION_KEY`, `MANAGER_TOOL_ENV=prod`, Google OAuth secrets, `SENTRY_DSN`
+- A Render Cron service runs `python manage.py send_weekly_digests`
 
 ## Dependencies
 
+Django stack (see `manager-tool-django/requirements.txt`):
+
 ```
-streamlit>=1.38.0
-pandas>=2.0.0
-anthropic>=0.30.0
-requests>=2.31.0
-psycopg2-binary>=2.9.0
-bcrypt>=4.0.0
-cryptography>=41.0.0
+Django>=5.0,<5.2
+psycopg2-binary
+django-allauth[socialaccount]
+django-htmx
+django-tailwind
+cryptography
+anthropic
+gunicorn
+whitenoise
+sentry-sdk
 ```
 
 ## Tests
 
 ```bash
-pip install -r requirements-dev.txt
-python -m pytest tests/ -v
-# 251 tests across database CRUD, multi-tenancy, aggregator isolation,
-# recurring events, materialization rollback, expiry warning, XSS escape,
-# coaching, templates, dispatch
+cd manager-tool-django
+pytest -v
 ```
 
-The pytest suite is **SQLite-only** — `tests/conftest.py` pins `_USE_PG=False`. PG-only safety is covered by `scripts/smoke_pg.py`, which runs against a real `postgres:16` service in CI on every PR (`.github/workflows/test.yml`). The smoke test mirrors production bootstrap, exercises the auth + session + aggregator + recurring-materialization paths, and includes a forced-failure no-orphan assertion. Any PR touching SQL or schema must extend it.
+The pytest suite runs against **SQLite `:memory:`** (`mt/settings_test.py`). PG-only safety is covered by `scripts/smoke_pg_django.py`, which runs against a real `postgres:16` service in CI on every PR (`.github/workflows/test.yml`). The smoke test bootstraps the schema, exercises allauth login + session creation, runs `for_manager` filters across tenant tables, and asserts cross-tenant isolation bidirectionally. Any PR touching SQL or schema must extend it.
 
 ## Development with Claude Code
 
 This project includes a `CLAUDE.md` file with:
-- Project architecture context for AI-assisted development
+- Project architecture context for AI-assisted development (Django app + frozen Streamlit archive)
 - A **code-validator** skill that activates on review/debug requests with a mandatory validation checklist, troubleshooting recovery table, and critical rules (no hallucinations, test-first debugging)
 
 ## License
