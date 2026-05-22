@@ -18,7 +18,12 @@ BEGIN
         FROM pg_constraint
         WHERE conrelid = 'public.config'::regclass AND contype = 'p';
         IF pk_name IS NOT NULL THEN
-            EXECUTE format('ALTER TABLE config DROP CONSTRAINT %I', pk_name);
+            -- quote_ident + concat rather than format() with an identifier
+            -- placeholder: Django's schema_editor.execute mogrifies the SQL
+            -- through psycopg, which rejects any percent-prefixed token it
+            -- does not recognize -- even inside comments. The statement must
+            -- contain no percent character at all.
+            EXECUTE 'ALTER TABLE config DROP CONSTRAINT ' || quote_ident(pk_name);
         END IF;
 
         ALTER TABLE config ADD PRIMARY KEY (id);
