@@ -2,16 +2,20 @@
 """End-to-end smoke test for the Django app against a real Postgres.
 
 Mirrors the production cutover bootstrap path:
-  1. Apply Streamlit's fresh-deploy schema (schema_postgres.sql)
-  2. Apply the Phase 2 ALTER (migrate_p2_config_to_id_pk.sql) — gives
-     `config` the id PK + unique_together shape Django expects
-  3. Run Django `migrate --fake-initial` — Django takes ownership; for
+  1. Apply Streamlit's fresh-deploy schema (schema_postgres.sql) — this
+     leaves `config` in the legacy composite-PK shape (no id column),
+     exactly as prod's table was at cutover.
+  2. Run Django `migrate --fake-initial` — Django takes ownership; for
      allauth/auth/admin/etc. their tables don't exist yet so they get
      real CREATE TABLE; for core/coaching the tables already exist so
-     fake-apply marks them done
-  4. Run `makemigrations --dry-run` — must report "No changes detected"
+     fake-apply marks them done. Migration 0007 heals `config` to the
+     id-PK shape the Config model expects. We deliberately do NOT apply
+     migrate_p2_config_to_id_pk.sql by hand here: the prod incident on
+     PR 90 was precisely that the manual ALTER never ran, so smoke must
+     prove the migration alone fixes a legacy-shape config table.
+  3. Run `makemigrations --dry-run` — must report "No changes detected"
      (the silent column-drift gate)
-  5. Use the ORM to:
+  4. Use the ORM to:
        a. Create two managers via app helpers (NOT raw SQL — going
           through the ORM is what makes the cross-tenant assertion
           meaningful, mirroring the Streamlit smoke's "no raw seeding"
@@ -38,7 +42,6 @@ from pathlib import Path
 DJANGO_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = DJANGO_DIR.parent
 SCHEMA_SQL = REPO_ROOT / "schema_postgres.sql"
-PHASE2_SQL = REPO_ROOT / "scripts" / "migrate_p2_config_to_id_pk.sql"
 
 # Make `mt` and the apps importable when this script is run as
 # `python scripts/smoke_pg_django.py` — Python adds the script's own
@@ -296,7 +299,6 @@ def _exercise_recurring_events_no_orphan(manager) -> None:
 def main() -> None:
     _setup_env()
     _apply_sql_file(SCHEMA_SQL, "schema_postgres.sql (Streamlit fresh-deploy)")
-    _apply_sql_file(PHASE2_SQL, "migrate_p2_config_to_id_pk.sql (Phase 2 ALTER)")
 
     _step("running Django migrate --fake-initial")
     _run_django("migrate", "--fake-initial", "--no-input")
