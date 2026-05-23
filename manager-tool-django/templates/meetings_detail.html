@@ -55,10 +55,20 @@
                     placeholder="Their 10 minutes — what's on their mind? Start here.">{{ session.direct_notes|default_if_none:"" }}</textarea>
         </div>
 
-        {# Your Agenda #}
-        <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1">Your Agenda</label>
-          <p class="text-xs text-slate-400 mb-1">Your 10 minutes — what you need to cover.</p>
+        {# Your Agenda — soft-gated: collapsed until Their Agenda has content
+           (or this section already has notes; never hide existing text). The
+           hint in the summary nudges manager to engage with Their Agenda first. #}
+        <details {% if session.direct_notes or session.manager_notes %}open{% endif %} class="group">
+          <summary class="cursor-pointer list-none flex items-center gap-1.5 text-sm font-medium text-slate-700 hover:text-slate-900">
+            <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+            Your Agenda
+            {% if not session.direct_notes and not session.manager_notes %}
+              <span class="text-xs font-normal text-slate-400 ml-1">— start with theirs</span>
+            {% endif %}
+          </summary>
+          <p class="text-xs text-slate-400 mt-1 mb-1">Your 10 minutes — what you need to cover.</p>
           {% if not session.manager_notes and prep_count %}
             {# Prep mode: one-click pull of this direct's open items into the box. #}
             {{ prep_agenda|json_script:"prep-agenda-data" }}
@@ -87,12 +97,17 @@
                     rows="6"
                     class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-sm"
                     placeholder="Your 10 minutes — what you need to cover.">{{ session.manager_notes|default_if_none:"" }}</textarea>
-        </div>
+        </details>
 
-        {# Coaching / Their Future #}
-        <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1">Coaching / Their Future</label>
-          <p class="text-xs text-slate-400 mb-1">Development, coaching, career growth.</p>
+        {# Coaching / Their Future — soft-gated like Your Agenda above. #}
+        <details {% if session.direct_notes or session.followup_notes %}open{% endif %} class="group">
+          <summary class="cursor-pointer list-none flex items-center gap-1.5 text-sm font-medium text-slate-700 hover:text-slate-900">
+            <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+            Coaching / Their Future
+          </summary>
+          <p class="text-xs text-slate-400 mt-1 mb-1">Development, coaching, career growth.</p>
           <textarea name="followup_notes"
                     hx-post="{% url 'meetings-autosave' session.id %}"
                     hx-trigger="keyup changed delay:2s"
@@ -103,7 +118,7 @@
                     rows="6"
                     class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-sm"
                     placeholder="Development, coaching, career growth.">{{ session.followup_notes|default_if_none:"" }}</textarea>
-        </div>
+        </details>
 
         {# Linked event #}
         <div>

@@ -214,7 +214,7 @@ class TestDashboardView:
         assert resp.status_code == 403
 
     def test_logged_in_user_with_manager_sees_dashboard_shell(self, client):
-        m = Manager.objects.create(
+        Manager.objects.create(
             username="todd", display_name="Todd",
             password_hash="x", email="todd@example.com",
         )
@@ -294,7 +294,7 @@ class TestDashboardView:
 
     def test_overview_cross_tenant_isolation(self, client):
         from datetime import date
-        m1 = Manager.objects.create(
+        Manager.objects.create(
             username="todd_dash4", display_name="Todd",
             password_hash="x", email="todd_dash4@example.com",
         )
@@ -320,7 +320,7 @@ class TestDashboardView:
         assert "Other's meeting" not in body
 
     def test_logout_invalidates_session_with_setup(self, client):
-        m = Manager.objects.create(
+        Manager.objects.create(
             username="todd", display_name="Todd",
             password_hash="x", email="todd@example.com",
         )
@@ -609,7 +609,7 @@ class TestTeamMembersRestore:
 
     def test_restore_cross_tenant_returns_404(self, client):
         from django.utils import timezone
-        m = self._setup(client)  # Todd
+        self._setup(client)  # Todd
         m2 = Manager.objects.create(
             username="other", display_name="Other",
             password_hash="x", email="other@example.com",
@@ -712,7 +712,7 @@ class TestEventsUpcoming:
         assert "Nothing scheduled" in resp.content.decode()
 
     def test_only_own_scheduled_future_events_shown(self, client):
-        from datetime import date, timedelta
+        from datetime import timedelta
         m, today, tomorrow = self._setup(client)
         m2 = Manager.objects.create(
             username="other", display_name="Other",
@@ -750,7 +750,6 @@ class TestEventsUpcoming:
         assert "Other&#x27;s" not in body and "Other's" not in body
 
     def test_today_label_used_for_today(self, client):
-        from datetime import date
         m, today, tomorrow = self._setup(client)
         Event.objects.create(
             manager_id=m.id, title="X", event_type="one_on_one",
@@ -821,7 +820,7 @@ class TestEventsSchedule:
 
     def test_invalid_event_type_rejected(self, client):
         from datetime import date, timedelta
-        m = self._setup(client)
+        self._setup(client)
         resp = client.post("/events/schedule/", {
             "event_type": "not_a_real_type",
             "scheduled_date": (date.today() + timedelta(days=1)).isoformat(),
@@ -1647,7 +1646,7 @@ class TestTodosList:
         assert client.get("/todos/").status_code == 403
 
     def test_empty_state(self, client):
-        m = self._setup(client)
+        self._setup(client)
         body = client.get("/todos/").content.decode()
         assert "caught up" in body.lower()
 
@@ -1876,7 +1875,7 @@ class TestTodosDelete:
 
     def test_delete_cross_tenant_returns_404(self, client):
         from core.models import ActionItem
-        m1 = Manager.objects.create(
+        Manager.objects.create(
             username="todd_t4b", display_name="Todd",
             password_hash="x", email="todd_t4b@example.com",
         )
@@ -1953,7 +1952,7 @@ class TestJournalList:
         assert resp.status_code == 403
 
     def test_cross_manager_entries_not_visible(self, client):
-        m1 = self._setup(client)
+        self._setup(client)
         m2 = Manager.objects.create(
             username="other_j1", display_name="Other",
             password_hash="x", email="other_j1@example.com",
@@ -2588,7 +2587,7 @@ class TestGoalsDelete:
         assert not Goal.objects.filter(pk=g.id).exists()
 
     def test_cross_tenant_returns_404(self, client):
-        m1 = Manager.objects.create(
+        Manager.objects.create(
             username="todd_g4b", display_name="Todd",
             password_hash="x", email="todd_g4b@example.com",
         )
@@ -3044,7 +3043,7 @@ class TestDecisions:
         assert not Decision.objects.filter(pk=d.id).exists()
 
     def test_cross_tenant_edit_returns_404(self, client):
-        m1 = self._setup(client)
+        self._setup(client)
         m2 = Manager.objects.create(
             username="other_dc1", display_name="Other",
             password_hash="x", email="other_dc1@example.com",
@@ -3053,7 +3052,7 @@ class TestDecisions:
         assert client.get(f"/decisions/{d.id}/edit/").status_code == 404
 
     def test_cross_tenant_delete_returns_404(self, client):
-        m1 = self._setup(client)
+        self._setup(client)
         m2 = Manager.objects.create(
             username="other_dc1b", display_name="Other",
             password_hash="x", email="other_dc1b@example.com",
@@ -3281,7 +3280,7 @@ class TestSettings:
         return m
 
     def test_page_loads(self, client):
-        m = self._setup(client)
+        self._setup(client)
         resp = client.get("/settings/")
         assert resp.status_code == 200
         assert b"Settings" in resp.content
@@ -3304,7 +3303,7 @@ class TestSettings:
         assert resp.status_code == 403
 
     def test_shows_account_info(self, client):
-        m = self._setup(client)
+        self._setup(client)
         resp = client.get("/settings/")
         assert b"todd_set1@example.com" in resp.content or b"todd_set1" in resp.content
 
@@ -3818,6 +3817,45 @@ class TestOneOnOneSessions:
         )
         resp = client.get(f"/meetings/{session.id}/")
         assert b"Prepare agenda from" not in resp.content
+
+    def test_soft_gate_collapses_your_agenda_when_empty(self, client):
+        """Soft gate: with all three text fields empty, Your Agenda and
+        Coaching are rendered as closed <details> (no open attr), and the
+        nudge points the manager at Their Agenda first."""
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft",
+        )
+        body = client.get(f"/meetings/{session.id}/").content.decode()
+        assert "<details  class=\"group\">" in body or "<details class=\"group\">" in body, \
+            "Your Agenda and Coaching <details> should render closed (no open attr)"
+        assert "start with theirs" in body  # nudge hint
+
+    def test_soft_gate_opens_when_their_agenda_has_content(self, client):
+        """Once Their Agenda is non-empty, Your Agenda + Coaching open."""
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft", direct_notes="They want to discuss promotion path",
+        )
+        body = client.get(f"/meetings/{session.id}/").content.decode()
+        assert "<details open class=\"group\">" in body, \
+            "details should be open once direct_notes has content"
+        assert "start with theirs" not in body  # hint goes away
+
+    def test_soft_gate_never_hides_existing_notes(self, client):
+        """If Your Agenda already has notes, it must render open even if
+        Their Agenda is empty — never hide existing content behind a click."""
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft", manager_notes="Pre-existing notes from before",
+        )
+        body = client.get(f"/meetings/{session.id}/").content.decode()
+        assert body.count("<details open class=\"group\">") >= 1, \
+            "Your Agenda must be open when manager_notes is non-empty"
+        assert "Pre-existing notes from before" in body
 
     def test_autosave_updates_notes(self, client):
         m, tm = self._setup(client)
