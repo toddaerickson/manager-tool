@@ -91,9 +91,11 @@
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Directs</div>
           <a href="{% url 'meetings' %}"
+             title="Structured 1:1 session records (10/10/10 recorder)"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'meetings' or request.resolver_match.url_name == 'meetings-detail' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Meetings</a>
           <a href="{% url 'notes' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'notes' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">1:1 Notes</a>
+             title="Async between-meeting jots — for structured sessions, use Meetings"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'notes' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Notes</a>
           <a href="{% url 'delegations' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'delegations' or request.resolver_match.url_name == 'delegations-edit' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Delegations</a>
           <a href="{% url 'feedback' %}"

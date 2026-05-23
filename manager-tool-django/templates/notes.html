@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}1:1 Notes — Manager Tool{% endblock %}
+{% block title %}Notes — Manager Tool{% endblock %}
 
 {% block content %}
 <div class="max-w-3xl">
   <header class="mb-6">
-    <h1 class="text-2xl font-semibold">1:1 Notes</h1>
-    <p class="text-sm text-slate-500 mt-1">Running notes on your directs. Broadcast notes appear in every member's feed.</p>
+    <h1 class="text-2xl font-semibold">Notes</h1>
+    <p class="text-sm text-slate-500 mt-1">Async, between-meeting jots on your directs. Broadcast notes appear in every member's feed. For structured 1:1 session records, use <a href="{% url 'meetings' %}" class="underline hover:text-slate-700">Meetings</a>.</p>
   </header>
 
   <div class="flex items-center gap-3 mb-4">
