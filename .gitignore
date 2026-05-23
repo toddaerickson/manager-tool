@@ -15,5 +15,6 @@ backups/
 .claude/*
 !.claude/settings.json
 !.claude/hooks/
+!.claude/skills/
 .claude/settings.local.json
 *.code-workspace
