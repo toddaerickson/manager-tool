@@ -4335,3 +4335,42 @@ class TestHealthEndpoint:
         monkeypatch.setenv("RENDER_GIT_COMMIT", "abc1234")
         resp = client.get("/health/")
         assert resp.json()["git_sha"] == "abc1234"
+
+
+@pytest.mark.django_db
+class TestLanding:
+    """The public `/` page is the unauthenticated marketing/sign-in surface.
+    Authenticated users skip it and go straight to /dashboard/."""
+
+    def test_anonymous_sees_designed_landing(self, client):
+        resp = client.get("/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        # New designed page, not the old plaintext scaffold
+        assert "Django scaffold" not in body
+        assert "Sign in with Google" in body
+        assert "/accounts/google/login/" in body
+        # Uses the design system tokens (Fraunces display font + teal accent)
+        assert "Fraunces" in body
+        assert "bg-accent-700" in body
+
+    def test_deploy_sha_renders_in_footer_when_set(self, client, monkeypatch):
+        monkeypatch.setenv("RENDER_GIT_COMMIT", "abcdef1234567")
+        body = client.get("/").content.decode()
+        # Footer shows the 7-char short SHA
+        assert "deploy abcdef1" in body
+
+    def test_deploy_sha_hidden_when_unknown(self, client):
+        # No env var set → footer shouldn't show "deploy unknown"
+        body = client.get("/").content.decode()
+        assert "deploy unknown" not in body
+
+    def test_authenticated_user_redirects_to_dashboard(self, client):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username="landing_redir", email="landing_redir@example.com", password="x",
+        )
+        client.force_login(u)
+        resp = client.get("/")
+        assert resp.status_code == 302
+        assert resp.url.endswith("/dashboard/")

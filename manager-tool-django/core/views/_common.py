@@ -5,7 +5,6 @@ import os
 from django.conf import settings as _settings
 from django.contrib.auth.decorators import login_required
 from django.http import (
-    HttpResponse,
     HttpResponseForbidden,
     HttpResponseNotFound,
     JsonResponse,
@@ -34,15 +33,14 @@ def health(request):
 
 
 def hello(request):
-    """Public landing page. Redirects authenticated users to dashboard
-    instead of showing their email in a plaintext response (S12)."""
+    """Public landing page. Authenticated users go straight to dashboard
+    instead of seeing the marketing page. Anonymous users get a designed
+    landing with a Google sign-in CTA and the deploy SHA in the footer."""
     if request.user.is_authenticated:
         return redirect("dashboard")
-    body = (
-        "Manager Tool — Django scaffold.\n"
-        "Sign in: /accounts/google/login/\n"
-    )
-    return HttpResponse(body, content_type="text/plain")
+    return render(request, "landing.html", {
+        "git_sha": os.environ.get("RENDER_GIT_COMMIT", "unknown"),
+    })
 
 
 def sentry_debug(request):
