@@ -53,13 +53,17 @@ A private management coaching journal and team management platform that makes yo
 ### Team Hub
 - Team roster with inline add-member form and detail view
 - Click "View Details" on a member → renders the full member timeline inline: pre-meeting prep with days since last meeting, feedback ratio, pending actions, active goals, recent notes, coaching pane, activity timeline. The standalone Timeline page was folded into Team detail; legacy `_DISPATCH["Timeline"]` and `_DISPATCH["Member Timeline"]` redirect to the new home.
-- **Running 1:1 Notes**: Persistent per-member notes (general, meeting prep, observation, follow-up, praise) that carry forward between meetings — most recent notes surface automatically during meeting prep
 - Career Development: conversation tracker, skills inventory with proficiency levels, development plans with milestones
 
 ### Meetings (10/10/10 recorder)
 - Structured 1:1 recorder with three sections: Their Agenda → Your Agenda → Coaching/Their Future. Autosaves as you type (HTMX).
-- Side panel surfaces the direct's context: recent meetings, open delegations, active goals, recent feedback, carried-over action items.
+- **"Their Agenda first" soft gate**: Your Agenda and Coaching collapse until Their Agenda has content — a nudge, not a block.
 - **Prep mode**: when Your Agenda is empty, one click pulls the direct's open delegations + action items into the box as a checklist — non-destructive, never overwrites.
+- **Search**: filter the meetings list by free-text across all three notes columns.
+- Side panel surfaces the direct's context: recent meetings, open delegations, active goals, recent feedback, carried-over action items.
+
+### Notes (between-meeting jots)
+- Async running notes per direct (general, meeting prep, observation, follow-up, praise). Distinct from Meetings — Notes are quick jots; Meetings are structured session records.
 
 ### Delegation Tracker
 - Track what you've delegated, to whom, with expected outcomes
@@ -209,7 +213,8 @@ MANAGER
   Decisions
 
 DIRECTS
-  1:1 Notes
+  Meetings
+  Notes
   Delegations
   Feedback
   Goals
