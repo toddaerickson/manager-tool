@@ -314,9 +314,9 @@ def dashboard_overview(request):
     2. Team Health — per-direct status indicators
     3. Weekly Recap — what happened in the last 7 days
     """
-    from django.db.models import Max, Count, Q
+    from django.db.models import Max, Count
     from core.models import (
-        Decision, Delegation, Feedback, Goal, JournalEntry, RunningNote,
+        Decision, Delegation, Feedback, Goal, JournalEntry,
     )
 
     if request.manager is None:

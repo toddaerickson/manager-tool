@@ -10,15 +10,14 @@ calendar invites). Preserves M3 sanitization from calendar service.
 
 import logging
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from email.header import Header
 from html import escape as h
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from core.models import (
-    ActionItem, Config, Decision, Delegation, Event, JournalEntry,
-    Manager, TeamMember,
+    ActionItem, Decision, Delegation, Event, Manager,
 )
 from core.services.calendar import _safe_address_pair, _safe_header_text
 from core.services.email import get_smtp_settings, send_smtp

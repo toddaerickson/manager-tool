@@ -2,7 +2,6 @@
 
 import pytest
 
-from coaching.models import CoachSuggestion
 from coaching.services import (
     _generate_template_questions,
     _get_client,
@@ -16,7 +15,7 @@ from coaching.services import (
     render_weekly_plan_html,
 )
 from core.models import (
-    ActionItem, Config, Delegation, Event, JournalEntry, Manager, TeamMember,
+    Config, Delegation, JournalEntry, Manager, TeamMember,
 )
 
 
@@ -319,7 +318,7 @@ class TestGenerateWeeklyPlan:
         )
         fake_message = mocker.MagicMock()
         fake_message.content = [fake_block]
-        mocked_create = mocker.patch(
+        mocker.patch(
             "anthropic.Anthropic.messages",
             create=True,
             new=mocker.MagicMock(),
