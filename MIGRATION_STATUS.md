@@ -2,7 +2,7 @@
 
 Snapshot of where the Streamlit → Django migration stands. Update this doc when phase boundaries move; re-merge to main so it stays the source of truth for "where are we right now."
 
-**Last updated:** 2026-05-21
+**Last updated:** 2026-05-24
 **Live Django app:** https://manager-tool-django.onrender.com
 **Plan:** `MIGRATION_PLAN.md` · **Gates:** `PHASE_GATES.md` · **Open design questions:** `manager-tool-django/ARCHITECTURE_DEFICITS.md` · **Design system:** `manager-tool-django/DESIGN.md`
 
@@ -82,12 +82,18 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - **`/health` deploy-SHA endpoint** (PR #94) — public JSON `{status, git_sha}` from `RENDER_GIT_COMMIT`, so the exact live commit is confirmable. Replaces the old `/verify-deploy` gap.
 - **"This week's plan" in the weekly digest** (PR #91) — AI-generated, prioritized 3–5 action list at the top of the Monday digest, grounded in real data + the management corpus.
 - **UI design system** (PR #94) — deliberate type + color identity (Fraunces/Public Sans, single teal `accent-*`, tightened radius) as cascading tokens in `base.html`. See `manager-tool-django/DESIGN.md`.
+- **"Their Agenda first" soft gate** (PR #99) — Your Agenda and Coaching/Their Future render as collapsed `<details>` until Their Agenda has content (or that section already has notes). Native HTML disclosure; pairs with prep mode.
+- **Notes vs Meetings naming** (PR #100) — sidebar "1:1 Notes" → "Notes" with tooltips on both Meetings and Notes explaining the distinction (Meetings = structured 10/10/10 records; Notes = async between-meeting jots).
+- **Meetings notes search** (PR #102) — `?q=` filters the meetings list by case-insensitive substring across Their/Your/Followup notes (v1 of the tags+FTS backlog item; ORM `icontains` only — no tags yet).
+- **Ruff in CI + repo-wide lint cleanup** (PR #101) — `ruff check` runs before pytest in the Django CI job; the 27 pre-existing F401/F841 warnings are gone, so the ship-pr gate stays green on any touched file.
+
+**Tooling additions in `.claude/`:**
+- **SessionStart hook** (PR #96) — creates `manager-tool-django/.venv` and installs requirements on every web session boot.
+- **`ship-pr` skill** (PR #98) — codifies the PR workflow (branch, gate, body template, fetch-checks-once) so future sessions don't re-derive it.
 
 **Remaining v2 gaps:**
-- **Soft gate on "Their Agenda" first**: collapse "Your Agenda" by default to reinforce the MT direct-first principle (pairs with prep mode).
-- **Tags + FTS search** across meeting notes (Django ORM search or django-watson).
+- **Meeting tags** — pair with the new search to filter by tag (not just substring). Smallest as a comma-separated TextField on `OneOnOneSession`; an M2M is overkill at current scale.
 - **Meeting duration tracking**: actual duration vs scheduled.
-- **1:1 Notes clarification**: "1:1 Notes" (RunningNote) and "Meetings" (OneOnOneSession) coexist in the sidebar. Notes = async between-meeting jots; Meetings = structured session records. Consider renaming "1:1 Notes" to just "Notes" or adding tooltip text. Evaluate whether Notes should eventually fold into the Meetings workflow.
 
 ## Phase 8 — Decommission checklist
 
