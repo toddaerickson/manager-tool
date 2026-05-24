@@ -12,7 +12,7 @@ import logging
 import os
 import random
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from django.utils import timezone
 
@@ -442,7 +442,7 @@ def get_coaching_response(notes, manager_id, context_type="journal",
             messages=[{"role": "user", "content": user_message}],
         )
         return message.content[0].text
-    except Exception as e:
+    except Exception:
         logger.exception("Claude API call failed")
         return (
             "*Coaching unavailable — API error. Check server logs.*\n\n"
@@ -728,7 +728,6 @@ def generate_ai_suggestion(manager_id):
     trusted_parts.append(f"TEAM SIZE: {members.count()} direct reports")
 
     # Meeting cadence
-    cutoff = (date.today() - timedelta(days=30)).isoformat()
     for m in members[:5]:
         last_event = (
             Event.objects.for_manager(manager_id)
@@ -769,7 +768,7 @@ def generate_ai_suggestion(manager_id):
             messages=[{"role": "user", "content": user_message}],
         )
         return message.content[0].text
-    except Exception as e:
+    except Exception:
         logger.exception("Daily coach AI suggestion failed")
         return None
 

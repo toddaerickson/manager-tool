@@ -18,7 +18,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, parseaddr
 
-from core.services.email import get_config, get_smtp_settings, send_smtp
+from core.services.email import get_smtp_settings, send_smtp
 
 logger = logging.getLogger(__name__)
 

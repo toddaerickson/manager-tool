@@ -278,7 +278,6 @@ class EventEditForm(forms.ModelForm):
 # 'completed'. The form only exposes the create path (status defaults
 # to 'pending' on the model); transitions happen via HTMX endpoints.
 
-from .models import ActionItem  # noqa: E402
 
 
 # Phase 5.3.1 — "(no time)" is the empty-string sentinel for due_time.

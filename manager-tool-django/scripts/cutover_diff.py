@@ -40,15 +40,15 @@ import django
 import django.db.utils
 django.setup()
 
-from psycopg import sql as psql
-import psycopg
-from core.models import (
+# Imports below must come AFTER django.setup() — they touch Django models.
+from psycopg import sql as psql  # noqa: E402
+import psycopg  # noqa: E402
+from core.models import (  # noqa: E402
     ActionItem, AuditLog, CareerConversation, Decision, Delegation,
-    DevelopmentPlan, Event, Feedback, Goal, JournalEntry, Manager,
-    Milestone, OneOnOneSession, RunningNote, SelfAssessment, Skill,
+    DevelopmentPlan, Event, Feedback, Goal, JournalEntry, Milestone, OneOnOneSession, RunningNote, SelfAssessment, Skill,
     TeamMember,
 )
-from core.models import Config
+from core.models import Config  # noqa: E402
 
 # ── Table → Model mapping ────────────────────────────────────
 # Every tenant-scoped model with manager_id (integer or FK).
