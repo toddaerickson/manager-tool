@@ -1,0 +1,53 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Manager Tool</title>
+
+  {# Same type system + tokens as base.html (intentional duplication —
+     landing is standalone so unauthenticated users don't load the sidebar). #}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Public Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+            display: ['Fraunces', 'ui-serif', 'Georgia', 'serif'],
+          },
+          colors: {
+            accent: {
+              50: '#f0fdfa', 100: '#ccfbf1', 200: '#99f6e4', 300: '#5eead4',
+              400: '#2dd4bf', 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e',
+              800: '#115e59', 900: '#134e4a',
+            },
+          },
+          borderRadius: {
+            DEFAULT: '0.25rem', md: '0.375rem', lg: '0.375rem', xl: '0.5rem',
+          },
+        },
+      },
+    };
+  </script>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
+  <main class="flex-1 flex items-center justify-center px-6 py-12">
+    <div class="max-w-md text-center">
+      <h1 class="font-display tracking-tight text-5xl md:text-6xl text-slate-900">Manager Tool</h1>
+      <p class="mt-4 text-slate-600">A private management coaching journal. Daily reflections, your team data, and 620 ideas from 23 books in one place.</p>
+      <a href="/accounts/google/login/"
+         class="mt-8 inline-flex items-center gap-2 bg-accent-700 text-white font-medium rounded px-5 py-2.5 hover:bg-accent-800">
+        Sign in with Google
+      </a>
+    </div>
+  </main>
+  <footer class="px-6 py-3 text-center text-xs text-slate-400">
+    {% if git_sha and git_sha != "unknown" %}deploy {{ git_sha|slice:":7" }}{% endif %}
+  </footer>
+</body>
+</html>
