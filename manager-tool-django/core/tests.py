@@ -3758,6 +3758,43 @@ class TestOneOnOneSessions:
         assert resp.status_code == 302
         assert "/accounts/login/" in resp.url or "/accounts/google/login/" in resp.url
 
+    def test_search_filters_by_notes_text(self, client):
+        """?q= filters drafts/completed by direct/manager/followup notes."""
+        m, tm = self._setup(client)
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-09",
+            status="completed", direct_notes="they raised the promotion topic",
+        )
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="completed", manager_notes="discussed Q3 hiring plan",
+        )
+        # Hit on the first session via direct_notes
+        body = client.get("/meetings/?q=promotion").content.decode()
+        assert "2026-05-09" in body
+        assert "2026-05-10" not in body
+        # Hit on the second session via manager_notes
+        body = client.get("/meetings/?q=hiring").content.decode()
+        assert "2026-05-10" in body
+        assert "2026-05-09" not in body
+
+    def test_search_does_not_leak_other_managers_notes(self, client):
+        """Cross-tenant: ?q= must respect TenantManager scoping."""
+        m, tm = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_mtg", display_name="Other",
+            password_hash="x", email="other_mtg@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        # Manager 2's session contains the search term, but Todd is logged in.
+        OneOnOneSession.objects.create(
+            manager=m2, team_member=tm2, session_date="2026-05-08",
+            status="completed", direct_notes="secret cross-tenant string",
+        )
+        body = client.get("/meetings/?q=secret").content.decode()
+        assert "2026-05-08" not in body
+        assert "secret" not in body or "secret cross-tenant" not in body
+
     def test_create_redirects_to_detail(self, client):
         m, tm = self._setup(client)
         resp = client.post("/meetings/add/", {

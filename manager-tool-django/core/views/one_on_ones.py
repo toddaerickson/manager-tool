@@ -31,6 +31,7 @@ def one_on_ones_list(request):
         return err
     mid = manager.id
     member_id = _parse_member_filter(request)
+    search_query = request.GET.get("q", "").strip()
     today_iso = date.today().isoformat()
 
     sessions = OneOnOneSession.objects.for_manager(mid).select_related(
@@ -38,6 +39,13 @@ def one_on_ones_list(request):
     )
     if member_id:
         sessions = sessions.filter(team_member_id=member_id)
+    if search_query:
+        from django.db.models import Q
+        sessions = sessions.filter(
+            Q(direct_notes__icontains=search_query)
+            | Q(manager_notes__icontains=search_query)
+            | Q(followup_notes__icontains=search_query)
+        )
 
     # Draft sessions first, then by date descending
     drafts = sessions.filter(status="draft").order_by("-session_date")
@@ -70,6 +78,7 @@ def one_on_ones_list(request):
         "form": form,
         "members": members,
         "selected_member": member_id,
+        "search_query": search_query,
         "cadence": cadence,
         "today_iso": today_iso,
     })
