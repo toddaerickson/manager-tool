@@ -32,17 +32,25 @@
   </div>
   {% endif %}
 
-  {# ── Member filter ── #}
-  <div class="flex items-center gap-3 mb-4">
-    <label class="text-sm text-slate-600">Filter by member:</label>
-    <select onchange="window.location=this.value?'?member='+this.value:window.location.pathname"
+  {# ── Filters: member + free-text search over notes ── #}
+  <form method="get" class="flex flex-wrap items-center gap-3 mb-4">
+    <label class="text-sm text-slate-600" for="meeting-member-filter">Filter:</label>
+    <select id="meeting-member-filter" name="member" onchange="this.form.submit()"
             class="text-sm border border-slate-300 rounded px-2 py-1">
-      <option value="">All meetings</option>
+      <option value="">All members</option>
       {% for m in members %}
         <option value="{{ m.id }}" {% if selected_member == m.id %}selected{% endif %}>{{ m.name }}</option>
       {% endfor %}
     </select>
-  </div>
+    <input type="search" name="q" value="{{ search_query|default:'' }}"
+           placeholder="Search notes…"
+           class="text-sm border border-slate-300 rounded px-2 py-1 w-56">
+    <button type="submit"
+            class="text-sm bg-accent-700 text-white rounded px-3 py-1 hover:bg-accent-800">Search</button>
+    {% if search_query or selected_member %}
+      <a href="{% url 'meetings' %}" class="text-xs text-slate-500 hover:text-slate-700">clear</a>
+    {% endif %}
+  </form>
 
   {# ── Start new meeting ── #}
   <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not drafts and not completed %}open{% endif %}>
