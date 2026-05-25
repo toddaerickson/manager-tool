@@ -487,6 +487,15 @@ def dashboard_overview(request):
             "delegations": del_counts.get(m.id, 0),
         })
 
+    # Compute a Python-side aware UTC cutoff for the TIMESTAMP-column
+    # filters below (created_at/completed_at/updated_at). Using `__date__gte`
+    # on a naive TIMESTAMP under USE_TZ + non-UTC TIME_ZONE applies an
+    # AT TIME ZONE cast that buckets UTC-stored values into the wrong day
+    # around the boundary. SQLite tests don't see it; PG does. See the
+    # adversarial review finding #4.
+    from django.utils import timezone as _tz_recap
+    week_ago_dt = _tz_recap.now() - timedelta(days=7)
+
     # ── Weekly Recap ─────────────────────────────────────────
     recap = {
         "meetings": Event.objects.for_manager(mid).filter(
@@ -494,20 +503,20 @@ def dashboard_overview(request):
             scheduled_date__gte=week_ago_iso, scheduled_date__lte=today_iso,
         ).count(),
         "feedback_positive": Feedback.objects.for_manager(mid).filter(
-            created_at__date__gte=week_ago_iso, feedback_type="positive",
+            created_at__gte=week_ago_dt, feedback_type="positive",
         ).count(),
         "feedback_constructive": Feedback.objects.for_manager(mid).filter(
-            created_at__date__gte=week_ago_iso, feedback_type="constructive",
+            created_at__gte=week_ago_dt, feedback_type="constructive",
         ).count(),
         "journal_entries": JournalEntry.objects.for_manager(mid).filter(
             entry_date__gte=week_ago_iso,
         ).count(),
         "delegations_completed": Delegation.objects.for_manager(mid).filter(
-            status="completed", completed_at__date__gte=week_ago_iso,
+            status="completed", completed_at__gte=week_ago_dt,
         ).count(),
         "decisions_reviewed": Decision.objects.for_manager(mid).filter(
             status__in=["validated", "revised", "reversed"],
-            updated_at__date__gte=week_ago_iso,
+            updated_at__gte=week_ago_dt,
         ).count(),
     }
     recap["feedback_total"] = recap["feedback_positive"] + recap["feedback_constructive"]
