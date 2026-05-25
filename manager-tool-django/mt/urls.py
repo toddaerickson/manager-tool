@@ -75,6 +75,13 @@ urlpatterns = [
         "accounts/login/",
         RedirectView.as_view(url="/accounts/google/login/", permanent=False),
     ),
+    # Signup is closed at the framework level via ClosedSignupAdapter, but
+    # short-circuit the URL too so the form never renders. The bridge
+    # middleware (email→Manager) makes open signup an account-takeover risk.
+    path(
+        "accounts/signup/",
+        RedirectView.as_view(url="/accounts/google/login/", permanent=False),
+    ),
     path("accounts/", include("allauth.urls")),
     path("admin/", admin.site.urls),
 ]
