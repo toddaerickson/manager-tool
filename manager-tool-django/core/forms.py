@@ -139,6 +139,9 @@ class EventForm(forms.ModelForm):
 
     def __init__(self, *args, manager_id=None, **kwargs):
         super().__init__(*args, **kwargs)
+        # Stash manager_id for clean_team_member — without it, the cleaned
+        # team_member lookup is unscoped and accepts any tenant's member id.
+        self.manager_id = manager_id
         # Replace the ModelChoiceField with a plain ChoiceField so we can
         # add "(none)" and "All team members" sentinels.
         if manager_id is not None:
@@ -158,8 +161,10 @@ class EventForm(forms.ModelForm):
         if val == "all":
             return "all"  # sentinel — view handles expansion
         if val:
+            if self.manager_id is None:
+                raise forms.ValidationError("Form constructed without manager scope.")
             try:
-                return TeamMember.objects.get(pk=int(val))
+                return TeamMember.objects.for_manager(self.manager_id).get(pk=int(val))
             except (TeamMember.DoesNotExist, ValueError):
                 raise forms.ValidationError("Invalid team member.")
         return None

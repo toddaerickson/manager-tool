@@ -4374,3 +4374,82 @@ class TestLanding:
         resp = client.get("/")
         assert resp.status_code == 302
         assert resp.url.endswith("/dashboard/")
+
+
+@pytest.mark.django_db
+class TestAccountSignupClosed:
+    """The app is Google-OAuth-only. /accounts/signup/ must not allow
+    creating a User row — otherwise the email-iexact bridge middleware
+    is an account-takeover surface."""
+
+    def test_signup_get_redirects_to_google_login(self, client):
+        resp = client.get("/accounts/signup/")
+        # The URL-level RedirectView short-circuits before allauth renders.
+        assert resp.status_code == 302
+        assert "/accounts/google/login/" in resp["Location"]
+
+    def test_signup_post_does_not_create_user(self, client):
+        """Even if a future URL change accidentally re-exposes the form,
+        the ClosedSignupAdapter blocks signup at the framework level."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        before = User.objects.count()
+        resp = client.post("/accounts/signup/", {
+            "email": "attacker@example.com",
+            "password1": "ThisIs1StrongPassword!",
+        })
+        # Either 302 (URL redirect) or 403 (adapter rejection) is acceptable.
+        # What is NOT acceptable: a 200 success and a new User row.
+        assert resp.status_code in (302, 403, 404)
+        assert User.objects.count() == before, \
+            "Signup should be closed — no new User should have been created."
+
+
+@pytest.mark.django_db
+class TestEventFormTenantScoping:
+    """EventForm.clean_team_member must reject foreign-tenant team_member ids
+    posted directly to /events/schedule/."""
+
+    def _setup(self, client, username="evt_tenant"):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username=username, display_name="Mgr",
+            password_hash="x", email=f"{username}@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username=f"{username}@example.com",
+            email=f"{username}@example.com", password="x",
+        )
+        client.force_login(u)
+        return m
+
+    def test_cross_tenant_team_member_id_rejected(self, client):
+        from core.models import Event
+        m1 = self._setup(client, "evt_attacker")
+        m2 = Manager.objects.create(
+            username="evt_victim", display_name="Victim",
+            password_hash="x", email="evt_victim@example.com",
+        )
+        # Victim's team member — should never become reachable from m1.
+        victim_member = TeamMember.objects.create(name="Victim Direct", manager_id=m2.id)
+
+        before = Event.objects.for_manager(m1.id).count()
+        resp = client.post("/events/schedule/", {
+            "team_member": str(victim_member.id),
+            "event_type": "one_on_one",
+            "title": "attacker meeting",
+            "scheduled_date": "2026-06-01",
+            "scheduled_time": "10:00",
+            "duration_minutes": 30,
+        })
+        # The form should either re-render with an error (200) or redirect
+        # without writing the event. Critical: no Event with the victim's
+        # team_member should land in m1's tenant.
+        after_attacker = Event.objects.for_manager(m1.id).count()
+        assert after_attacker == before, \
+            f"Cross-tenant write: attacker tenant now has {after_attacker - before} extra event(s)"
+        # And the victim's tenant must also be unchanged.
+        assert Event.objects.for_manager(m2.id).count() == 0
+        # Sanity: response should not be a redirect to a successfully-created
+        # event detail page.
+        assert "events/" not in (resp.url if resp.status_code == 302 else "")

@@ -115,6 +115,10 @@ AUTHENTICATION_BACKENDS = [
 ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*"]
 ACCOUNT_EMAIL_VERIFICATION = "none"
+# Lock signup at the framework level — the app is Google-OAuth-only and the
+# email-iexact bridge middleware makes any open signup an account-takeover
+# surface. See core/auth_adapter.py.
+ACCOUNT_ADAPTER = "core.auth_adapter.ClosedSignupAdapter"
 SOCIALACCOUNT_PROVIDERS = {
     "google": {
         "APP": {
