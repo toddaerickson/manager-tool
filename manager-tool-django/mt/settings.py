@@ -181,12 +181,17 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https") if IS_PROD else No
 
 SENTRY_DSN = env("SENTRY_DSN")
 if SENTRY_DSN:
+    # Local import: importing core.* at module top forces the app to
+    # load before Django finishes settings parsing.
+    from core.utils import sentry_before_send
+
     sentry_sdk.init(
         dsn=SENTRY_DSN,
         integrations=[DjangoIntegration()],
         traces_sample_rate=0.1,
         send_default_pii=False,
         environment=env("MANAGER_TOOL_ENV"),
+        before_send=sentry_before_send,
     )
 
 
