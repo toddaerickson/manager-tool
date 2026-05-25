@@ -23,7 +23,10 @@ services:
 
     startCommand: gunicorn mt.wsgi:application --bind 0.0.0.0:$PORT
 
-    healthCheckPath: /
+    # /health/ returns JSON {status, git_sha} — checks the app is actually
+    # responding, not just the marketing landing page which would stay 200
+    # even if the rest of the app were broken.
+    healthCheckPath: /health/
 
     envVars:
       # Secrets — paste values in Render dashboard:
@@ -69,6 +72,15 @@ services:
         sync: false
       - key: DJANGO_SECRET_KEY
         sync: false
+      # Without CONFIG_ENCRYPTION_KEY the Fernet init raises and
+      # get_config swallows it → SMTP/Anthropic creds read as None
+      # → cron silently exits "no managers configured" every Monday.
+      - key: CONFIG_ENCRYPTION_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
       - key: MANAGER_TOOL_ENV
         value: prod
       - key: PYTHON_VERSION
@@ -88,6 +100,10 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: CONFIG_ENCRYPTION_KEY
+        sync: false
+      - key: SENTRY_DSN
         sync: false
       - key: MANAGER_TOOL_ENV
         value: prod
