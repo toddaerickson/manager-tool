@@ -60,13 +60,14 @@ services:
   - type: cron
     name: weekly-digest
     runtime: python
+    repo: https://github.com/toddaerickson/manager-tool
     rootDir: manager-tool-django
     plan: starter
     region: oregon
     branch: main
     schedule: "0 13 * * MON"  # 9 AM ET (UTC-4) every Monday
     buildCommand: pip install -r requirements.txt
-    command: python manage.py send_weekly_digests
+    startCommand: python manage.py send_weekly_digests
     envVars:
       - key: DATABASE_URL
         sync: false
@@ -89,13 +90,14 @@ services:
   - type: cron
     name: purge-deleted-members
     runtime: python
+    repo: https://github.com/toddaerickson/manager-tool
     rootDir: manager-tool-django
     plan: starter
     region: oregon
     branch: main
     schedule: "0 5 * * *"  # 1 AM ET daily
     buildCommand: pip install -r requirements.txt
-    command: python manage.py purge_deleted_team_members
+    startCommand: python manage.py purge_deleted_team_members
     envVars:
       - key: DATABASE_URL
         sync: false
