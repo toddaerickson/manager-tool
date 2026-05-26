@@ -3095,15 +3095,37 @@ class TestNotes:
             "team_member": tm.id,
             "note_date": "2026-05-09",
             "content": "Alice did great in the meeting",
-            "category": "praise",
+            "category": "observation",
         })
         assert resp.status_code == 302
         ns = RunningNote.objects.for_manager(m.id)
         assert ns.count() == 1
         n = ns.first()
         assert n.content == "Alice did great in the meeting"
-        assert n.category == "praise"
+        assert n.category == "observation"
         assert n.note_date == "2026-05-09"
+
+    def test_praise_category_rejected_at_form(self, client):
+        """Regression for the praise→feedback consolidation (migration
+        0010). New praise notes must NOT be creatable via the form —
+        praise is now structured Feedback. Without this guard the form
+        would re-create the duplicate channel the migration just moved
+        users off of."""
+        m, tm = self._setup(client)
+        resp = client.post("/notes/add/", {
+            "team_member": tm.id,
+            "note_date": "2026-05-09",
+            "content": "shouldn't save",
+            "category": "praise",
+        })
+        # Django ChoiceField rejects unknown values; the view either
+        # re-renders the form (200) or stays without redirect.
+        assert resp.status_code != 302, (
+            "Form accepted praise category — should reject post-migration 0010"
+        )
+        assert RunningNote.objects.for_manager(m.id).filter(
+            category="praise"
+        ).count() == 0
 
     def test_broadcast_note_has_null_member(self, client):
         m, _ = self._setup(client)

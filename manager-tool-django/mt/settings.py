@@ -27,6 +27,19 @@ environ.Env.read_env(BASE_DIR / ".env")
 IS_PROD = env("MANAGER_TOOL_ENV") == "prod"
 DEBUG = not IS_PROD
 
+# Fail-closed: in prod, refuse to start if the per-tenant config encryption
+# key is missing. The Config table stores SMTP creds and Anthropic API
+# keys Fernet-encrypted by core/services/encryption.py — a missing key
+# would either silently store new values plaintext or 500 on first read
+# of an encrypted row. Either is unacceptable on a multi-tenant deploy.
+# Mirrors Streamlit's L12 / M9 audit guarantee that the cutover migrated
+# us off Streamlit was supposed to preserve. Dev is exempt — encryption
+# auto-generates a per-checkout keyfile in non-prod (see encryption.py).
+if IS_PROD and not os.environ.get("CONFIG_ENCRYPTION_KEY"):
+    raise RuntimeError(
+        "CONFIG_ENCRYPTION_KEY is required when MANAGER_TOOL_ENV=prod"
+    )
+
 SECRET_KEY = env("DJANGO_SECRET_KEY")
 ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS")
 
