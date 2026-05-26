@@ -92,6 +92,7 @@ from core.views.settings_views import (  # noqa: F401
 )
 from core.views.reference import (  # noqa: F401
     analytics,
+    audit_log,
     history,
     resources,
 )

@@ -6,13 +6,13 @@ from django.contrib.auth.decorators import login_required
 from django.shortcuts import render
 
 from core.models import (
-    ActionItem, Decision, Delegation, Event, Feedback, Goal, JournalEntry, RunningNote, TeamMember,
+    ActionItem, AuditLog, Decision, Delegation, Event, Feedback, Goal, JournalEntry, RunningNote, TeamMember,
 )
 from core.services.journal import journal_streak as _journal_streak
 from core.views._common import _require_manager
 
 # ============================================================
-# Reference pages — Analytics, History, Resources
+# Reference pages — Analytics, History, Audit log, Resources
 # ============================================================
 
 
@@ -245,6 +245,62 @@ def history(request):
         "page": page,
         "has_next": has_next,
         "has_prev": has_prev,
+    })
+
+
+@login_required
+def audit_log(request):
+    """Read-only audit trail of HR-sensitive mutations.
+
+    Paginated (50/page). Optional ?entity= and ?actor= filters. Manager-
+    scoped via TenantManager; no edit affordances anywhere on the page.
+    Complements migration 0009 which added the actor_type column so
+    operator vs background-job writes can be distinguished.
+    """
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    mid = manager.id
+    qs = AuditLog.objects.for_manager(mid)
+
+    entity = request.GET.get("entity", "").strip()
+    if entity:
+        qs = qs.filter(entity_type=entity)
+    actor = request.GET.get("actor", "").strip()
+    if actor in ("user", "system"):
+        qs = qs.filter(actor_type=actor)
+
+    qs = qs.order_by("-created_at")
+
+    PAGE_SIZE = 50
+    try:
+        page = max(1, int(request.GET.get("page", 1)))
+    except ValueError:
+        page = 1
+    total = qs.count()
+    start = (page - 1) * PAGE_SIZE
+    rows = list(qs[start:start + PAGE_SIZE])
+    has_next = start + PAGE_SIZE < total
+    has_prev = page > 1
+
+    # Entity-type filter dropdown — distinct values THIS manager has logged
+    # (avoids leaking the schema of unrelated tenants via the dropdown).
+    entity_types = list(
+        AuditLog.objects.for_manager(mid)
+        .values_list("entity_type", flat=True)
+        .distinct()
+        .order_by("entity_type")
+    )
+
+    return render(request, "audit_log.html", {
+        "rows": rows,
+        "entity": entity,
+        "actor": actor,
+        "entity_types": entity_types,
+        "page": page,
+        "has_next": has_next,
+        "has_prev": has_prev,
+        "total": total,
     })
 
 

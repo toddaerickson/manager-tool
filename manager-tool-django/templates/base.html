@@ -112,6 +112,8 @@
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'analytics' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Analytics</a>
           <a href="{% url 'history' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'history' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">History</a>
+          <a href="{% url 'audit-log' %}"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'audit-log' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Audit Log</a>
           <a href="{% url 'resources' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'resources' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Resources</a>
           <a href="{% url 'team' %}"

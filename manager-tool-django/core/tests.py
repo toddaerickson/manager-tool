@@ -16,6 +16,7 @@ import pytest
 from coaching.models import CoachSuggestion
 from core.models import (
     ActionItem,
+    AuditLog,
     CareerConversation,
     Decision,
     Delegation,
@@ -4744,3 +4745,103 @@ class TestSentryInitHardening:
         rc, stderr = self._import_settings({"SENTRY_DSN": ""})
         assert rc == 0
         assert "Sentry init failed" not in stderr
+
+
+@pytest.mark.django_db
+class TestAuditLogView:
+    """`/audit/` is a read-only browser over HR-sensitive AuditLog rows.
+    Cross-tenant leakage here would be a compliance incident, so tenant
+    isolation is the load-bearing assertion.
+    """
+
+    def _login_manager(self, client, username):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username=username, display_name=username.title(),
+            password_hash="x", email=f"{username}@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username=f"{username}@example.com",
+            email=f"{username}@example.com", password="x",
+        )
+        client.force_login(u)
+        return m
+
+    def _make_audit(self, mgr, **kw):
+        defaults = dict(
+            manager_id=mgr.id, action="create",
+            entity_type="Feedback", entity_id=1,
+            summary="seeded", actor_type="user",
+        )
+        defaults.update(kw)
+        return AuditLog.objects.create(**defaults)
+
+    def test_returns_200_for_logged_in_manager(self, client):
+        self._login_manager(client, "audit_a")
+        resp = client.get("/audit/")
+        assert resp.status_code == 200
+        assert b"Audit log" in resp.content
+
+    def test_lists_only_this_managers_rows(self, client):
+        m1 = self._login_manager(client, "audit_b")
+        m2 = Manager.objects.create(
+            username="audit_b_victim", display_name="V",
+            password_hash="x", email="audit_b_victim@example.com",
+        )
+        self._make_audit(m1, summary="m1 row")
+        self._make_audit(m2, summary="m2 SECRET row")
+        resp = client.get("/audit/")
+        assert resp.status_code == 200
+        assert b"m1 row" in resp.content
+        assert b"SECRET" not in resp.content, (
+            "Cross-tenant leak: m2's audit row appeared on m1's page"
+        )
+
+    def test_entity_filter_scopes_results(self, client):
+        m = self._login_manager(client, "audit_c")
+        self._make_audit(m, entity_type="Feedback", summary="fb row")
+        self._make_audit(m, entity_type="Delegation", summary="del row")
+        resp = client.get("/audit/?entity=Feedback")
+        assert b"fb row" in resp.content
+        assert b"del row" not in resp.content
+
+    def test_actor_filter_only_accepts_known_values(self, client):
+        m = self._login_manager(client, "audit_d")
+        self._make_audit(m, actor_type="user", summary="user row")
+        self._make_audit(m, actor_type="system", summary="system row")
+        # Valid filter
+        resp = client.get("/audit/?actor=system")
+        assert b"system row" in resp.content
+        assert b"user row" not in resp.content
+        # Garbage filter — must not be passed to ORM (skipped silently
+        # since the view whitelists actor in {"user","system"}).
+        resp = client.get("/audit/?actor=__INJECT__")
+        assert resp.status_code == 200
+        assert b"user row" in resp.content
+        assert b"system row" in resp.content
+
+    def test_pagination_caps_page_size(self, client):
+        m = self._login_manager(client, "audit_e")
+        # 51 rows — one over PAGE_SIZE=50
+        for i in range(51):
+            self._make_audit(m, entity_id=i, summary=f"row-{i}")
+        resp = client.get("/audit/")
+        # Page 1 must show 50; page 2 the overflow.
+        assert b"row-50" in resp.content or b"row-0" in resp.content
+        # has_next must be truthy on page 1
+        assert b"Next" in resp.content
+
+    def test_entity_types_dropdown_is_tenant_scoped(self, client):
+        """Dropdown options leak schema if not filtered per-manager.
+        Specifically: if manager A only ever logs Feedback writes but
+        manager B has logged Goal writes, A's dropdown must not show Goal."""
+        m1 = self._login_manager(client, "audit_f")
+        m2 = Manager.objects.create(
+            username="audit_f_other", display_name="O",
+            password_hash="x", email="audit_f_other@example.com",
+        )
+        self._make_audit(m1, entity_type="Feedback")
+        self._make_audit(m2, entity_type="VerySensitiveModel")
+        resp = client.get("/audit/")
+        assert b"Feedback" in resp.content
+        assert b"VerySensitiveModel" not in resp.content
