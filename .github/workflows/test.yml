@@ -59,3 +59,24 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run Django PG smoke
         run: python scripts/smoke_pg_django.py
+
+  validate-render-blueprint:
+    name: Validate render.yaml
+    # Catches silent blueprint-schema bugs (e.g. `command:` vs
+    # `startCommand:`) that don't fail the deploy but quietly skip
+    # creating new services. PR #71 → PR #107 shipped one such bug
+    # that blocked cron creation for ~3 weeks before anyone noticed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install render CLI
+        # Pinned version: bump when needed. v2.18.0 matches the local
+        # toolchain used when this job was added.
+        run: |
+          curl -fsSL -o /tmp/render-cli.zip \
+            "https://github.com/render-oss/cli/releases/download/v2.18.0/cli_2.18.0_linux_amd64.zip"
+          python3 -c "import zipfile; zipfile.ZipFile('/tmp/render-cli.zip').extractall('/tmp/render-cli')"
+          install -m 755 /tmp/render-cli/cli_v2.18.0 /usr/local/bin/render
+          render --version
+      - name: Validate render.yaml
+        run: render blueprints validate ./render.yaml
