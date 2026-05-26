@@ -4209,6 +4209,83 @@ class TestConfigService:
         from core.services.config import get_all_config
         assert "anthropic_api_key" in get_all_config(m1.id)
 
+    # --- Audit-log coverage --------------------------------------------
+    # The credential leak that prompted this work would have been
+    # investigable in hindsight if Config changes had been audited.
+
+    def test_set_audits_nonsensitive_change(self):
+        from core.services.config import set_config
+        m = self._mgr()
+        before = AuditLog.objects.filter(manager_id=m.id).count()
+        set_config("manager_name", m.id, "Alice")
+        rows = AuditLog.objects.filter(
+            manager_id=m.id, entity_type="Config",
+        )
+        assert rows.count() - before == 1
+        r = rows.first()
+        assert r.action == "update"
+        assert r.actor_type == "user"
+        # Non-sensitive values are rendered in the summary.
+        assert "manager_name" in r.summary
+        assert "Alice" in r.summary
+
+    def test_set_audits_sensitive_change_without_value(self):
+        """Sensitive keys must never expose the secret value in the audit
+        summary. Anyone reading /audit/ should be able to see "key set"
+        but not the key itself."""
+        from core.services.config import set_config
+        m = self._mgr()
+        set_config("anthropic_api_key", m.id, "sk-ant-real-secret-VALUE")
+        r = AuditLog.objects.filter(
+            manager_id=m.id, entity_type="Config",
+        ).first()
+        assert r is not None
+        assert "anthropic_api_key" in r.summary
+        # The secret must NOT appear in plaintext in the summary.
+        assert "sk-ant-real-secret-VALUE" not in r.summary
+        assert "VALUE" not in r.summary
+        # Transition is recorded as "set".
+        assert "set" in r.summary
+
+    def test_set_audits_clearing_sensitive(self):
+        from core.services.config import set_config
+        m = self._mgr()
+        set_config("anthropic_api_key", m.id, "sk-ant-initial")
+        before = AuditLog.objects.filter(
+            manager_id=m.id, entity_type="Config",
+        ).count()
+        set_config("anthropic_api_key", m.id, "")
+        rows = AuditLog.objects.filter(
+            manager_id=m.id, entity_type="Config",
+        )
+        assert rows.count() - before == 1
+        # Latest row is the clear.
+        latest = rows.order_by("-created_at").first()
+        assert "cleared" in latest.summary
+
+    def test_unchanged_value_does_not_audit(self):
+        """settings_page submits all fields on every save, even unchanged
+        ones. Without change detection, every save would write N audit
+        rows. Setting the same value twice must be a single audit."""
+        from core.services.config import set_config
+        m = self._mgr()
+        set_config("manager_name", m.id, "Alice")
+        before = AuditLog.objects.filter(manager_id=m.id).count()
+        set_config("manager_name", m.id, "Alice")  # same value
+        set_config("manager_name", m.id, "Alice")  # again
+        assert AuditLog.objects.filter(manager_id=m.id).count() == before
+
+    def test_actor_kwarg_propagates(self):
+        """If a background job ever calls set_config, it can pass
+        actor='system' so /audit/?actor=system stays useful."""
+        from core.services.config import set_config
+        m = self._mgr()
+        set_config("manager_name", m.id, "FromCron", actor="system")
+        r = AuditLog.objects.filter(
+            manager_id=m.id, entity_type="Config",
+        ).order_by("-created_at").first()
+        assert r.actor_type == "system"
+
 
 @pytest.mark.django_db
 class TestSettingsPage:
