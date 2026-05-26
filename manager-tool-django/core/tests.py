@@ -4546,3 +4546,138 @@ class TestSentryBeforeSend:
         # than let its own bug suppress the real error report.
         out = sentry_before_send({"exception": "not-a-dict"}, None)
         assert out is not None
+
+
+class TestPraiseToFeedbackMigration:
+    """Hard regression for migration 0010.
+
+    The migration is irreversible (reverse raises NotImplementedError) so
+    a bug shipped without a test would destroy data on prod. Rather than
+    use MigrationExecutor (which can't roll back over an irreversible
+    operation cleanly), we load the migration module and call its forward
+    function directly against the current schema, seeded with fixtures
+    matching the three documented input cases:
+
+    1. praise + team_member -> new Feedback row, source RunningNote deleted
+    2. praise + no team_member (broadcast) -> RunningNote preserved
+    3. non-praise -> RunningNote untouched
+    """
+
+    @staticmethod
+    def _load_migration():
+        # File name starts with a digit so `import` doesn't work.
+        import importlib.util
+        from pathlib import Path
+
+        path = (
+            Path(__file__).resolve().parent
+            / "migrations" / "0010_migrate_praise_notes_to_feedback.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "mig_0010", str(path),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    @pytest.mark.django_db
+    def test_forward_migrates_praise_with_member_only(self):
+        from datetime import datetime, timezone as dt_tz
+        from django.apps import apps as global_apps
+
+        from core.models import Feedback, Manager, RunningNote, TeamMember
+
+        mgr = Manager.objects.create(
+            username="mig_test", display_name="M",
+            password_hash="x", email="mig_test@example.com",
+        )
+        member = TeamMember.objects.create(name="A", manager_id=mgr.id)
+
+        # Seed: one praise+member, one broadcast-praise, one non-praise.
+        RunningNote.objects.create(
+            manager_id=mgr.id, team_member_id=member.id,
+            note_date="2026-05-01", category="praise",
+            content="nice debugging on the migration",
+            created_at=datetime(2026, 5, 1, 12, 0, tzinfo=dt_tz.utc),
+        )
+        RunningNote.objects.create(
+            manager_id=mgr.id, team_member_id=None,
+            note_date="2026-05-02", category="praise",
+            content="team-wide shout-out",
+            created_at=datetime(2026, 5, 2, 12, 0, tzinfo=dt_tz.utc),
+        )
+        RunningNote.objects.create(
+            manager_id=mgr.id, team_member_id=member.id,
+            note_date="2026-05-03", category="concern",
+            content="behind on the metric",
+            created_at=datetime(2026, 5, 3, 12, 0, tzinfo=dt_tz.utc),
+        )
+
+        # Invoke the migration's forward function directly. schema_editor
+        # is unused by this RunPython callable (no DDL — pure data move).
+        mod = self._load_migration()
+        mod.migrate_praise_to_feedback(global_apps, schema_editor=None)
+
+        # 1. praise + team_member -> became a positive Feedback row.
+        feedback = Feedback.objects.filter(
+            manager_id=mgr.id, team_member_id=member.id,
+        )
+        assert feedback.count() == 1
+        f = feedback.first()
+        assert f.feedback_type == "positive"
+        assert "nice debugging on the migration" in (f.behavior or "")
+        assert "migrated from running note" in (f.situation or "")
+
+        # 1b. Source RunningNote was deleted.
+        praise_with_member = RunningNote.objects.filter(
+            manager_id=mgr.id, category="praise", team_member_id=member.id,
+        )
+        assert praise_with_member.count() == 0
+
+        # 2. Broadcast praise (team_member_id NULL) - preserved.
+        broadcast = RunningNote.objects.filter(
+            manager_id=mgr.id, category="praise", team_member_id__isnull=True,
+        )
+        assert broadcast.count() == 1
+        assert "team-wide shout-out" in (broadcast.first().content or "")
+
+        # 3. Non-praise - untouched.
+        concern = RunningNote.objects.filter(
+            manager_id=mgr.id, category="concern",
+        )
+        assert concern.count() == 1
+        assert "behind on the metric" in (concern.first().content or "")
+
+    @pytest.mark.django_db
+    def test_forward_is_noop_with_no_praise_rows(self):
+        """Re-running the migration on a DB with no praise rows must be a
+        clean no-op — protects against the prod deploy where most managers
+        will have zero praise rows and the migration runs once on empty
+        input."""
+        from core.models import Feedback, Manager, RunningNote, TeamMember
+        from django.apps import apps as global_apps
+
+        mgr = Manager.objects.create(
+            username="noop_test", display_name="N",
+            password_hash="x", email="noop_test@example.com",
+        )
+        TeamMember.objects.create(name="B", manager_id=mgr.id)
+
+        before_feedback = Feedback.objects.filter(manager_id=mgr.id).count()
+        before_notes = RunningNote.objects.filter(manager_id=mgr.id).count()
+
+        mod = self._load_migration()
+        mod.migrate_praise_to_feedback(global_apps, schema_editor=None)
+
+        assert Feedback.objects.filter(manager_id=mgr.id).count() == before_feedback
+        assert RunningNote.objects.filter(manager_id=mgr.id).count() == before_notes
+
+    @pytest.mark.django_db
+    def test_reverse_raises_not_implemented(self):
+        """Reverse must hard-block — silently re-adding "praise" rows
+        from Feedback would create duplicates and lose ordering."""
+        from django.apps import apps as global_apps
+
+        mod = self._load_migration()
+        with pytest.raises(NotImplementedError):
+            mod.reverse_unsupported(global_apps, schema_editor=None)

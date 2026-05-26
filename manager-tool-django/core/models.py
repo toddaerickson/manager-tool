@@ -203,12 +203,15 @@ class Event(models.Model):
                 name="ix_events_manager_date_status",
             ),
             # Partial index — only rows where parent_event_id IS NOT NULL.
+            # This index supersedes the plain ix_events_parent (dropped in
+            # migration 0008): the partial index is queried on the join key
+            # (parent_event_id) for the same use cases, while also covering
+            # manager_id for tenant-scoped lookups.
             models.Index(
                 fields=["manager_id", "parent_event"],
                 name="ix_events_manager_parent",
                 condition=Q(parent_event__isnull=False),
             ),
-            models.Index(fields=["parent_event"], name="ix_events_parent"),
         ]
 
 
@@ -504,11 +507,20 @@ class AuditLog(models.Model):
         ("delete", "Delete"),
     ]
 
+    ACTOR_TYPE_CHOICES = [
+        ("user", "User"),
+        ("system", "System"),
+    ]
+
     manager_id = models.IntegerField(db_index=True)
     action = models.TextField()  # create / update / delete
     entity_type = models.TextField()  # e.g. "TeamMember", "Feedback"
     entity_id = models.IntegerField()
     summary = models.TextField()  # human-readable description
+    # Distinguishes operator-driven writes from background-job writes
+    # (cron purges, digest sends). Default 'user' so existing rows keep
+    # their semantics — only new system writes are tagged.
+    actor_type = models.TextField(choices=ACTOR_TYPE_CHOICES, default="user")
     created_at = models.DateTimeField(auto_now_add=True)
 
     objects = TenantManager()
