@@ -64,6 +64,7 @@ urlpatterns = [
     path("feedback/<int:feedback_id>/delete/", core_views.feedback_delete, name="feedback-delete"),
     path("analytics/", core_views.analytics, name="analytics"),
     path("history/", core_views.history, name="history"),
+    path("audit/", core_views.audit_log, name="audit-log"),
     path("resources/", core_views.resources, name="resources"),
     path("settings/", core_views.settings_page, name="settings"),
     path("settings/send-digest/", core_views.settings_send_digest, name="settings-send-digest"),
