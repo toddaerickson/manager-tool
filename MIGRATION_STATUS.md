@@ -2,7 +2,7 @@
 
 Snapshot of where the Streamlit → Django migration stands. Update this doc when phase boundaries move; re-merge to main so it stays the source of truth for "where are we right now."
 
-**Last updated:** 2026-05-24
+**Last updated:** 2026-05-26
 **Live Django app:** https://manager-tool-django.onrender.com
 **Plan:** `MIGRATION_PLAN.md` · **Gates:** `PHASE_GATES.md` · **Open design questions:** `manager-tool-django/ARCHITECTURE_DEFICITS.md` · **Design system:** `manager-tool-django/DESIGN.md`
 
@@ -102,10 +102,10 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - [x] Streamlit CI jobs (`tests-sqlite`, `smoke-pg`) removed; Django jobs remain
 - [x] `sessions` + `login_attempts` models removed; `core/migrations/0006` drops the tables (`SeparateDatabaseAndState`, idempotent `DROP ... IF EXISTS`)
 - [x] README points contributors at the Django app
-- [ ] **Verify `0006` applied to prod.** It's merged, so the next Render deploy's `manage.py migrate` applies it automatically — confirm with `\dt sessions` / `\dt login_attempts` (both gone). Back up first (see runbook). 
+- [x] **Verify `0006` applied to prod.** Confirmed 2026-05-26 by transitive proof: prod `/health` reports SHA `c78b708`, which has PR #110 (migration `0010_migrate_praise_notes_to_feedback`) in its ancestry. Django migrate is monotonic, so `0010` applied ⟹ `0001`–`0009` (including `0006`) applied. Direct `\dt sessions` / `\dt login_attempts` check still recommended next time someone has Neon SQL editor access, but no longer blocking.
 - [ ] Delete the Neon dev branch from the Neon console (manual — no API access from here)
 - [ ] Delete the orphaned `preview/pr-*` CI branches in Neon (one-time; the deterministic naming in `neon_workflow.yml` prevents new ones)
-- [ ] Delete the stale merged git branches `fix/event-dedupe` and `feat/event-time-dropdown` (GitHub UI)
+- [x] Delete the stale merged git branches `fix/event-dedupe` and `feat/event-time-dropdown` — already deleted on GitHub (auto-delete-merged-branches); local stale remote-tracking refs pruned 2026-05-26.
 
 `schema_postgres.sql`, `scripts/migrate_p2_config_to_id_pk.sql`, and `365_Great_Management_Ideas.md` stay at the repo root: the Django PG smoke test bootstraps the schema from the first two (`smoke_pg_django.py` mirrors the cutover bootstrap), and the coaching engine reads the wisdom library from the last (`coaching/services.py:107`). The other Streamlit `scripts/migrate_p1_*.sql` and `fix_sequences.sql` are pure history and live in `legacy/scripts/`.
 
