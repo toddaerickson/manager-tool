@@ -5231,3 +5231,244 @@ class TestPageRenderEscapesUserContent:
             status="active",
         )
         self._assert_payload_escaped(client.get("/delegations/"))
+
+
+# ============================================================
+# events_send_invite view tests (audit gap #2)
+#
+# POST /events/<id>/invite/ — sends an RFC 5545 calendar invite via
+# SMTP and writes an audit log entry. The view has three side effects:
+#   1. Sets events.calendar_invite_sent = 1 on success.
+#   2. Writes an AuditLog row (action=create, entity=CalendarInvite).
+#   3. Calls send_calendar_invite which opens an SMTP connection.
+#
+# Before these tests existed only the service-layer
+# (test_send_calendar_invite_no_smtp) was covered. The view's
+# cross-tenant guard, missing-email branch, no-audit-on-failure
+# invariant, and HTTP-method guard were all untested.
+#
+# SMTP is mocked via unittest.mock.patch on
+# `core.services.calendar.send_calendar_invite` — that's where the
+# view's inline `from core.services.calendar import ...` resolves at
+# call time, so the patch takes effect there.
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestEventsSendInvite:
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client, username="invite_mgr", login=True,
+               member_email="direct@example.com"):
+        m = Manager.objects.create(
+            username=username, display_name="Mgr",
+            password_hash="x", email=f"{username}@example.com",
+        )
+        if login:
+            self._login_as(client, f"{username}@example.com")
+        tm = TeamMember.objects.create(
+            name="Direct", manager_id=m.id, email=member_email,
+        )
+        ev = Event.objects.create(
+            manager_id=m.id, title="1:1", event_type="one_on_one",
+            team_member=tm, scheduled_date="2026-06-01",
+            scheduled_time="10:00", status="scheduled",
+            calendar_invite_sent=0,
+        )
+        return m, tm, ev
+
+    def test_get_not_allowed(self, client):
+        m, _, ev = self._setup(client)
+        resp = client.get(f"/events/{ev.id}/invite/")
+        assert resp.status_code == 405
+
+    def test_anonymous_post_redirects_to_login(self, client):
+        m, _, ev = self._setup(client, login=False)
+        resp = client.post(f"/events/{ev.id}/invite/")
+        # @login_required → 302 to login; the route should NOT execute.
+        assert resp.status_code == 302
+        ev.refresh_from_db()
+        assert ev.calendar_invite_sent == 0
+        assert AuditLog.objects.filter(entity_type="CalendarInvite").count() == 0
+
+    def test_logged_in_user_with_no_manager_blocked(self, client):
+        """A logged-in user whose email matches no Manager row is rejected
+        by _require_manager. The view must NOT mutate or audit.
+
+        _require_manager returns 403 OR redirects to onboarding depending
+        on configuration — assert it's not a 200, and that no side effect
+        landed."""
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username="orphan@example.com",
+            email="orphan@example.com", password="x",
+        )
+        # Need an event to address, but it must belong to *someone*; this
+        # test exercises the "logged in user has no Manager row" branch.
+        m_owner = Manager.objects.create(
+            username="ev_owner", display_name="Owner",
+            password_hash="x", email="ev_owner@example.com",
+        )
+        tm = TeamMember.objects.create(
+            name="D", manager_id=m_owner.id, email="d@example.com",
+        )
+        ev = Event.objects.create(
+            manager_id=m_owner.id, title="X", event_type="one_on_one",
+            team_member=tm, scheduled_date="2026-06-01",
+            scheduled_time="10:00", status="scheduled",
+            calendar_invite_sent=0,
+        )
+        client.force_login(u)
+        resp = client.post(f"/events/{ev.id}/invite/")
+        # The view should not succeed.
+        assert resp.status_code != 200 or "invite_success" not in resp.context
+        ev.refresh_from_db()
+        assert ev.calendar_invite_sent in (0, None), \
+            "No-manager request must not flip the sent flag"
+        assert AuditLog.objects.filter(entity_type="CalendarInvite").count() == 0
+
+    def test_cross_tenant_event_returns_404(self, client):
+        """Manager A POSTs to an event owned by manager B. The
+        get_object_or_404 on for_manager(A.id) must reject."""
+        m_a, _, _ = self._setup(client, "invite_a")
+        m_b = Manager.objects.create(
+            username="invite_b", display_name="B",
+            password_hash="x", email="invite_b@example.com",
+        )
+        tm_b = TeamMember.objects.create(
+            name="B Direct", manager_id=m_b.id, email="b_direct@example.com",
+        )
+        victim_ev = Event.objects.create(
+            manager_id=m_b.id, title="B's meeting", event_type="one_on_one",
+            team_member=tm_b, scheduled_date="2026-06-01",
+            scheduled_time="10:00", status="scheduled",
+            calendar_invite_sent=0,
+        )
+        resp = client.post(f"/events/{victim_ev.id}/invite/")
+        assert resp.status_code == 404
+        # No mutation on victim's row.
+        victim_ev.refresh_from_db()
+        assert victim_ev.calendar_invite_sent == 0
+        # No audit row in either tenant.
+        assert AuditLog.objects.for_manager(m_a.id).filter(
+            entity_type="CalendarInvite"
+        ).count() == 0
+        assert AuditLog.objects.for_manager(m_b.id).filter(
+            entity_type="CalendarInvite"
+        ).count() == 0
+
+    def test_event_without_team_member_returns_error_no_smtp(self, client):
+        """If the event has no team_member at all (e.g. all-team event),
+        we must NOT attempt SMTP and NOT write an audit row."""
+        from unittest.mock import patch
+        m = Manager.objects.create(
+            username="invite_nomem", display_name="M",
+            password_hash="x", email="invite_nomem@example.com",
+        )
+        self._login_as(client, "invite_nomem@example.com")
+        ev = Event.objects.create(
+            manager_id=m.id, title="All-hands", event_type="other",
+            team_member=None,
+            scheduled_date="2026-06-01", scheduled_time="10:00",
+            status="scheduled", calendar_invite_sent=0,
+        )
+        with patch("core.services.calendar.send_calendar_invite") as mock_send:
+            resp = client.post(f"/events/{ev.id}/invite/")
+        assert resp.status_code == 200
+        assert mock_send.call_count == 0, \
+            "send_calendar_invite must not be reached when team_member is None"
+        body = resp.content.decode()
+        assert "No email address" in body
+        ev.refresh_from_db()
+        assert ev.calendar_invite_sent == 0
+        assert AuditLog.objects.filter(entity_type="CalendarInvite").count() == 0
+
+    def test_team_member_without_email_returns_error_no_smtp(self, client):
+        from unittest.mock import patch
+        m, tm, ev = self._setup(client, "invite_noemail", member_email=None)
+        with patch("core.services.calendar.send_calendar_invite") as mock_send:
+            resp = client.post(f"/events/{ev.id}/invite/")
+        assert resp.status_code == 200
+        assert mock_send.call_count == 0, (
+            "send_calendar_invite must not be reached when team_member "
+            "has no email — empty email is a no-op, not an SMTP error."
+        )
+        body = resp.content.decode()
+        assert "No email address" in body
+        ev.refresh_from_db()
+        assert ev.calendar_invite_sent == 0
+        assert AuditLog.objects.filter(entity_type="CalendarInvite").count() == 0
+
+    def test_send_success_sets_flag_and_writes_audit(self, client):
+        from unittest.mock import patch
+        m, tm, ev = self._setup(client, "invite_ok")
+        with patch(
+            "core.services.calendar.send_calendar_invite",
+            return_value=(True, "Email sent"),
+        ) as mock_send:
+            resp = client.post(f"/events/{ev.id}/invite/")
+        assert resp.status_code == 200
+        assert mock_send.call_count == 1
+        # Mock was called with (event, recipient_email, recipient_name, manager_id=...)
+        args, kwargs = mock_send.call_args
+        assert args[0].id == ev.id, "wrong event passed to invite sender"
+        assert args[1] == tm.email
+        assert kwargs.get("manager_id") == m.id
+        ev.refresh_from_db()
+        assert ev.calendar_invite_sent == 1, \
+            "Successful send must flip calendar_invite_sent to 1"
+        # Audit row exists, scoped to this manager, with the right shape.
+        logs = list(AuditLog.objects.for_manager(m.id).filter(
+            entity_type="CalendarInvite"
+        ))
+        assert len(logs) == 1
+        log = logs[0]
+        assert log.action == "create"
+        assert log.entity_id == ev.id
+        assert tm.email in (log.summary or "")
+
+    def test_send_failure_no_flag_no_audit(self, client):
+        """When send_calendar_invite returns (False, msg), the view must
+        NOT flip calendar_invite_sent and MUST NOT write an audit row.
+        Auditing a failed send would corrupt the trail."""
+        from unittest.mock import patch
+        m, tm, ev = self._setup(client, "invite_fail")
+        with patch(
+            "core.services.calendar.send_calendar_invite",
+            return_value=(False, "SMTP authentication failed"),
+        ):
+            resp = client.post(f"/events/{ev.id}/invite/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "SMTP" in body or "auth" in body.lower(), \
+            "Failure message should surface in the rendered detail page"
+        ev.refresh_from_db()
+        assert ev.calendar_invite_sent == 0, \
+            "Failed send must NOT flip calendar_invite_sent"
+        assert AuditLog.objects.for_manager(m.id).filter(
+            entity_type="CalendarInvite"
+        ).count() == 0, "Failed send must NOT write an audit row"
+
+    def test_audit_row_uses_acting_manager_id_not_event_owner(self, client):
+        """Edge case: even though the view's get_object_or_404 already
+        scopes to the acting manager (so event.manager_id == acting
+        manager.id always), pin the audit row's manager_id to the
+        acting manager explicitly. Regression guard for log_mutation
+        being called with the wrong manager_id (e.g. event.manager_id
+        on a SET NULL'd recurring child)."""
+        from unittest.mock import patch
+        m, tm, ev = self._setup(client, "invite_owner")
+        with patch(
+            "core.services.calendar.send_calendar_invite",
+            return_value=(True, "Email sent"),
+        ):
+            client.post(f"/events/{ev.id}/invite/")
+        log = AuditLog.objects.filter(entity_type="CalendarInvite").get()
+        assert log.manager_id == m.id
