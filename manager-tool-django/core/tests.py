@@ -669,6 +669,48 @@ class TestPurgeDeletedTeamMembers:
         call_command("purge_deleted_team_members", "--dry-run")
         assert TeamMember.objects.filter(pk=expired.id).exists()
 
+    def test_purge_writes_system_audit_entries(self):
+        """Each hard-delete must leave an AuditLog row with actor="system"
+        and the member's name/id captured BEFORE the row was deleted.
+        Without this, hard-deletes have no trail (the row that records
+        the deletion is gone)."""
+        from datetime import timedelta
+        from django.core.management import call_command
+        from django.utils import timezone
+        m = Manager.objects.create(
+            username="purge_audit", display_name="P",
+            password_hash="x", email="purge_audit@example.com",
+        )
+        a = TeamMember.objects.create(
+            name="Alice", manager_id=m.id,
+            deleted_at=timezone.now() - timedelta(days=45),
+        )
+        b = TeamMember.objects.create(
+            name="Bob", manager_id=m.id,
+            deleted_at=timezone.now() - timedelta(days=45),
+        )
+        before = AuditLog.objects.filter(manager_id=m.id).count()
+        call_command("purge_deleted_team_members")
+        after = AuditLog.objects.filter(manager_id=m.id)
+        assert after.count() - before == 2, (
+            f"Expected 2 new audit rows for 2 purged members; got {after.count() - before}"
+        )
+        # All purge audit rows are tagged actor="system"
+        purge_rows = after.filter(entity_type="TeamMember", action="delete")
+        assert purge_rows.count() == 2
+        for row in purge_rows:
+            assert row.actor_type == "system", (
+                f"Cron-driven delete logged as actor={row.actor_type}; "
+                f"should be 'system' to keep /audit/?actor=user clean"
+            )
+        # Names made it into the summary so the trail is readable.
+        summaries = [r.summary for r in purge_rows]
+        assert any("Alice" in s for s in summaries)
+        assert any("Bob" in s for s in summaries)
+        # And the audited entity_ids match the deleted rows.
+        audited_ids = sorted(r.entity_id for r in purge_rows)
+        assert audited_ids == sorted([a.id, b.id])
+
 
 # ============================================================
 # Phase 5.2a: Events — list, schedule one-off, cancel, complete
