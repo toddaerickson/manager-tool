@@ -4092,6 +4092,208 @@ class TestOneOnOneSessionScoping:
         assert not m2_rows.filter(team_member__name="M1 report").exists()
 
 
+class TestOneOnOneSessionNormalizeTags:
+    """Unit tests for OneOnOneSession.normalize_tags."""
+
+    def test_empty_inputs(self):
+        assert OneOnOneSession.normalize_tags(None) == ""
+        assert OneOnOneSession.normalize_tags("") == ""
+        assert OneOnOneSession.normalize_tags("   ") == ""
+        assert OneOnOneSession.normalize_tags(",,, , ,") == ""
+
+    def test_lowercase_and_trim(self):
+        assert OneOnOneSession.normalize_tags("  Career ") == "career"
+        assert OneOnOneSession.normalize_tags("PROJECT-X") == "project-x"
+
+    def test_dedupe_preserves_first_seen_order(self):
+        # Case-insensitive duplicates collapse; order of first occurrence kept.
+        got = OneOnOneSession.normalize_tags("career, 1on1, Career, project-x, 1ON1")
+        assert got == "career,1on1,project-x"
+
+    def test_drops_empty_pieces(self):
+        assert OneOnOneSession.normalize_tags("a,, b,,,c") == "a,b,c"
+
+    def test_tags_list_property(self):
+        s = OneOnOneSession(tags="career,1on1,project-x")
+        assert s.tags_list == ["career", "1on1", "project-x"]
+        s2 = OneOnOneSession(tags=None)
+        assert s2.tags_list == []
+        s3 = OneOnOneSession(tags="")
+        assert s3.tags_list == []
+
+
+@pytest.mark.django_db
+class TestOneOnOneSessionTagsListAndFilter:
+    """`?tag=foo` filters sessions to those tagged exactly `foo`."""
+
+    def _setup(self, client):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username="todd_tags", display_name="Todd",
+            password_hash="x", email="todd_tags@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username="todd_tags@example.com",
+            email="todd_tags@example.com",
+            password="x",
+        )
+        client.force_login(u)
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        return m, tm
+
+    def test_session_tags_render_as_chips_on_list(self, client):
+        m, tm = self._setup(client)
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-20",
+            status="completed", tags="career,1on1",
+        )
+        body = client.get("/meetings/").content.decode()
+        assert ">career<" in body
+        assert ">1on1<" in body
+
+    def test_tag_filter_exact_element_match_not_substring(self, client):
+        """`?tag=foo` must NOT match `foobar` — exact CSV element only."""
+        m, tm = self._setup(client)
+        # Two sessions: one tagged "career", another "career-growth"
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-20",
+            status="completed", tags="career",
+            direct_notes="career session text",
+        )
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-21",
+            status="completed", tags="career-growth",
+            direct_notes="growth session text",
+        )
+        body = client.get("/meetings/?tag=career").content.decode()
+        assert "career session text" in body
+        assert "growth session text" not in body
+
+    def test_tag_filter_combines_with_member_filter(self, client):
+        m, tm = self._setup(client)
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m.id)
+        # Alice/career — both filters match
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-20",
+            status="completed", tags="career",
+            direct_notes="alice career",
+        )
+        # Bob/career — tag matches but member filter rejects
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm2, session_date="2026-05-21",
+            status="completed", tags="career",
+            direct_notes="bob career",
+        )
+        body = client.get(
+            f"/meetings/?tag=career&member={tm.id}",
+        ).content.decode()
+        assert "alice career" in body
+        assert "bob career" not in body
+
+    def test_all_tags_chip_strip_renders_known_tags(self, client):
+        m, tm = self._setup(client)
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-20",
+            status="completed", tags="career,1on1",
+        )
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-21",
+            status="completed", tags="project-x",
+        )
+        body = client.get("/meetings/").content.decode()
+        for t in ("career", "1on1", "project-x"):
+            assert f"?tag={t}" in body
+
+
+@pytest.mark.django_db
+class TestOneOnOneSessionTagsAutosave:
+    """Autosave normalizes tags input and clears them when blanked."""
+
+    def _setup(self, client):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username="todd_tags_as", display_name="Todd",
+            password_hash="x", email="todd_tags_as@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username="todd_tags_as@example.com",
+            email="todd_tags_as@example.com",
+            password="x",
+        )
+        client.force_login(u)
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-20",
+            status="draft",
+        )
+        return m, session
+
+    def test_autosave_normalizes_tags(self, client):
+        m, s = self._setup(client)
+        resp = client.post(f"/meetings/{s.id}/autosave/", {
+            "direct_notes": "",
+            "manager_notes": "",
+            "followup_notes": "",
+            "tags": "  Career , 1on1, career , project-X, ,",
+        })
+        assert resp.status_code == 200
+        s.refresh_from_db()
+        assert s.tags == "career,1on1,project-x"
+
+    def test_autosave_clearing_tags_stores_none(self, client):
+        m, s = self._setup(client)
+        s.tags = "career"
+        s.save()
+        resp = client.post(f"/meetings/{s.id}/autosave/", {
+            "direct_notes": "",
+            "manager_notes": "",
+            "followup_notes": "",
+            "tags": "",
+        })
+        assert resp.status_code == 200
+        s.refresh_from_db()
+        assert s.tags is None
+
+
+@pytest.mark.django_db
+class TestOneOnOneSessionTagsCrossTenant:
+    """`?tag=foo` and the tag chip strip must respect TenantManager scoping."""
+
+    def test_tag_filter_does_not_leak_other_tenant(self, client):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username="todd_xt", display_name="Todd",
+            password_hash="x", email="todd_xt@example.com",
+        )
+        m2 = Manager.objects.create(
+            username="other_xt", display_name="Other",
+            password_hash="x", email="other_xt@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username="todd_xt@example.com",
+            email="todd_xt@example.com",
+            password="x",
+        )
+        client.force_login(u)
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        # m2 has a session with tag "secret-tag" — Todd's filter must not see it.
+        OneOnOneSession.objects.create(
+            manager=m2, team_member=tm2, session_date="2026-05-20",
+            status="completed", tags="secret-tag",
+            direct_notes="secret cross-tenant string",
+        )
+        # Todd's session — empty tags, harmless.
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-21",
+            status="completed",
+        )
+        body = client.get("/meetings/?tag=secret-tag").content.decode()
+        assert "secret cross-tenant string" not in body
+        # The cross-tenant tag must not appear in Todd's chip strip either.
+        assert "?tag=secret-tag" not in body
+
+
 # ============================================================
 # Phase 6 — Settings: encryption, config CRUD, settings page
 # ============================================================

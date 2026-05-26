@@ -45,12 +45,34 @@
     <input type="search" name="q" value="{{ search_query|default:'' }}"
            placeholder="Search notes…"
            class="text-sm border border-slate-300 rounded px-2 py-1 w-56">
+    {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}">{% endif %}
     <button type="submit"
             class="text-sm bg-accent-700 text-white rounded px-3 py-1 hover:bg-accent-800">Search</button>
-    {% if search_query or selected_member %}
+    {% if search_query or selected_member or selected_tag %}
       <a href="{% url 'meetings' %}" class="text-xs text-slate-500 hover:text-slate-700">clear</a>
     {% endif %}
   </form>
+
+  {# ── Tag filter chips ── #}
+  {% if all_tags or selected_tag %}
+  <div class="mb-4 flex flex-wrap items-center gap-1.5">
+    <span class="text-xs uppercase tracking-wider text-slate-500 mr-1">Tags:</span>
+    {% for t in all_tags %}
+      {% if t == selected_tag %}
+        <a href="?{% if selected_member %}member={{ selected_member }}&amp;{% endif %}{% if search_query %}q={{ search_query }}&amp;{% endif %}"
+           class="text-xs px-2 py-0.5 rounded-full bg-accent-700 text-white">{{ t }} ×</a>
+      {% else %}
+        <a href="?tag={{ t }}{% if selected_member %}&amp;member={{ selected_member }}{% endif %}{% if search_query %}&amp;q={{ search_query }}{% endif %}"
+           class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 hover:bg-slate-200">{{ t }}</a>
+      {% endif %}
+    {% endfor %}
+    {% if selected_tag and selected_tag not in all_tags %}
+      {# selected_tag was filtered to but is no longer used by any session — show it as active anyway #}
+      <a href="?{% if selected_member %}member={{ selected_member }}&amp;{% endif %}{% if search_query %}q={{ search_query }}&amp;{% endif %}"
+         class="text-xs px-2 py-0.5 rounded-full bg-accent-700 text-white">{{ selected_tag }} ×</a>
+    {% endif %}
+  </div>
+  {% endif %}
 
   {# ── Start new meeting ── #}
   <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not drafts and not completed %}open{% endif %}>
@@ -87,6 +109,14 @@
         {% if s.direct_notes %}
           <p class="text-sm text-slate-600 truncate">{{ s.direct_notes|truncatechars:80 }}</p>
         {% endif %}
+        {% if s.tags_list %}
+          <div class="mt-1.5 flex flex-wrap gap-1">
+            {% for t in s.tags_list %}
+              <a href="?tag={{ t }}{% if selected_member %}&amp;member={{ selected_member }}{% endif %}"
+                 class="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 hover:bg-slate-200">{{ t }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
       </div>
       {% endfor %}
     </div>
@@ -119,6 +149,14 @@
         </div>
         {% if s.direct_notes %}
           <p class="text-sm text-slate-600 truncate">{{ s.direct_notes|truncatechars:80 }}</p>
+        {% endif %}
+        {% if s.tags_list %}
+          <div class="mt-1.5 flex flex-wrap gap-1">
+            {% for t in s.tags_list %}
+              <a href="?tag={{ t }}{% if selected_member %}&amp;member={{ selected_member }}{% endif %}"
+                 class="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 hover:bg-slate-200">{{ t }}</a>
+            {% endfor %}
+          </div>
         {% endif %}
       </div>
       {% endfor %}

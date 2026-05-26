@@ -255,6 +255,7 @@ class OneOnOneSession(models.Model):
     direct_notes = models.TextField(blank=True, null=True)
     manager_notes = models.TextField(blank=True, null=True)
     followup_notes = models.TextField(blank=True, null=True)
+    tags = models.TextField(blank=True, null=True)
     status = models.TextField(
         default="draft",
         choices=[("draft", "Draft"), ("completed", "Completed")],
@@ -274,6 +275,29 @@ class OneOnOneSession(models.Model):
                 name="ix_one_on_one_member_date",
             ),
         ]
+
+    @staticmethod
+    def normalize_tags(raw: str | None) -> str:
+        """Normalize a raw tags input into the canonical CSV storage form.
+
+        Lowercases, trims each tag, drops empties, dedupes preserving first-seen
+        order. Returns "" when nothing is left so callers can store NULL via
+        `or None`.
+        """
+        if not raw:
+            return ""
+        seen: list[str] = []
+        for piece in raw.split(","):
+            t = piece.strip().lower()
+            if t and t not in seen:
+                seen.append(t)
+        return ",".join(seen)
+
+    @property
+    def tags_list(self) -> list[str]:
+        if not self.tags:
+            return []
+        return [t for t in self.tags.split(",") if t]
 
 
 class Delegation(models.Model):

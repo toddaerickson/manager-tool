@@ -1,5 +1,6 @@
 """Views: one-on-one meetings."""
 
+import re
 from datetime import date
 
 from django.contrib.auth.decorators import login_required
@@ -19,6 +20,22 @@ from core.views._common import (
 )
 
 
+def _all_meeting_tags_for_manager(mid: int) -> list[str]:
+    """Distinct tag values used across this manager's meetings, sorted."""
+    bag: set[str] = set()
+    rows = (
+        OneOnOneSession.objects.for_manager(mid)
+        .exclude(tags__isnull=True)
+        .exclude(tags="")
+        .values_list("tags", flat=True)
+    )
+    for row in rows:
+        for t in row.split(","):
+            if t:
+                bag.add(t)
+    return sorted(bag)
+
+
 # ============================================================
 # One-on-One Meetings — 10/10/10 structured meeting recorder
 # ============================================================
@@ -32,6 +49,7 @@ def one_on_ones_list(request):
     mid = manager.id
     member_id = _parse_member_filter(request)
     search_query = request.GET.get("q", "").strip()
+    tag_query = request.GET.get("tag", "").strip().lower()
     today_iso = date.today().isoformat()
 
     sessions = OneOnOneSession.objects.for_manager(mid).select_related(
@@ -46,6 +64,12 @@ def one_on_ones_list(request):
             | Q(manager_notes__icontains=search_query)
             | Q(followup_notes__icontains=search_query)
         )
+    if tag_query:
+        # Match the tag as a whole CSV element on both PG (~*) and SQLite
+        # (Django registers a Python re-backed REGEXP). Stored tags are
+        # already normalized to lowercase and trimmed.
+        pattern = r"(^|,)" + re.escape(tag_query) + r"(,|$)"
+        sessions = sessions.filter(tags__iregex=pattern)
 
     # Draft sessions first, then by date descending
     drafts = sessions.filter(status="draft").order_by("-session_date")
@@ -79,6 +103,8 @@ def one_on_ones_list(request):
         "members": members,
         "selected_member": member_id,
         "search_query": search_query,
+        "selected_tag": tag_query,
+        "all_tags": _all_meeting_tags_for_manager(mid),
         "cadence": cadence,
         "today_iso": today_iso,
     })
@@ -187,6 +213,12 @@ def one_on_ones_autosave(request, session_id: int):
         old_val = getattr(session, field) or ""
         if new_val != old_val:
             setattr(session, field, new_val)
+            changed = True
+
+    if "tags" in request.POST:
+        new_tags = OneOnOneSession.normalize_tags(request.POST["tags"]) or None
+        if new_tags != session.tags:
+            session.tags = new_tags
             changed = True
 
     # Also update event if sent
