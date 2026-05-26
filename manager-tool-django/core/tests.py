@@ -4681,3 +4681,66 @@ class TestPraiseToFeedbackMigration:
         mod = self._load_migration()
         with pytest.raises(NotImplementedError):
             mod.reverse_unsupported(global_apps, schema_editor=None)
+
+
+class TestSentryInitHardening:
+    """Regression for the 2026-05-25 23:48 UTC purge-deleted-members crash.
+
+    With SENTRY_DSN unset or set to a malformed value, mt.settings must
+    import cleanly so Django can boot. Pre-hardening, sentry_sdk.init
+    raised BadDsn on a "PASTE_VALUE_HERE" placeholder, which bubbled out
+    of settings.py and crashed every gunicorn worker / cron run.
+    """
+
+    @staticmethod
+    def _import_settings(extra_env):
+        """Spawn a clean subprocess that imports mt.settings with the
+        given env vars set. Returns (returncode, stderr_text)."""
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        django_root = Path(__file__).resolve().parent.parent
+        # Mandatory baseline so settings.py doesn't fail on something
+        # else (missing SECRET_KEY, missing env file, etc.).
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": os.environ.get("HOME", ""),
+            "DJANGO_SETTINGS_MODULE": "mt.settings",
+            "DJANGO_SECRET_KEY": "test-secret-not-real",
+            "MANAGER_TOOL_ENV": "dev",
+            "DATABASE_URL": "sqlite:///:memory:",
+        }
+        env.update(extra_env)
+        result = subprocess.run(
+            [sys.executable, "-c", "import django; django.setup()"],
+            env=env,
+            cwd=str(django_root),
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return result.returncode, (result.stderr or "")
+
+    def test_malformed_dsn_does_not_crash_settings(self):
+        # Exactly the value that crashed purge-deleted-members on
+        # 2026-05-25 — the placeholder text I put in the cron env vars
+        # before the user pasted real values.
+        rc, stderr = self._import_settings({"SENTRY_DSN": "PASTE_VALUE_HERE"})
+        assert rc == 0, (
+            f"Django failed to import with a malformed SENTRY_DSN. "
+            f"This is the regression — settings.py must catch the "
+            f"BadDsn rather than let it propagate. stderr:\n{stderr}"
+        )
+        # Settings should log a warning rather than re-raising.
+        assert (
+            "Sentry init failed" in stderr
+            or "BadDsn" not in stderr
+        ), f"Expected the warn-log path. stderr:\n{stderr}"
+
+    def test_empty_dsn_does_not_attempt_init(self):
+        # Default behavior — no Sentry, no warning, no crash.
+        rc, stderr = self._import_settings({"SENTRY_DSN": ""})
+        assert rc == 0
+        assert "Sentry init failed" not in stderr

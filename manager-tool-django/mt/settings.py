@@ -185,14 +185,29 @@ if SENTRY_DSN:
     # load before Django finishes settings parsing.
     from core.utils import sentry_before_send
 
-    sentry_sdk.init(
-        dsn=SENTRY_DSN,
-        integrations=[DjangoIntegration()],
-        traces_sample_rate=0.1,
-        send_default_pii=False,
-        environment=env("MANAGER_TOOL_ENV"),
-        before_send=sentry_before_send,
-    )
+    # A malformed DSN (typo, partial paste, placeholder like
+    # "PASTE_VALUE_HERE") raises BadDsn from sentry_sdk. Without this
+    # guard the exception bubbles out of settings.py, Django can't
+    # import, and every gunicorn worker / cron run exits 1. Caught the
+    # purge-deleted-members cron with this on 2026-05-25 23:48 UTC
+    # during the post-PR-#107 env-var paste pass. We'd rather ship
+    # without observability than have the whole service refuse to
+    # start — log a warning instead.
+    import logging
+
+    try:
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            integrations=[DjangoIntegration()],
+            traces_sample_rate=0.1,
+            send_default_pii=False,
+            environment=env("MANAGER_TOOL_ENV"),
+            before_send=sentry_before_send,
+        )
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "Sentry init failed (%s); continuing without Sentry", e,
+        )
 
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
