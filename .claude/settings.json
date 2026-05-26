@@ -10,5 +10,17 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(ruff check *)",
+      "Bash(render services*)",
+      "Bash(render deploys list *)",
+      "Bash(render logs *)",
+      "Bash(render blueprints validate *)",
+      "Bash(render whoami)",
+      "Bash(render workspaces*)",
+      "Bash(gh secret list *)"
+    ]
   }
 }
