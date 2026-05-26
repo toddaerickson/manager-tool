@@ -59,3 +59,23 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run Django PG smoke
         run: python scripts/smoke_pg_django.py
+
+  validate-render-blueprint:
+    name: Validate render.yaml
+    # Catches the silent blueprint-schema bug class that bit PR #71:
+    # `command:` instead of `startCommand:` on cron services. Render
+    # rejected the file but kept deploying the web service via its
+    # per-service webhook, so the cron creation just never happened
+    # for ~3 weeks. The full `render blueprints validate` would catch
+    # this too, but requires an authenticated workspace; this offline
+    # script catches the field-name class without needing a CI secret.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pyyaml
+        run: pip install pyyaml
+      - name: Validate render.yaml
+        run: python scripts/validate_render_blueprint.py
