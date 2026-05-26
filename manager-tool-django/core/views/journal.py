@@ -128,8 +128,12 @@ def journal_add(request):
                     JournalEntry.objects.filter(pk=entry_id).update(
                         coaching_response=coaching,
                     )
+                    # actor="system": this runs in a background thread
+                    # after the user's request returns, so it's a
+                    # Claude-driven write, not an operator action.
                     log_mutation(manager_id, "create", "CoachingResponse",
-                                entry_id, f"AI coaching for journal entry {entry_id}")
+                                entry_id, f"AI coaching for journal entry {entry_id}",
+                                actor="system")
             except Exception:
                 _logger.exception("Coaching generation failed for entry %d", entry_id)
 
