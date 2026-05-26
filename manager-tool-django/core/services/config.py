@@ -38,19 +38,69 @@ def get_config(key, manager_id, default=None):
     return value or default
 
 
-def set_config(key, manager_id, value):
+def set_config(key, manager_id, value, *, actor="user"):
     """Upsert a config value. Sensitive keys are encrypted before
     storage. Empty/None values store as an empty string (so the row
-    can be 'cleared' without deletion)."""
+    can be 'cleared' without deletion).
+
+    Writes an AuditLog row on real changes (no-ops when the new value
+    matches the current stored value — settings_page submits all fields
+    on every save, even unchanged ones). Sensitive keys NEVER have
+    their value rendered in the summary; we only record set/cleared
+    transitions, never the secret itself.
+
+    `actor` defaults to "user" (the settings page). Pass actor="system"
+    if a background job ever ends up calling this (none currently do).
+    """
     if value is None:
         value = ""
+
+    # Detect change against the currently-stored (decrypted) value so
+    # we don't write a noisy audit row on every settings-save click.
+    try:
+        existing = Config.objects.get(manager_id=manager_id, key=key)
+        if existing.value and (key in SENSITIVE_KEYS or is_encrypted(existing.value)):
+            try:
+                current = decrypt_value(existing.value)
+            except Exception:
+                # Treat undecryptable existing value as "different" so
+                # the new write proceeds and audits a refresh.
+                current = None
+        else:
+            current = existing.value or ""
+    except Config.DoesNotExist:
+        existing = None
+        current = ""
+
+    changed = current != value
+    storage_value = value
     if value and key in SENSITIVE_KEYS:
-        value = encrypt_value(value)
-    Config.objects.update_or_create(
+        storage_value = encrypt_value(value)
+
+    obj, _ = Config.objects.update_or_create(
         manager_id=manager_id,
         key=key,
-        defaults={"value": value},
+        defaults={"value": storage_value},
     )
+
+    if changed:
+        # Lazy import — services/audit.py doesn't import config, but
+        # importing at module top forces an app-load order that breaks
+        # under certain test fixtures.
+        from core.services.audit import log_mutation
+
+        if key in SENSITIVE_KEYS:
+            # Never expose the secret value in the audit summary. The
+            # presence of a real value vs an empty clear is the
+            # auditable signal.
+            verb = "set" if value else "cleared"
+            summary = f"Config.{key} {verb}"
+        else:
+            display = value if value else "(cleared)"
+            summary = f"Config.{key} = {display}"
+        log_mutation(
+            manager_id, "update", "Config", obj.id, summary, actor=actor,
+        )
 
 
 def get_all_config(manager_id):
