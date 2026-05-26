@@ -4453,3 +4453,96 @@ class TestEventFormTenantScoping:
         # Sanity: response should not be a redirect to a successfully-created
         # event detail page.
         assert "events/" not in (resp.url if resp.status_code == 302 else "")
+
+
+class TestRedactDbCredentials:
+    """`core.utils.redact_db_credentials` must scrub `user:password@`
+    from any Postgres DSN before the text reaches a log line, error
+    page, or Sentry event. Sentry's default scrubber catches query
+    params but not Postgres userinfo (SECURITY_PARITY.md M8).
+    """
+
+    def test_redacts_basic_userinfo(self):
+        from core.utils import redact_db_credentials
+        text = "connection failed: postgres://alice:s3cret@db.example.com:5432/app"
+        out = redact_db_credentials(text)
+        assert "alice" not in out
+        assert "s3cret" not in out
+        assert "postgres://***@db.example.com:5432/app" in out
+
+    def test_redacts_postgresql_scheme(self):
+        from core.utils import redact_db_credentials
+        text = "DSN: postgresql://u:p@host/db"
+        assert redact_db_credentials(text) == "DSN: postgresql://***@host/db"
+
+    def test_case_insensitive_scheme(self):
+        from core.utils import redact_db_credentials
+        assert "POSTGRES://***@" in redact_db_credentials("POSTGRES://u:p@h/d")
+
+    def test_handles_multiple_dsns_in_one_string(self):
+        from core.utils import redact_db_credentials
+        text = "primary postgres://a:b@h1/db and replica postgresql://c:d@h2/db"
+        out = redact_db_credentials(text)
+        assert "a:b" not in out and "c:d" not in out
+        assert out.count("***@") == 2
+
+    def test_passes_through_text_without_dsn(self):
+        from core.utils import redact_db_credentials
+        assert redact_db_credentials("nothing sensitive here") == "nothing sensitive here"
+
+    def test_handles_empty_input(self):
+        from core.utils import redact_db_credentials
+        assert redact_db_credentials("") == ""
+        assert redact_db_credentials(None) is None
+
+
+class TestSentryBeforeSend:
+    """`sentry_before_send` walks the Sentry event dict and pipes every
+    exception value, top-level message, and breadcrumb message through
+    `redact_db_credentials`. Wired via `before_send=` in mt/settings.py
+    when SENTRY_DSN is set."""
+
+    def test_redacts_exception_value(self):
+        from core.utils import sentry_before_send
+        event = {
+            "exception": {
+                "values": [{"type": "OperationalError",
+                            "value": "could not connect to postgres://u:p@host/db"}]
+            }
+        }
+        out = sentry_before_send(event, None)
+        assert "u:p" not in out["exception"]["values"][0]["value"]
+        assert "***@host" in out["exception"]["values"][0]["value"]
+
+    def test_redacts_top_level_message(self):
+        from core.utils import sentry_before_send
+        event = {"message": "init: postgresql://alice:secret@db/app failed"}
+        assert "alice:secret" not in sentry_before_send(event, None)["message"]
+
+    def test_redacts_breadcrumb_messages(self):
+        from core.utils import sentry_before_send
+        event = {
+            "breadcrumbs": {
+                "values": [
+                    {"message": "connecting postgres://x:y@h/d"},
+                    {"message": "no creds here"},
+                ]
+            }
+        }
+        out = sentry_before_send(event, None)
+        crumbs = out["breadcrumbs"]["values"]
+        assert "x:y" not in crumbs[0]["message"]
+        assert crumbs[1]["message"] == "no creds here"
+
+    def test_handles_empty_event(self):
+        from core.utils import sentry_before_send
+        # Must not raise on a sparse event dict.
+        out = sentry_before_send({}, None)
+        assert out == {}
+
+    def test_never_drops_the_event_on_internal_error(self):
+        from core.utils import sentry_before_send
+        # Deliberately malformed shape — the hook should swallow rather
+        # than let its own bug suppress the real error report.
+        out = sentry_before_send({"exception": "not-a-dict"}, None)
+        assert out is not None
