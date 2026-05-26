@@ -679,7 +679,11 @@ NOTE_CATEGORY_CHOICES = [
     ("meeting_prep", "Meeting prep"),
     ("observation", "Observation"),
     ("follow_up", "Follow-up"),
-    ("praise", "Praise"),
+    # "praise" intentionally absent — praise is structured feedback,
+    # captured via the Feedback model with feedback_type="positive"
+    # (SBI: situation, behavior, impact). Migration 0010 converted any
+    # existing praise RunningNotes to Feedback rows; this guard keeps
+    # users from re-creating the duplicate channel.
 ]
 
 

@@ -24,7 +24,7 @@ HR_SENSITIVE_MODELS = {
 }
 
 
-def log_mutation(manager_id, action, entity_type, entity_id, summary=""):
+def log_mutation(manager_id, action, entity_type, entity_id, summary="", *, actor="user"):
     """Append an immutable audit log entry.
 
     Args:
@@ -33,6 +33,12 @@ def log_mutation(manager_id, action, entity_type, entity_id, summary=""):
         entity_type: model class name (e.g. "Feedback")
         entity_id: primary key of the affected row
         summary: human-readable description of the change
+        actor: kwarg-only. "user" (default) for operator-driven writes
+               via the UI; "system" for background jobs (cron purges,
+               digest sends, coaching enrichment callbacks). Separating
+               these keeps automated noise out of the compliance-grade
+               user trail and lets /audit/?actor=system isolate the
+               background work for debugging.
     """
     if manager_id is None:
         logger.warning("audit: skipping log with manager_id=None")
@@ -45,6 +51,7 @@ def log_mutation(manager_id, action, entity_type, entity_id, summary=""):
             entity_type=entity_type,
             entity_id=entity_id,
             summary=summary[:500],  # cap summary length
+            actor_type=actor,
         )
     except Exception:
         # Audit log is fire-and-forget — a DB error here must not

@@ -22,6 +22,11 @@ from core.views._common import _parse_member_filter, _require_manager
 _NOTE_CATEGORY_LABELS = {
     "general": "General", "meeting_prep": "Meeting prep",
     "observation": "Observation", "follow_up": "Follow-up",
+    # "praise" label retained for legacy rows: migration 0010 converted
+    # most existing praise running-notes to Feedback, but broadcast
+    # praise (team_member NULL) was preserved as-is. New praise rows
+    # are blocked at the form layer (see NOTE_CATEGORY_CHOICES in
+    # core/forms.py); this label keeps any pre-migration rows readable.
     "praise": "Praise",
 }
 
