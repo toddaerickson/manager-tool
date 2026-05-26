@@ -4867,3 +4867,367 @@ class TestAuditLogView:
         resp = client.get("/audit/")
         assert b"Feedback" in resp.content
         assert b"VerySensitiveModel" not in resp.content
+
+
+# ============================================================
+# Per-form cross-tenant team_member rejection (audit gap #1)
+#
+# Every form whose Meta.fields includes "team_member" must reject a
+# foreign-tenant team_member_id. The pattern is uniform: __init__
+# narrows the field's queryset to TeamMember.objects.active_for_manager
+# (or .for_manager) of the constructing manager_id; Django's
+# ModelChoiceField.to_python then rejects PKs not in that queryset.
+#
+# EventForm is covered by TestEventFormTenantScoping (view-level).
+# This class covers the other 9 forms at the form-construction layer
+# — a regression that drops the queryset scoping in any __init__ would
+# fail here without needing per-form view scaffolding.
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestCrossTenantTeamMemberInForms:
+    """One test per form-with-team_member-field. Each:
+       1. Creates two managers + a TeamMember owned by manager 2.
+       2. Constructs the form with manager_id=manager 1 and a payload
+          whose team_member references manager 2's row.
+       3. Asserts the form is invalid and that the team_member field
+          is the source of the error."""
+
+    @staticmethod
+    def _two_managers():
+        m1 = Manager.objects.create(
+            username="form_m1", display_name="M1",
+            password_hash="x", email="form_m1@example.com",
+        )
+        m2 = Manager.objects.create(
+            username="form_m2", display_name="M2",
+            password_hash="x", email="form_m2@example.com",
+        )
+        return m1, m2
+
+    @staticmethod
+    def _victim_member(m2):
+        return TeamMember.objects.create(name="Victim", manager_id=m2.id)
+
+    def _assert_team_member_rejected(self, form):
+        assert not form.is_valid(), (
+            "Form accepted a foreign-tenant team_member_id — "
+            "queryset scoping in __init__ has regressed."
+        )
+        assert "team_member" in form.errors, (
+            f"Form rejected the submission but the error wasn't on "
+            f"team_member (got: {dict(form.errors)})"
+        )
+
+    def test_event_edit_form_rejects_cross_tenant_member(self):
+        from core.forms import EventEditForm
+        m1, m2 = self._two_managers()
+        victim = self._victim_member(m2)
+        ev = Event.objects.create(
+            manager_id=m1.id, title="X", event_type="one_on_one",
+            scheduled_date="2026-06-01", scheduled_time="10:00",
+            status="scheduled",
+        )
+        form = EventEditForm(
+            data={
+                "title": "edited",
+                "event_type": "one_on_one",
+                "scheduled_date": "2026-06-02",
+                "scheduled_time": "10:00",
+                "duration_minutes": 30,
+                "team_member": str(victim.id),
+            },
+            instance=ev,
+            manager_id=m1.id,
+        )
+        self._assert_team_member_rejected(form)
+
+    def test_goal_form_rejects_cross_tenant_member(self):
+        from core.forms import GoalForm
+        m1, m2 = self._two_managers()
+        victim = self._victim_member(m2)
+        form = GoalForm(
+            data={
+                "team_member": str(victim.id),
+                "quarter": "Q2 2026",
+                "description": "x",
+                "key_results": "",
+                "status": "not_started",
+            },
+            manager_id=m1.id,
+        )
+        self._assert_team_member_rejected(form)
+
+    def test_skill_form_rejects_cross_tenant_member(self):
+        from core.forms import SkillForm
+        m1, m2 = self._two_managers()
+        victim = self._victim_member(m2)
+        form = SkillForm(
+            data={
+                "team_member": str(victim.id),
+                "skill_name": "Public speaking",
+                "proficiency": "",
+            },
+            manager_id=m1.id,
+        )
+        self._assert_team_member_rejected(form)
+
+    def test_development_plan_form_rejects_cross_tenant_member(self):
+        from core.forms import DevelopmentPlanForm
+        m1, m2 = self._two_managers()
+        victim = self._victim_member(m2)
+        form = DevelopmentPlanForm(
+            data={
+                "team_member": str(victim.id),
+                "title": "Plan",
+                "description": "",
+                "status": "active",
+            },
+            manager_id=m1.id,
+        )
+        self._assert_team_member_rejected(form)
+
+    def test_career_conversation_form_rejects_cross_tenant_member(self):
+        from core.forms import CareerConversationForm
+        m1, m2 = self._two_managers()
+        victim = self._victim_member(m2)
+        form = CareerConversationForm(
+            data={
+                "team_member": str(victim.id),
+                "conversation_date": "2026-06-01",
+                "topic": "Career path",
+                "notes": "",
+                "next_steps": "",
+            },
+            manager_id=m1.id,
+        )
+        self._assert_team_member_rejected(form)
+
+    def test_delegation_form_rejects_cross_tenant_member(self):
+        """DelegationForm.team_member is OPTIONAL (None == no assignee).
+        That permissiveness must NOT extend to *foreign-tenant* members —
+        a non-empty value still has to belong to the constructing manager."""
+        from core.forms import DelegationForm
+        m1, m2 = self._two_managers()
+        victim = self._victim_member(m2)
+        form = DelegationForm(
+            data={
+                "team_member": str(victim.id),
+                "task": "ship it",
+                "outcome_expected": "shipped",
+                "autonomy_level": "guided",
+                "status": "active",
+            },
+            manager_id=m1.id,
+        )
+        self._assert_team_member_rejected(form)
+
+    def test_running_note_form_rejects_cross_tenant_member(self):
+        """RunningNote.team_member is OPTIONAL (broadcast sentinel). Same
+        guard as DelegationForm: empty is fine, foreign-tenant id is not."""
+        from core.forms import RunningNoteForm
+        m1, m2 = self._two_managers()
+        victim = self._victim_member(m2)
+        form = RunningNoteForm(
+            data={
+                "team_member": str(victim.id),
+                "note_date": "2026-06-01",
+                "content": "obs",
+                "category": "general",
+            },
+            manager_id=m1.id,
+        )
+        self._assert_team_member_rejected(form)
+
+    def test_feedback_form_rejects_cross_tenant_member(self):
+        from core.forms import FeedbackForm
+        m1, m2 = self._two_managers()
+        victim = self._victim_member(m2)
+        form = FeedbackForm(
+            data={
+                "team_member": str(victim.id),
+                "feedback_type": "positive",
+                "situation": "s",
+                "behavior": "b",
+                "impact": "i",
+            },
+            manager_id=m1.id,
+        )
+        self._assert_team_member_rejected(form)
+
+    def test_one_on_one_session_form_rejects_cross_tenant_member(self):
+        from core.forms import OneOnOneSessionForm
+        m1, m2 = self._two_managers()
+        victim = self._victim_member(m2)
+        form = OneOnOneSessionForm(
+            data={
+                "team_member": str(victim.id),
+                "session_date": "2026-06-01",
+            },
+            manager_id=m1.id,
+        )
+        self._assert_team_member_rejected(form)
+
+
+# ============================================================
+# XSS parity with the (now-legacy) Streamlit suite (audit gap #5)
+#
+# Django templates auto-escape by default, but any `{{ x|safe }}`,
+# `{% autoescape off %}`, or unwrapped `mark_safe()` in a view would
+# silently undo that protection on the page rendering it. These tests
+# pin the contract in two layers:
+#   1. Static scan — no |safe / autoescape off / safeseq in any template.
+#   2. Live render — seed each main page's user-controlled text fields
+#      with a <script> payload, GET the page, assert the literal payload
+#      doesn't reach the browser. Renders also prove auto-escaping is
+#      actually in effect (the escaped form does appear).
+# ============================================================
+
+
+@pytest.mark.django_db
+class TestNoUnsafeTemplateMarkers:
+    """Cheap, fast regression guard. The whole-template scan catches
+    `|safe`, `{% autoescape off %}`, `|safeseq`, and `mark_safe(` —
+    each of which would defeat auto-escaping on the field it's applied
+    to. If a template legitimately needs to render trusted HTML, this
+    test will fail and the writer must justify it (and probably add an
+    allowlist entry here)."""
+
+    FORBIDDEN_MARKERS = (
+        "|safe",            # The most common foot-gun.
+        "|safeseq",         # Same risk class.
+        "{% autoescape off %}",
+        "mark_safe(",       # Should not appear inside template files at all.
+    )
+
+    def test_no_unsafe_markers_in_templates(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent / "templates"
+        offenders = []
+        for path in root.rglob("*.html"):
+            text = path.read_text()
+            for marker in self.FORBIDDEN_MARKERS:
+                if marker in text:
+                    offenders.append(f"{path.relative_to(root)}: {marker!r}")
+        assert not offenders, (
+            "Template auto-escape bypasses detected — each of these would "
+            "let user-controlled text render as live HTML:\n  "
+            + "\n  ".join(offenders)
+        )
+
+
+@pytest.mark.django_db
+class TestPageRenderEscapesUserContent:
+    """Live-render tests. For each main page that surfaces user-typed
+    text, seed a `<script>` payload and assert the response body never
+    contains the live, unescaped substring `<script>alert("xss")</script>`.
+
+    The payload chosen is distinctive enough that a substring search is
+    unambiguous. We also assert the *escaped* form is present so a
+    template that simply drops the field entirely (and trivially
+    "passes" the no-live-script check) still fails."""
+
+    PAYLOAD = '<script>alert("xss")</script>'
+    ESCAPED_FRAGMENT = "&lt;script&gt;"  # html.escape(PAYLOAD)[:14]
+
+    def _login(self, client, username="xss_mgr"):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username=username, display_name="Mgr",
+            password_hash="x", email=f"{username}@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username=f"{username}@example.com",
+            email=f"{username}@example.com", password="x",
+        )
+        client.force_login(u)
+        return m
+
+    def _assert_payload_escaped(self, response, expect_escaped=True):
+        body = response.content.decode(errors="replace")
+        assert self.PAYLOAD not in body, (
+            "Live <script> payload reached the rendered page — a template "
+            "is rendering user-controlled text without auto-escape "
+            "(check for |safe / autoescape off / mark_safe)."
+        )
+        if expect_escaped:
+            assert self.ESCAPED_FRAGMENT in body, (
+                "Payload didn't reach the page in any form — the seeded "
+                "value isn't being rendered, so this test isn't actually "
+                "proving anything. Adjust the seed/path."
+            )
+
+    def test_team_members_page_escapes_member_name(self, client):
+        m = self._login(client, "xss_team")
+        TeamMember.objects.create(name=self.PAYLOAD, manager_id=m.id)
+        self._assert_payload_escaped(client.get("/team/"))
+
+    def test_decisions_page_escapes_title_and_context(self, client):
+        m = self._login(client, "xss_dec")
+        Decision.objects.create(
+            manager_id=m.id,
+            title=self.PAYLOAD,
+            context="ctx", alternatives="alt",
+            rationale="r", expected_outcome="x",
+            status="active",
+        )
+        self._assert_payload_escaped(client.get("/decisions/"))
+
+    def test_journal_page_escapes_entry_content(self, client):
+        m = self._login(client, "xss_jrn")
+        JournalEntry.objects.create(
+            manager_id=m.id,
+            entry_date="2026-06-01",
+            entry_type="daily",
+            content=self.PAYLOAD,
+        )
+        self._assert_payload_escaped(client.get("/journal/"))
+
+    def test_feedback_page_escapes_sbi_fields(self, client):
+        """Situation / behavior / impact are the highest-volume free-text
+        fields in the app — they're rendered on the feedback list and
+        also flow into the weekly digest. Pin escape on the list view."""
+        m = self._login(client, "xss_fb")
+        tm = TeamMember.objects.create(name="Direct", manager_id=m.id)
+        Feedback.objects.create(
+            manager_id=m.id, team_member=tm,
+            feedback_type="positive",
+            situation=self.PAYLOAD,
+            behavior="b", impact="i",
+        )
+        self._assert_payload_escaped(client.get("/feedback/"))
+
+    def test_notes_page_escapes_note_content(self, client):
+        m = self._login(client, "xss_notes")
+        tm = TeamMember.objects.create(name="Direct", manager_id=m.id)
+        RunningNote.objects.create(
+            manager_id=m.id, team_member=tm,
+            note_date="2026-06-01",
+            content=self.PAYLOAD,
+            category="general",
+        )
+        self._assert_payload_escaped(client.get("/notes/"))
+
+    def test_goals_page_escapes_description(self, client):
+        m = self._login(client, "xss_goals")
+        tm = TeamMember.objects.create(name="Direct", manager_id=m.id)
+        Goal.objects.create(
+            manager_id=m.id, team_member=tm,
+            quarter="Q2 2026",
+            description=self.PAYLOAD,
+            key_results="",
+            status="not_started",
+        )
+        self._assert_payload_escaped(client.get("/goals/"))
+
+    def test_delegations_page_escapes_task(self, client):
+        m = self._login(client, "xss_del")
+        Delegation.objects.create(
+            manager_id=m.id,
+            task=self.PAYLOAD,
+            outcome_expected="o",
+            autonomy_level="guided",
+            status="active",
+        )
+        self._assert_payload_escaped(client.get("/delegations/"))
