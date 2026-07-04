@@ -1,9 +1,11 @@
 """Views: _common."""
 
+import logging
 import os
 
 from django.conf import settings as _settings
 from django.contrib.auth.decorators import login_required
+from django.db import connection
 from django.http import (
     HttpResponseForbidden,
     HttpResponseNotFound,
@@ -19,17 +21,35 @@ from core.models import (
     OneOnOneSession,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def health(request):
     """Public, unauthenticated health + version endpoint.
 
     Reports the deployed git SHA so a deploy can be confirmed exactly
     (the gap the old /verify-deploy left). Render injects RENDER_GIT_COMMIT
-    at build/run time; locally it falls back to "unknown"."""
-    return JsonResponse({
-        "status": "ok",
-        "git_sha": os.environ.get("RENDER_GIT_COMMIT", "unknown"),
-    })
+    at build/run time; locally it falls back to "unknown".
+
+    Also proves the database is reachable: a process that boots but
+    can't reach Neon must NOT report healthy, or Render's health check
+    keeps routing traffic to a service that 500s on every real page."""
+    db_ok = True
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+    except Exception:
+        db_ok = False
+        logger.exception("health check: database unreachable")
+    return JsonResponse(
+        {
+            "status": "ok" if db_ok else "error",
+            "db": "ok" if db_ok else "unreachable",
+            "git_sha": os.environ.get("RENDER_GIT_COMMIT", "unknown"),
+        },
+        status=200 if db_ok else 503,
+    )
 
 
 def hello(request):

@@ -74,4 +74,7 @@ def send_smtp(smtp_cfg, msg):
             try:
                 server.quit()
             except Exception:
-                pass
+                logger.debug(
+                    "SMTP quit failed during cleanup (send outcome "
+                    "already determined)", exc_info=True,
+                )

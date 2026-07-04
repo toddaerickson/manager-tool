@@ -1,5 +1,6 @@
 """Views: one-on-one meetings."""
 
+import logging
 import re
 from datetime import date
 
@@ -18,6 +19,8 @@ from core.views._common import (
     _require_manager,
     get_member_context,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _all_meeting_tags_for_manager(mid: int) -> list[str]:
@@ -161,7 +164,11 @@ def one_on_ones_detail(request, session_id: int):
         try:
             form.initial["session_date"] = date.fromisoformat(session.session_date)
         except ValueError:
-            pass
+            logger.warning(
+                "OneOnOneSession %s has unparseable session_date %r; "
+                "leaving form initial unset",
+                session.pk, session.session_date,
+            )
 
     context = get_member_context(manager.id, session.team_member)
     action_items = ActionItem.objects.for_manager(manager.id).filter(
