@@ -84,16 +84,19 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - **UI design system** (PR #94) — deliberate type + color identity (Fraunces/Public Sans, single teal `accent-*`, tightened radius) as cascading tokens in `base.html`. See `manager-tool-django/DESIGN.md`.
 - **"Their Agenda first" soft gate** (PR #99) — Your Agenda and Coaching/Their Future render as collapsed `<details>` until Their Agenda has content (or that section already has notes). Native HTML disclosure; pairs with prep mode.
 - **Notes vs Meetings naming** (PR #100) — sidebar "1:1 Notes" → "Notes" with tooltips on both Meetings and Notes explaining the distinction (Meetings = structured 10/10/10 records; Notes = async between-meeting jots).
-- **Meetings notes search** (PR #102) — `?q=` filters the meetings list by case-insensitive substring across Their/Your/Followup notes (v1 of the tags+FTS backlog item; ORM `icontains` only — no tags yet).
+- **Meetings notes search** (PR #102) — `?q=` filters the meetings list by case-insensitive substring across Their/Your/Followup notes. Tags landed in PR #120 (comma-separated on `OneOnOneSession` + tag filter).
 - **Ruff in CI + repo-wide lint cleanup** (PR #101) — `ruff check` runs before pytest in the Django CI job; the 27 pre-existing F401/F841 warnings are gone, so the ship-pr gate stays green on any touched file.
+- **Nightly encrypted backups + ops hardening** (PRs #121/#125, 2026-07-04) — pg_dump→encrypt→restore-proof workflow with healthchecks.io dead-man switch; DB-touching `/health` (503 on dead DB); fail-loud `get_config` on decryption errors; gunicorn 2×4 gthread; no-silent-excepts guard in CI. Paid Neon (PG 17).
+- **Compiled Tailwind + vendored htmx** (PR #126) — Play CDN replaced by a 21KB compiled `static/css/tw.css` (CLI pinned v3.4.17; tokens in `tailwind.config.js`); htmx 2.0.4 vendored; `TestCompiledCssCoverage` fails CI on class-without-rebuild.
+- **Unified cross-model search** (PR #127) — sidebar box + `/search/?q=` across all 11 content models (tenant-scoped `icontains`, 20/group, deep links, match snippets).
 
 **Tooling additions in `.claude/`:**
 - **SessionStart hook** (PR #96) — creates `manager-tool-django/.venv` and installs requirements on every web session boot.
 - **`ship-pr` skill** (PR #98) — codifies the PR workflow (branch, gate, body template, fetch-checks-once) so future sessions don't re-derive it.
 
 **Remaining v2 gaps:**
-- **Meeting tags** — pair with the new search to filter by tag (not just substring). Smallest as a comma-separated TextField on `OneOnOneSession`; an M2M is overkill at current scale.
-- **Meeting duration tracking**: actual duration vs scheduled.
+- **Meeting duration tracking**: actual duration vs scheduled (planned as part of the personal-tool roadmap's calendar PR).
+- (Meeting tags shipped in PR #120; global search shipped in PR #127.)
 
 ## Phase 8 — Decommission checklist
 

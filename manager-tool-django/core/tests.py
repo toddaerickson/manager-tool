@@ -6065,7 +6065,9 @@ class TestCompiledCssCoverage:
 @pytest.mark.django_db
 class TestUnifiedSearch:
     """Roadmap PR 3: /search/?q= sweeps every content model via
-    for_manager, groups hits, deep-links each one. Cross-tenant
+    for_manager and groups hits. Deep-link assertions cover the three
+    per-item-route archetypes (detail page, edit page x2); list-page
+    links are covered by the group-presence assertions. Cross-tenant
     isolation matters double here — this is the one view that touches
     every model at once."""
 
@@ -6186,3 +6188,20 @@ class TestUnifiedSearch:
     def test_no_manager_yields_403(self, client):
         self._login_as(client, "stranger_search@example.com")
         assert client.get("/search/?q=anything").status_code == 403
+
+    def test_per_model_cap_limits_each_group(self, client):
+        from core.models import ActionItem
+        m = self._manager("capped")
+        self._login_as(client, m.email)
+        for i in range(25):
+            ActionItem.objects.create(
+                manager_id=m.id, status="pending",
+                description=f"{self.TOKEN} capitem {i}",
+            )
+        body = client.get(f"/search/?q={self.TOKEN}").content.decode()
+        assert "(20)" in body, "group badge must show the capped count"
+        # Newest-first (-id): items 24..5 render, 4..0 fall past the cap.
+        assert "capitem 24" in body
+        assert "capitem 5" in body
+        assert "capitem 4 " not in body and "capitem 4<" not in body
+        assert "capitem 0 " not in body and "capitem 0<" not in body

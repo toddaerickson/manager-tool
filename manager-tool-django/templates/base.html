@@ -47,8 +47,12 @@
         {% endif %}
       </div>
 
+      {% comment %} Global search (roadmap PR 3) — compact sidebar widget;
+         aria-label carries the accessible name (a visible label would cost
+         nav space; the full-page form on /search/ has one). {% endcomment %}
       <form action="{% url 'search' %}" method="get" class="px-2 pt-3">
         <input type="search" name="q" placeholder="Search everything…"
+               aria-label="Search everything"
                class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent-500">
       </form>
 

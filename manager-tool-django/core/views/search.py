@@ -2,13 +2,17 @@
 
 One page answering "where did I write that down?" — case-insensitive
 substring search across every content-bearing model, grouped by type,
-capped per model, every hit deep-linking to where it can be edited.
+capped per model. Hits deep-link to the item's edit/detail page where
+one exists (meetings, journal, decisions, delegations, goals, events);
+models without per-item routes (feedback, to-dos, career, team, notes)
+link to their list page.
 
 icontains on purpose: PG SearchVector would break the SQLite test
 suite, and at single-user scale (thousands of rows) full scans are
-milliseconds. Every queryset goes through .objects.for_manager(mid) —
-tenant isolation is non-negotiable here because this view touches
-every model at once.
+milliseconds. Every queryset goes through for_manager (directly, or
+via active_for_manager for soft-delete-aware TeamMember) — tenant
+isolation is non-negotiable here because this view touches every
+model at once.
 """
 
 from django.contrib.auth.decorators import login_required
@@ -37,8 +41,9 @@ SNIPPET_WIDTH = 160
 
 
 def _snippet(q, *fields):
-    """A ~160-char excerpt from the first field that matches q (centered
-    on the match), else the first non-empty field, truncated."""
+    """A ~160-char excerpt from the first field that matches q (window
+    opens ~a third before the match so trailing context dominates),
+    else the first non-empty field, truncated."""
     fields = [f for f in fields if f]
     if not fields:
         return ""
@@ -146,7 +151,7 @@ def _build_groups(mid, q):
     groups.append({"label": "Decisions", "items": [{
         "title": d.title or "Decision",
         "snippet": _snippet(q, d.context, d.rationale, d.alternatives,
-                            d.expected_outcome, d.actual_outcome),
+                            d.expected_outcome, d.actual_outcome, d.title),
         "url": reverse("decisions-edit", args=[d.id]),
         "date": d.review_date,
     } for d in decisions]})
@@ -177,8 +182,8 @@ def _build_groups(mid, q):
         )
     )
     groups.append({"label": "Delegations", "items": [{
-        "title": (f"{d.task[:60]} — {d.team_member.name}" if d.team_member
-                  else d.task[:60]),
+        "title": (f"{(d.task or 'Delegation')[:60]} — {d.team_member.name}"
+                  if d.team_member else (d.task or "Delegation")[:60]),
         "snippet": _snippet(q, d.task, d.outcome_expected, d.notes),
         "url": reverse("delegations-edit", args=[d.id]),
         "date": d.check_in_date,
@@ -190,7 +195,7 @@ def _build_groups(mid, q):
         )
     )
     groups.append({"label": "To Do", "items": [{
-        "title": t.description[:80],
+        "title": (t.description or "To-do")[:80],
         "snippet": _snippet(q, t.description, t.assignee),
         "url": reverse("todos"),
         "date": t.due_date,
@@ -207,7 +212,7 @@ def _build_groups(mid, q):
     groups.append({"label": "Goals", "items": [{
         "title": (f"{g.quarter or 'Goal'} — {g.team_member.name}"
                   if g.team_member else (g.quarter or "Goal")),
-        "snippet": _snippet(q, g.description, g.key_results),
+        "snippet": _snippet(q, g.description, g.key_results, g.quarter),
         "url": reverse("goals-edit", args=[g.id]),
         "date": g.target_date,
     } for g in goals]})
@@ -223,7 +228,7 @@ def _build_groups(mid, q):
     groups.append({"label": "Career", "items": [{
         "title": (f"{c.topic or 'Conversation'} — {c.team_member.name}"
                   if c.team_member else (c.topic or "Conversation")),
-        "snippet": _snippet(q, c.notes, c.next_steps),
+        "snippet": _snippet(q, c.notes, c.next_steps, c.topic),
         "url": reverse("career-dev"),
         "date": c.conversation_date,
     } for c in convos]})
@@ -236,7 +241,7 @@ def _build_groups(mid, q):
     )
     groups.append({"label": "Team", "items": [{
         "title": m.name,
-        "snippet": _snippet(q, m.role, m.notes, m.email),
+        "snippet": _snippet(q, m.role, m.notes, m.email, m.name),
         "url": reverse("team"),
         "date": m.start_date,
     } for m in members]})
@@ -249,7 +254,7 @@ def _build_groups(mid, q):
     )
     groups.append({"label": "Events", "items": [{
         "title": e.title or "Event",
-        "snippet": _snippet(q, e.agenda, e.notes, e.location),
+        "snippet": _snippet(q, e.agenda, e.notes, e.location, e.title),
         "url": reverse("events-detail", args=[e.id]),
         "date": e.scheduled_date,
     } for e in events]})
