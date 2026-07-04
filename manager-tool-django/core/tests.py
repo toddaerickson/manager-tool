@@ -5406,6 +5406,27 @@ class TestCrossTenantTeamMemberInForms:
 # ============================================================
 
 
+def _project_template_files():
+    """Every .html file in the project's own template dir(s), sourced from
+    settings.TEMPLATES DIRS rather than a hardcoded path so a moved dir
+    tracks automatically. Asserts the scan matched at least one file, so a
+    renamed/relocated root fails loud here instead of letting the template
+    lints below pass vacuously (rglob over a missing dir yields nothing).
+    Third-party app templates (allauth, under .venv via APP_DIRS) are
+    intentionally out of scope — only first-party markup is linted."""
+    from pathlib import Path
+    from django.conf import settings
+
+    files = []
+    for root in settings.TEMPLATES[0]["DIRS"]:
+        files.extend(Path(root).rglob("*.html"))
+    assert files, (
+        "Template lint found no files to scan — the configured template "
+        "dir appears to have moved. Update settings.TEMPLATES DIRS."
+    )
+    return files
+
+
 @pytest.mark.django_db
 class TestNoUnsafeTemplateMarkers:
     """Cheap, fast regression guard. The whole-template scan catches
@@ -5423,17 +5444,54 @@ class TestNoUnsafeTemplateMarkers:
     )
 
     def test_no_unsafe_markers_in_templates(self):
-        from pathlib import Path
-        root = Path(__file__).resolve().parent.parent / "templates"
+        from django.conf import settings
         offenders = []
-        for path in root.rglob("*.html"):
-            text = path.read_text()
+        for path in _project_template_files():
+            text = path.read_text(encoding="utf-8")
             for marker in self.FORBIDDEN_MARKERS:
                 if marker in text:
-                    offenders.append(f"{path.relative_to(root)}: {marker!r}")
+                    rel = path.relative_to(settings.BASE_DIR)
+                    offenders.append(f"{rel}: {marker!r}")
         assert not offenders, (
             "Template auto-escape bypasses detected — each of these would "
             "let user-controlled text render as live HTML:\n  "
+            + "\n  ".join(offenders)
+        )
+
+
+class TestNoMultilineInlineComments:
+    """Django's `{# ... #}` comment syntax is single-line only. A comment
+    that spans lines is not recognized by the template engine and renders
+    as literal visible text (in <head> the browser hoists it to the top of
+    <body>). Multi-line comments must use {% comment %}...{% endcomment %}."""
+
+    @staticmethod
+    def _line_has_unclosed_comment(line):
+        # Walk EVERY `{#` on the line — each must be closed by a later `#}`
+        # on the same line. Checking only the first opener would miss a
+        # line like `{# ok #} ... {# spilled` where the first comment's
+        # `#}` masks a second, still-open opener.
+        idx = 0
+        while (opener := line.find("{#", idx)) != -1:
+            closer = line.find("#}", opener + 2)
+            if closer == -1:
+                return True
+            idx = closer + 2
+        return False
+
+    def test_every_inline_comment_closes_on_its_own_line(self):
+        from django.conf import settings
+        offenders = []
+        for path in _project_template_files():
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for lineno, line in enumerate(lines, 1):
+                if self._line_has_unclosed_comment(line):
+                    rel = path.relative_to(settings.BASE_DIR)
+                    offenders.append(f"{rel}:{lineno}")
+        assert not offenders, (
+            "Multi-line {# #} comments detected — Django only strips these "
+            "when opened and closed on the same line; these render as "
+            "visible page text. Use {% comment %} blocks instead:\n  "
             + "\n  ".join(offenders)
         )
 
