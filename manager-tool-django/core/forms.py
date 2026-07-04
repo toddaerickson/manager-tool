@@ -6,6 +6,8 @@ TEXT in the underlying schema (Streamlit convention, CLAUDE.md);
 forms convert from native date/time input to ISO/HH:MM strings on save.
 """
 
+import logging
+
 from django import forms
 
 from .models import (
@@ -269,7 +271,11 @@ class EventEditForm(forms.ModelForm):
                     self.instance.scheduled_date
                 )
             except (TypeError, ValueError):
-                pass
+                logging.getLogger(__name__).warning(
+                    "Event %s has unparseable scheduled_date %r; leaving "
+                    "form initial unset",
+                    self.instance.pk, self.instance.scheduled_date,
+                )
             self.initial["scheduled_time"] = self.instance.scheduled_time
 
     def clean_scheduled_date(self):

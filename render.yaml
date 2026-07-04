@@ -21,11 +21,17 @@ services:
       python manage.py collectstatic --noinput && \
       python manage.py migrate --fake-initial
 
-    startCommand: gunicorn mt.wsgi:application --bind 0.0.0.0:$PORT
+    # --threads 4 switches gunicorn to the gthread worker class: up to
+    # 2x4=8 concurrent request threads, each holding its own DB
+    # connection (plus AI background threads and overlapping crons).
+    # Budget stays well under Neon's per-plan connection limit; see
+    # settings.py CONN_MAX_AGE. Without threads, one multi-second
+    # Anthropic call blocks the sole sync worker for every user.
+    startCommand: gunicorn mt.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 60
 
-    # /health/ returns JSON {status, git_sha} — checks the app is actually
-    # responding, not just the marketing landing page which would stay 200
-    # even if the rest of the app were broken.
+    # /health/ returns JSON {status, db, git_sha} and runs SELECT 1 —
+    # 503 when the database is unreachable, so Render stops routing to
+    # a booted-but-dead service (not just a live marketing page).
     healthCheckPath: /health/
 
     envVars:
@@ -73,9 +79,11 @@ services:
         sync: false
       - key: DJANGO_SECRET_KEY
         sync: false
-      # Without CONFIG_ENCRYPTION_KEY the Fernet init raises and
-      # get_config swallows it → SMTP/Anthropic creds read as None
-      # → cron silently exits "no managers configured" every Monday.
+      # Without CONFIG_ENCRYPTION_KEY, decryption fails and get_config
+      # logs ERROR + treats SMTP/Anthropic creds as unset, so the cron
+      # exits "no managers configured" every Monday. The ERROR line in
+      # the cron logs is the tell — but keep the key set here so it
+      # never comes to that.
       - key: CONFIG_ENCRYPTION_KEY
         sync: false
       - key: ANTHROPIC_API_KEY

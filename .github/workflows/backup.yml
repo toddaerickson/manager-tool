@@ -1,0 +1,167 @@
+# Nightly encrypted backup of production Neon Postgres.
+#
+# Belt-and-suspenders alongside Neon's managed PITR (paid tier): an
+# independent logical dump we control, encrypted, retained 30 days as
+# a private workflow artifact.
+#
+# Every run PROVES the backup is restorable — not just structurally
+# (`pg_restore --list` passes on an empty or wrong-DB dump) but by
+# restoring into a scratch Postgres and asserting row counts on core
+# tables, then comparing totals against the previous run's baseline.
+#
+# Dead-man's switch: the final step pings HEALTHCHECK_PING_URL only on
+# success. healthchecks.io alerts when a day passes without a ping —
+# this is what catches GitHub silently auto-disabling scheduled
+# workflows after 60 days of repo inactivity (no email, just a banner
+# nobody sees). Do NOT remove the ping step.
+#
+# Required repo secrets (fail-fast checked):
+#   PROD_DATABASE_URL    — read-only role preferred, but it must have
+#                          SELECT on ALL tables (partial grants
+#                          short-dump silently)
+#   BACKUP_PASSPHRASE    — openssl symmetric key; stored in the
+#                          operator's password manager. Backups are
+#                          unrecoverable without it.
+# Optional but strongly recommended:
+#   HEALTHCHECK_PING_URL — healthchecks.io check URL (period 24h).
+#                          Unset → the run only emits a ::warning:: and
+#                          the dead-man's switch stays INACTIVE.
+
+name: Nightly DB backup
+
+on:
+  schedule:
+    - cron: '30 8 * * *' # daily 08:30 UTC (~4:30 AM ET)
+  workflow_dispatch:
+
+jobs:
+  backup:
+    name: Dump, encrypt, prove restorable
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: restore
+          POSTGRES_DB: restore_check
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Fail fast if secrets are missing
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          [ -n "$PROD_DATABASE_URL" ] || { echo "::error::PROD_DATABASE_URL secret is not set"; exit 1; }
+          [ -n "$BACKUP_PASSPHRASE" ] || { echo "::error::BACKUP_PASSPHRASE secret is not set"; exit 1; }
+
+      - name: Install postgresql-client-17
+        # Client major must be >= Neon's server major (pg_dump refuses
+        # to dump a newer server). 17 covers Neon on PG 16 or 17.
+        run: |
+          set -euo pipefail
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends postgresql-client-17
+          pg_dump --version
+
+      - name: Dump production
+        env:
+          PROD_DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          pg_dump "$PROD_DATABASE_URL" -Fc --no-owner --no-privileges -f backup.dump
+          ls -l backup.dump
+
+      - name: Encrypt and verify round-trip
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+            -in backup.dump -out backup.dump.enc -pass env:BACKUP_PASSPHRASE
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in backup.dump.enc -out roundtrip.dump -pass env:BACKUP_PASSPHRASE
+          cmp backup.dump roundtrip.dump
+          echo "encrypt/decrypt round-trip OK"
+
+      - name: Restore into scratch Postgres and count rows
+        env:
+          SCRATCH_URL: postgresql://postgres:restore@localhost:5432/restore_check
+        run: |
+          set -euo pipefail
+          pg_restore --no-owner --no-privileges -d "$SCRATCH_URL" roundtrip.dump
+          # Content assertions: an empty/wrong-DB dump restores "fine"
+          # but has no rows. managers must be >=1 and the app's core
+          # content tables must not all be empty.
+          psql "$SCRATCH_URL" -At -c "
+            SELECT 'managers=' || count(*) FROM managers
+            UNION ALL SELECT 'journal_entries=' || count(*) FROM journal_entries
+            UNION ALL SELECT 'one_on_one_sessions=' || count(*) FROM one_on_one_sessions
+            UNION ALL SELECT 'team_members=' || count(*) FROM team_members
+            UNION ALL SELECT 'action_items=' || count(*) FROM action_items
+          " > counts.txt
+          cat counts.txt
+          managers=$(grep '^managers=' counts.txt | cut -d= -f2)
+          content=$(awk -F= '!/^managers=/{s+=$2} END{print s+0}' counts.txt)
+          [ "$managers" -ge 1 ] || { echo "::error::restored dump has no managers rows — backup is garbage"; exit 1; }
+          [ "$content" -ge 1 ] || { echo "::error::restored dump has zero content rows — backup is garbage"; exit 1; }
+
+      - name: Restore previous run's baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: baseline.txt
+          key: backup-baseline-${{ github.run_id }}
+          restore-keys: backup-baseline-
+
+      - name: Compare against baseline (fail on >30% shrink)
+        run: |
+          set -euo pipefail
+          new_total=$(awk -F= '{s+=$2} END{print s+0}' counts.txt)
+          echo "new_total=$new_total"
+          if [ -f baseline.txt ]; then
+            old_total=$(awk -F= '{s+=$2} END{print s+0}' baseline.txt)
+            echo "old_total=$old_total"
+            floor=$(( old_total * 70 / 100 ))
+            if [ "$new_total" -lt "$floor" ]; then
+              echo "::error::row total dropped from $old_total to $new_total (>30% shrink) — refusing to overwrite baseline; investigate before trusting this backup"
+              exit 1
+            fi
+          else
+            echo "no baseline yet (first run) — skipping comparison"
+          fi
+          cp counts.txt baseline.txt
+
+      - name: Save new baseline
+        uses: actions/cache/save@v4
+        with:
+          path: baseline.txt
+          key: backup-baseline-${{ github.run_id }}
+
+      - name: Upload encrypted backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-backup-${{ github.run_number }}
+          path: backup.dump.enc
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Dead-man's switch ping
+        env:
+          HEALTHCHECK_PING_URL: ${{ secrets.HEALTHCHECK_PING_URL }}
+        run: |
+          set -euo pipefail
+          if [ -n "$HEALTHCHECK_PING_URL" ]; then
+            curl -fsS -m 10 --retry 3 "$HEALTHCHECK_PING_URL" > /dev/null
+            echo "dead-man's switch pinged"
+          else
+            echo "::warning::HEALTHCHECK_PING_URL not set — dead-man's switch INACTIVE; silent workflow death will go unnoticed"
+          fi

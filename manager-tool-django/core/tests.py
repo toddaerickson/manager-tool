@@ -4686,6 +4686,23 @@ class TestHealthEndpoint:
         resp = client.get("/health/")
         assert resp.json()["git_sha"] == "abc1234"
 
+    def test_health_reports_db_ok(self, client):
+        assert client.get("/health/").json()["db"] == "ok"
+
+    def test_health_returns_503_when_db_unreachable(self, client, mocker):
+        """PR-1 hardening: a process that boots but can't reach the DB
+        must NOT report healthy — Render's health check would keep
+        routing traffic to a service that 500s on every real page."""
+        conn = mocker.patch("core.views._common.connection")
+        conn.cursor.side_effect = Exception("db down")
+        resp = client.get("/health/")
+        assert resp.status_code == 503
+        data = resp.json()
+        assert data["status"] == "error"
+        assert data["db"] == "unreachable"
+        # git_sha still reported so the broken deploy is identifiable
+        assert "git_sha" in data
+
 
 @pytest.mark.django_db
 class TestLanding:
@@ -5857,3 +5874,123 @@ class TestEventsSendInvite:
             client.post(f"/events/{ev.id}/invite/")
         log = AuditLog.objects.filter(entity_type="CalendarInvite").get()
         assert log.manager_id == m.id
+
+
+@pytest.mark.django_db
+class TestGetConfigFailLoud:
+    """PR-1 review finding: a rotated/missing CONFIG_ENCRYPTION_KEY must
+    be LOUD (ERROR log), not indistinguishable from 'never configured'.
+    Previously get_config's blanket `except Exception: return default`
+    made both cases return None silently — the render.yaml:76-79
+    silent-cron bug class."""
+
+    def _manager(self):
+        return Manager.objects.create(
+            username="cfg_loud", display_name="CfgLoud",
+            password_hash="h", email="cfg_loud@example.com",
+        )
+
+    def test_decrypt_failure_returns_default_and_logs_error(self, caplog):
+        import logging as _logging
+
+        from core.models import Config
+        from core.services.config import get_config
+
+        m = self._manager()
+        # A sensitive key whose stored value is NOT valid Fernet
+        # ciphertext — what prod rows look like after a key rotation.
+        Config.objects.create(
+            manager_id=m.id, key="smtp_password", value="enc:not-real-fernet",
+        )
+        with caplog.at_level(_logging.ERROR, logger="core.services.config"):
+            assert get_config("smtp_password", m.id, default=None) is None
+        messages = [r.getMessage() for r in caplog.records
+                    if r.name == "core.services.config"]
+        assert any(
+            "failed to decrypt" in msg and "smtp_password" in msg
+            for msg in messages
+        ), f"expected a loud decrypt-failure ERROR, got: {messages}"
+
+    def test_malformed_encryption_key_returns_default_and_logs_error(
+        self, caplog, monkeypatch,
+    ):
+        """Review finding (PR #121): a present-but-INVALID key (bad
+        paste during rotation) makes Fernet() raise a bare ValueError.
+        decrypt_value must wrap it as EncryptionUnavailableError so
+        get_config fails loud + returns default instead of crashing
+        the caller — same class as the Sentry BadDsn incident."""
+        import logging as _logging
+
+        from core.models import Config
+        from core.services.config import get_config
+
+        m = self._manager()
+        Config.objects.create(
+            manager_id=m.id, key="smtp_password", value="enc:whatever",
+        )
+        monkeypatch.setenv("CONFIG_ENCRYPTION_KEY", "not-a-valid-fernet-key")
+        with caplog.at_level(_logging.ERROR, logger="core.services.config"):
+            assert get_config("smtp_password", m.id, default=None) is None
+        messages = [r.getMessage() for r in caplog.records
+                    if r.name == "core.services.config"]
+        assert any(
+            "failed to decrypt" in msg and "smtp_password" in msg
+            for msg in messages
+        ), f"malformed key must fail loud, got: {messages}"
+
+    def test_missing_row_returns_default_without_error_log(self, caplog):
+        import logging as _logging
+
+        from core.services.config import get_config
+
+        m = self._manager()
+        with caplog.at_level(_logging.ERROR):
+            assert get_config("smtp_password", m.id, default="fb") == "fb"
+        errors = [r for r in caplog.records if r.levelno >= _logging.ERROR]
+        assert not errors, "genuinely-unconfigured must stay quiet"
+
+    def test_valid_encrypted_value_still_roundtrips(self):
+        from core.services.config import get_config, set_config
+
+        m = self._manager()
+        set_config("smtp_password", m.id, "s3cret")
+        assert get_config("smtp_password", m.id) == "s3cret"
+
+
+class TestNoSilentExcepts:
+    """Ported from legacy/tests/test_no_silent_excepts.py (AUDIT M6):
+    a production except block whose body is just `pass` is the
+    canonical silent failure — every except must log, assign a
+    fallback, or re-raise. Scans core/, coaching/, and mt/; tests and
+    migrations are excluded, as is scripts/ (the PG smoke harness is
+    test code whose expected-exception asserts legitimately pass)."""
+
+    def test_no_silent_except_pass(self):
+        import ast
+        from pathlib import Path
+
+        django_root = Path(__file__).resolve().parent.parent
+        offenders = []
+        for pkg in ("core", "coaching", "mt"):
+            for path in sorted((django_root / pkg).rglob("*.py")):
+                if "migrations" in path.parts:
+                    continue
+                if path.name in ("tests.py", "settings_test.py"):
+                    continue
+                tree = ast.parse(path.read_text())
+                for node in ast.walk(tree):
+                    if (
+                        isinstance(node, ast.ExceptHandler)
+                        and len(node.body) == 1
+                        and isinstance(node.body[0], ast.Pass)
+                    ):
+                        label = ("bare" if node.type is None
+                                 else ast.unparse(node.type))
+                        offenders.append(
+                            f"{path.relative_to(django_root)}:"
+                            f"{node.lineno} ({label})"
+                        )
+        assert not offenders, (
+            "Silent `except: pass` blocks found — every except must "
+            f"log, assign a fallback, or re-raise: {offenders}"
+        )

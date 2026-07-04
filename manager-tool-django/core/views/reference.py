@@ -127,7 +127,7 @@ def history(request):
         try:
             member_id = int(member_raw)
         except ValueError:
-            pass  # ignore bad input, show unfiltered
+            member_id = None  # ignore bad input, show unfiltered
     members = TeamMember.objects.active_for_manager(mid).order_by("name")
 
     timeline = []

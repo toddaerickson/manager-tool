@@ -115,6 +115,12 @@ WSGI_APPLICATION = "mt.wsgi.application"
 # --- Database -----------------------------------------------------------
 
 DATABASES = {"default": env.db("DATABASE_URL")}
+# Persistent connections: gunicorn runs gthread (2 workers x 4 threads,
+# see render.yaml) and each thread holds its own connection. Reuse them
+# for 60s instead of reconnecting per request; health-check before reuse
+# because Neon can drop idle connections server-side.
+DATABASES["default"]["CONN_MAX_AGE"] = 60
+DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
 
 # --- Auth ---------------------------------------------------------------
@@ -151,6 +157,39 @@ LOGOUT_REDIRECT_URL = "/"
 # intermediate "click to continue" page).
 LOGIN_URL = "/accounts/google/login/"
 SOCIALACCOUNT_LOGIN_ON_GET = True
+
+
+# --- Sessions ------------------------------------------------------------
+
+# 24h sliding idle window: the app holds HR-sensitive notes, so an
+# abandoned browser session should expire within a day of last use
+# rather than living for Django's default two weeks.
+SESSION_COOKIE_AGE = 86400
+SESSION_SAVE_EVERY_REQUEST = True
+
+
+# --- Logging --------------------------------------------------------------
+
+# Explicit console logging so app loggers (core.*, coaching.*) reach
+# Render's log stream at INFO+ with a consistent timestamped format.
+# Without this, app-level logger.info calls are swallowed entirely and
+# WARNING+ only surfaces via Python's bare last-resort handler.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "console": {
+            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "console",
+        },
+    },
+    "root": {"handlers": ["console"], "level": "INFO"},
+}
 
 
 # --- Internationalization ----------------------------------------------
