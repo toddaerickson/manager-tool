@@ -114,7 +114,15 @@ def journal_add(request):
                  f"Journal ({entry.entry_type}): {(entry.content or '')[:60]}")
     # Generate coaching response in a background thread so the
     # save returns instantly (finding #1 from /review-as).
-    if entry.content and entry.content.strip():
+    # COACHING_ENABLED is False under settings_test: the daemon thread
+    # opens its own connection to the shared in-memory test DB and its
+    # writes commit outside the test transaction, so a spawned thread can
+    # leak a CoachingResponse row past rollback into an unrelated test.
+    # Disabling the spawn keeps tests isolated; the generation logic is
+    # covered directly by coaching/tests.py.
+    from django.conf import settings
+    if (entry.content and entry.content.strip()
+            and getattr(settings, "COACHING_ENABLED", True)):
         import threading
 
         def _generate_coaching(entry_id, manager_id, content, entry_type):

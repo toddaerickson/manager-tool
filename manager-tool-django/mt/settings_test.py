@@ -33,3 +33,9 @@ DATABASES = {
 
 # Speed up password hashing in tests
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+
+# Disable the journal coaching daemon thread in tests. It opens its own
+# connection to the shared :memory: DB and commits a CoachingResponse
+# audit row outside the test transaction, leaking rows past rollback into
+# unrelated tests. Coaching generation itself is covered by coaching/tests.py.
+COACHING_ENABLED = False
