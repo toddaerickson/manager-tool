@@ -4418,7 +4418,13 @@ class TestConfigService:
     def test_set_audits_nonsensitive_change(self):
         from core.services.config import set_config
         m = self._mgr()
-        before = AuditLog.objects.filter(manager_id=m.id).count()
+        # Count Config rows specifically, not all audit rows: a background
+        # coaching thread from an earlier test can leave a CoachingResponse
+        # row on this manager_id in the shared in-memory test DB, which
+        # would inflate an unfiltered `before` and flake this assertion.
+        before = AuditLog.objects.filter(
+            manager_id=m.id, entity_type="Config",
+        ).count()
         set_config("manager_name", m.id, "Alice")
         rows = AuditLog.objects.filter(
             manager_id=m.id, entity_type="Config",
