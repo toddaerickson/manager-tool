@@ -71,7 +71,13 @@ jobs:
           set -euo pipefail
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y --no-install-recommends postgresql-client-17
-          pg_dump --version
+          # The runner image preinstalls postgresql-client-16 and
+          # /usr/bin/pg_dump keeps resolving to it (first live run
+          # failed: "server version: 17.10; pg_dump version: 16.14").
+          # Prepend the versioned bindir so every later step's pg_dump/
+          # pg_restore/psql is 17.
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
 
       - name: Dump production
         env:
