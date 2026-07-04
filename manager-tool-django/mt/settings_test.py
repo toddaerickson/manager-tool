@@ -39,3 +39,15 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 # audit row outside the test transaction, leaking rows past rollback into
 # unrelated tests. Coaching generation itself is covered by coaching/tests.py.
 COACHING_ENABLED = False
+
+# Plain static storage in tests: WhiteNoise's manifest storage raises
+# "Missing staticfiles manifest entry" for {% static 'css/tw.css' %}
+# unless collectstatic ran first, and pytest (locally and in CI) never
+# runs collectstatic. Hashing/compression is deploy behavior, not app
+# logic under test.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}

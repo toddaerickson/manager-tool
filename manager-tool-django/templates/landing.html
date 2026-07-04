@@ -11,29 +11,9 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['"Public Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-            display: ['Fraunces', 'ui-serif', 'Georgia', 'serif'],
-          },
-          colors: {
-            accent: {
-              50: '#f0fdfa', 100: '#ccfbf1', 200: '#99f6e4', 300: '#5eead4',
-              400: '#2dd4bf', 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e',
-              800: '#115e59', 900: '#134e4a',
-            },
-          },
-          borderRadius: {
-            DEFAULT: '0.25rem', md: '0.375rem', lg: '0.375rem', xl: '0.5rem',
-          },
-        },
-      },
-    };
-  </script>
+  {% comment %} Compiled Tailwind (roadmap PR 2) — tokens live in
+     tailwind.config.js; see base.html for the rebuild command. {% endcomment %}
+  <link rel="stylesheet" href="{% static 'css/tw.css' %}">
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
   <main class="flex-1 flex items-center justify-center px-6 py-12">

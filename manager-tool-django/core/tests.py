@@ -5994,3 +5994,59 @@ class TestNoSilentExcepts:
             "Silent `except: pass` blocks found — every except must "
             f"log, assign a fallback, or re-raise: {offenders}"
         )
+
+
+class TestCompiledCssCoverage:
+    """Roadmap PR 2 guard: Tailwind is a compiled artifact now (the Play
+    CDN compiled classes at runtime). Every class token used in
+    templates or Python-emitted markup must exist in static/css/tw.css,
+    or it silently renders unstyled. Failing here means: rebuild —
+    TAILWINDCSS_VERSION=v3.4.17 tailwindcss -c tailwind.config.js
+    -i static/src/input.css -o static/css/tw.css --minify"""
+
+    def test_every_used_class_exists_in_compiled_css(self):
+        import glob as _glob
+        import re as _re
+        from pathlib import Path
+
+        django_root = Path(__file__).resolve().parent.parent
+        css = (django_root / "static/css/tw.css").read_text()
+
+        tokens = set()
+        for f in _glob.glob(str(django_root / "templates/**/*.html"),
+                            recursive=True):
+            for m in _re.findall(r'class="([^"]*)"', Path(f).read_text()):
+                m = _re.sub(r"{%[^%]*%}|{{[^}]*}}|{#[^#]*#}", " ", m)
+                tokens.update(m.split())
+        # Python files that emit markup with Tailwind classes — glob the
+        # same trees as tailwind.config.js `content` so this guard can't
+        # drift as files are added. tests.py excluded: assertion strings
+        # aren't emitted markup.
+        py_files = []
+        for pkg in ("core", "coaching"):
+            py_files += _glob.glob(str(django_root / pkg / "**" / "*.py"),
+                                   recursive=True)
+        for f in sorted(py_files):
+            if Path(f).name == "tests.py":
+                continue
+            src = Path(f).read_text()
+            for m in _re.findall(
+                r'["\']class["\']\s*:\s*["\']([^"\']*)["\']', src,
+            ):
+                tokens.update(m.split())
+            for m in _re.findall(r'class=\\?"([^"\\]*)\\?"', src):
+                tokens.update(m.split())
+
+        missing = []
+        for t in sorted(tokens):
+            if not t or t.startswith("{") or t.endswith("}"):
+                continue
+            sel = t
+            for ch in ":./[]#%":
+                sel = sel.replace(ch, "\\" + ch)
+            if ("." + sel) not in css:
+                missing.append(t)
+        assert not missing, (
+            "Class tokens missing from compiled static/css/tw.css — "
+            f"rebuild it (see docstring): {missing}"
+        )

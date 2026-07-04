@@ -18,6 +18,7 @@ services:
 
     buildCommand: |
       pip install -r requirements.txt && \
+      TAILWINDCSS_VERSION=v3.4.17 tailwindcss -c tailwind.config.js -i static/src/input.css -o static/css/tw.css --minify && \
       python manage.py collectstatic --noinput && \
       python manage.py migrate --fake-initial
 
