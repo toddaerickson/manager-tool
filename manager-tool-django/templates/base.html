@@ -47,6 +47,11 @@
         {% endif %}
       </div>
 
+      <form action="{% url 'search' %}" method="get" class="px-2 pt-3">
+        <input type="search" name="q" placeholder="Search everything…"
+               class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent-500">
+      </form>
+
       <nav class="flex-1 px-2 py-4 space-y-6 text-sm">
         {% comment %}
         Sidebar IA mirrors CLAUDE.md. Only Dashboard is implemented in

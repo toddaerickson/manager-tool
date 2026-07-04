@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Search — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Search</h1>
+  </header>
+
+  <form action="{% url 'search' %}" method="get" class="flex gap-2 mb-6">
+    <input type="search" name="q" value="{{ q }}" autofocus
+           placeholder="Search journal, 1:1s, notes, decisions, feedback…"
+           class="flex-1 border border-slate-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-accent-500">
+    <button type="submit"
+            class="bg-accent-700 hover:bg-accent-800 text-white text-sm font-medium rounded px-4 py-1.5">Search</button>
+  </form>
+
+  {% if q and q|length < min_len %}
+    <p class="text-sm text-slate-500">Type at least {{ min_len }} characters.</p>
+  {% elif q and total == 0 %}
+    <p class="text-sm text-slate-500">No matches for “{{ q }}”.</p>
+  {% elif q %}
+    <p class="text-xs text-slate-500 mb-4">{{ total }} result{{ total|pluralize }} for “{{ q }}” (max {{ cap }} per section)</p>
+
+    <div class="space-y-4">
+      {% for g in groups %}
+      <section>
+        <h2 class="text-xs uppercase tracking-wider text-slate-500 mb-2">{{ g.label }} <span class="text-slate-400">({{ g.items|length }})</span></h2>
+        <div class="bg-white rounded-lg shadow-sm border border-slate-200 divide-y divide-slate-100">
+          {% for item in g.items %}
+          <a href="{{ item.url }}" class="block px-4 py-2 min-h-11 hover:bg-slate-50">
+            <div class="flex items-baseline justify-between gap-3">
+              <span class="text-sm font-medium text-slate-900 truncate min-w-0">{{ item.title }}</span>
+              {% if item.date %}<span class="text-xs text-slate-400 tabular-nums shrink-0">{{ item.date }}</span>{% endif %}
+            </div>
+            {% if item.snippet %}
+              <p class="text-xs text-slate-600 mt-0.5 line-clamp-2">{{ item.snippet }}</p>
+            {% endif %}
+          </a>
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="text-sm text-slate-500">Search everything you've written — journal entries, 1:1 notes, running notes, decisions, feedback, delegations, to-dos, goals, career conversations, team, and events.</p>
+  {% endif %}
+</div>
+{% endblock %}
