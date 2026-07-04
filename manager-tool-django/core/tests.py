@@ -5847,6 +5847,33 @@ class TestGetConfigFailLoud:
             for msg in messages
         ), f"expected a loud decrypt-failure ERROR, got: {messages}"
 
+    def test_malformed_encryption_key_returns_default_and_logs_error(
+        self, caplog, monkeypatch,
+    ):
+        """Review finding (PR #121): a present-but-INVALID key (bad
+        paste during rotation) makes Fernet() raise a bare ValueError.
+        decrypt_value must wrap it as EncryptionUnavailableError so
+        get_config fails loud + returns default instead of crashing
+        the caller — same class as the Sentry BadDsn incident."""
+        import logging as _logging
+
+        from core.models import Config
+        from core.services.config import get_config
+
+        m = self._manager()
+        Config.objects.create(
+            manager_id=m.id, key="smtp_password", value="enc:whatever",
+        )
+        monkeypatch.setenv("CONFIG_ENCRYPTION_KEY", "not-a-valid-fernet-key")
+        with caplog.at_level(_logging.ERROR, logger="core.services.config"):
+            assert get_config("smtp_password", m.id, default=None) is None
+        messages = [r.getMessage() for r in caplog.records
+                    if r.name == "core.services.config"]
+        assert any(
+            "failed to decrypt" in msg and "smtp_password" in msg
+            for msg in messages
+        ), f"malformed key must fail loud, got: {messages}"
+
     def test_missing_row_returns_default_without_error_log(self, caplog):
         import logging as _logging
 

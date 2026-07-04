@@ -171,9 +171,9 @@ SESSION_SAVE_EVERY_REQUEST = True
 # --- Logging --------------------------------------------------------------
 
 # Explicit console logging so app loggers (core.*, coaching.*) reach
-# Render's log stream at INFO+. Without this, Django's default config
-# only surfaces django.* at WARNING and swallows app-level logger.info/
-# logger.error calls from services and crons.
+# Render's log stream at INFO+ with a consistent timestamped format.
+# Without this, app-level logger.info calls are swallowed entirely and
+# WARNING+ only surfaces via Python's bare last-resort handler.
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

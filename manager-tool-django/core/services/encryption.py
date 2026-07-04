@@ -72,18 +72,27 @@ def decrypt_value(value):
     """Decrypt a value previously stored via encrypt_value(). Values
     that don't carry the 'enc:' prefix are returned as-is so legacy
     rows (or non-sensitive keys mistakenly passed through here) don't
-    break. Raises on decryption failure — never returns ciphertext as
-    plaintext."""
+    break. Raises EncryptionUnavailableError on ANY decryption failure
+    — never returns ciphertext as plaintext.
+
+    _get_fernet() is called INSIDE the try: a present-but-malformed
+    CONFIG_ENCRYPTION_KEY (bad paste into the Render dashboard) makes
+    Fernet() raise a bare ValueError, and callers that catch only
+    EncryptionUnavailableError must see that failure too — the same
+    malformed-secret crash class as the Sentry BadDsn incident
+    (commit 28328e0)."""
     if not value or not value.startswith(_ENC_PREFIX):
         return value
-    f = _get_fernet()
     try:
+        f = _get_fernet()
         return f.decrypt(value[len(_ENC_PREFIX):].encode()).decode()
+    except EncryptionUnavailableError:
+        raise
     except Exception as e:
         logger.exception("Failed to decrypt sensitive config value")
         raise EncryptionUnavailableError(
-            "Failed to decrypt sensitive config value "
-            "(encryption key may have changed or value is corrupt)."
+            "Failed to decrypt sensitive config value (encryption key "
+            "may be malformed, may have changed, or value is corrupt)."
         ) from e
 
 

@@ -15,14 +15,17 @@
 # workflows after 60 days of repo inactivity (no email, just a banner
 # nobody sees). Do NOT remove the ping step.
 #
-# Required repo secrets:
+# Required repo secrets (fail-fast checked):
 #   PROD_DATABASE_URL    — read-only role preferred, but it must have
 #                          SELECT on ALL tables (partial grants
 #                          short-dump silently)
 #   BACKUP_PASSPHRASE    — openssl symmetric key; stored in the
 #                          operator's password manager. Backups are
 #                          unrecoverable without it.
-#   HEALTHCHECK_PING_URL — healthchecks.io check URL (period 24h)
+# Optional but strongly recommended:
+#   HEALTHCHECK_PING_URL — healthchecks.io check URL (period 24h).
+#                          Unset → the run only emits a ::warning:: and
+#                          the dead-man's switch stays INACTIVE.
 
 name: Nightly DB backup
 
