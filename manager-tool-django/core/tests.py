@@ -5994,3 +5994,69 @@ class TestNoSilentExcepts:
             "Silent `except: pass` blocks found — every except must "
             f"log, assign a fallback, or re-raise: {offenders}"
         )
+
+
+class TestCompiledCssCoverage:
+    """Roadmap PR 2 guard: Tailwind is a compiled artifact now (the Play
+    CDN compiled classes at runtime). Every class token used in
+    templates or Python-emitted markup must exist in static/css/tw.css,
+    or it silently renders unstyled. Failing here means: rebuild —
+    TAILWINDCSS_VERSION=v3.4.17 tailwindcss -c tailwind.config.js
+    -i static/src/input.css -o static/css/tw.css --minify"""
+
+    def test_every_used_class_exists_in_compiled_css(self):
+        import glob as _glob
+        import re as _re
+        from pathlib import Path
+
+        django_root = Path(__file__).resolve().parent.parent
+        css = (django_root / "static/css/tw.css").read_text(encoding="utf-8")
+
+        # Templates via the shared helper (review finding: hand-rolled
+        # globs reintroduce the hardcoded-path / vacuous-pass / encoding
+        # defects _project_template_files() was built to prevent).
+        tokens = set()
+        for path in _project_template_files():
+            for m in _re.findall(
+                r'class="([^"]*)"', path.read_text(encoding="utf-8"),
+            ):
+                m = _re.sub(r"{%[^%]*%}|{{[^}]*}}|{#[^#]*#}", " ", m)
+                tokens.update(m.split())
+        # Python files that emit markup with Tailwind classes — glob the
+        # same trees as tailwind.config.js `content` so this guard can't
+        # drift as files are added. tests.py excluded: assertion strings
+        # aren't emitted markup.
+        py_files = []
+        for pkg in ("core", "coaching"):
+            py_files += _glob.glob(str(django_root / pkg / "**" / "*.py"),
+                                   recursive=True)
+        assert py_files, "py-file scan matched nothing — glob roots moved?"
+        for f in sorted(py_files):
+            if Path(f).name == "tests.py":
+                continue
+            src = Path(f).read_text(encoding="utf-8")
+            for m in _re.findall(
+                r'["\']class["\']\s*:\s*["\']([^"\']*)["\']', src,
+            ):
+                tokens.update(m.split())
+            for m in _re.findall(r'class=\\?"([^"\\]*)\\?"', src):
+                tokens.update(m.split())
+
+        missing = []
+        for t in sorted(tokens):
+            if not t or t.startswith("{") or t.endswith("}"):
+                continue
+            sel = t
+            for ch in ":./[]#%":
+                sel = sel.replace(ch, "\\" + ch)
+            # Delimiter-aware match (review finding: plain substring
+            # containment false-passes prefix classes — bare "shadow"
+            # would match inside ".shadow-lg" despite having no rule).
+            if not _re.search(
+                _re.escape("." + sel) + r"(?![-\w])", css,
+            ):
+                missing.append(t)
+        assert not missing, (
+            "Class tokens missing from compiled static/css/tw.css — "
+            f"rebuild it (see docstring): {missing}"
+        )

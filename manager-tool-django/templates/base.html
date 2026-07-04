@@ -11,38 +11,18 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    // Design tokens. One accent (teal), a deliberate type pair, and a
-    // tightened radius scale so nothing renders as default-rounded slop.
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['"Public Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
-            display: ['Fraunces', 'ui-serif', 'Georgia', 'serif'],
-          },
-          colors: {
-            accent: {
-              50: '#f0fdfa', 100: '#ccfbf1', 200: '#99f6e4', 300: '#5eead4',
-              400: '#2dd4bf', 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e',
-              800: '#115e59', 900: '#134e4a',
-            },
-          },
-          borderRadius: {
-            DEFAULT: '0.25rem', md: '0.375rem', lg: '0.375rem', xl: '0.5rem',
-          },
-        },
-      },
-    };
-  </script>
-  <style type="text/tailwindcss">
-    h1 { @apply font-display tracking-tight; }
-  </style>
+  {% comment %} Compiled Tailwind (roadmap PR 2) — replaces the Play CDN,
+     which is explicitly not for production (runtime compilation, ~300KB
+     JS, FOUC on phones). Design tokens live in tailwind.config.js; the
+     h1 base layer in static/src/input.css. Rebuild after class changes:
+       TAILWINDCSS_VERSION=v3.4.17 tailwindcss -c tailwind.config.js \
+         -i static/src/input.css -o static/css/tw.css --minify
+     (render.yaml's buildCommand runs this on every deploy.) {% endcomment %}
+  <link rel="stylesheet" href="{% static 'css/tw.css' %}">
 
-  <script src="https://unpkg.com/htmx.org@2.0.4"
-          integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
-          crossorigin="anonymous"></script>
+  {% comment %} htmx 2.0.4, vendored — byte-identical to the unpkg build
+     previously pinned by SRI hash sha384-HGfzt... {% endcomment %}
+  <script src="{% static 'js/htmx.min.js' %}"></script>
 </head>
 <body class="bg-slate-50 text-slate-900">
   {# Mobile hamburger toggle #}

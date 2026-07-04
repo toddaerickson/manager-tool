@@ -9,7 +9,6 @@ Django==5.1.15
 django-allauth==65.16.1
 django-environ==0.13.0
 django-htmx==1.27.0
-django-tailwind==4.4.2
 freezegun==1.5.5
 gunicorn==25.3.0
 idna==3.13
