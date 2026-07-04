@@ -1,6 +1,6 @@
 # Design system
 
-A deliberate visual identity for Manager Tool. The point is to NOT look like generic AI-generated SaaS. Tokens live in `templates/base.html` (`tailwind.config`) so they cascade across every template; do not hardcode fonts, ad-hoc hex colors, or default radii in individual templates.
+A deliberate visual identity for Manager Tool. The point is to NOT look like generic AI-generated SaaS. Tokens live in `tailwind.config.js` and compile into `static/css/tw.css`, which every template loads via `base.html`/`landing.html`; do not hardcode fonts, ad-hoc hex colors, or default radii in individual templates. After changing tokens or template classes, rebuild: `TAILWINDCSS_VERSION=v3.4.17 tailwindcss -c tailwind.config.js -i static/src/input.css -o static/css/tw.css --minify` (CI's `TestCompiledCssCoverage` fails if you forget).
 
 ## Type
 

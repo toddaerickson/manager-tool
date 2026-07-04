@@ -257,7 +257,7 @@ Set `DATABASE_URL`, `DJANGO_SECRET_KEY`, `CONFIG_ENCRYPTION_KEY`, and the Google
 Deployed on **Render** (`render.yaml`), Postgres on **Neon**.
 
 - Root directory: `manager-tool-django/`
-- Build: `pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate`
+- Build: `pip install -r requirements.txt && TAILWINDCSS_VERSION=v3.4.17 tailwindcss -c tailwind.config.js -i static/src/input.css -o static/css/tw.css --minify && python manage.py collectstatic --noinput && python manage.py migrate`
 - Start: `gunicorn mt.wsgi:application --bind 0.0.0.0:$PORT`
 - Env vars: `DATABASE_URL`, `DJANGO_SECRET_KEY`, `CONFIG_ENCRYPTION_KEY`, `MANAGER_TOOL_ENV=prod`, Google OAuth secrets, `SENTRY_DSN`
 - A Render Cron service runs `python manage.py send_weekly_digests`
@@ -274,7 +274,7 @@ Django>=5.0,<5.2
 psycopg2-binary
 django-allauth[socialaccount]
 django-htmx
-django-tailwind
+pytailwindcss
 cryptography
 anthropic
 gunicorn

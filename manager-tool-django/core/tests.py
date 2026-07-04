@@ -6010,12 +6010,16 @@ class TestCompiledCssCoverage:
         from pathlib import Path
 
         django_root = Path(__file__).resolve().parent.parent
-        css = (django_root / "static/css/tw.css").read_text()
+        css = (django_root / "static/css/tw.css").read_text(encoding="utf-8")
 
+        # Templates via the shared helper (review finding: hand-rolled
+        # globs reintroduce the hardcoded-path / vacuous-pass / encoding
+        # defects _project_template_files() was built to prevent).
         tokens = set()
-        for f in _glob.glob(str(django_root / "templates/**/*.html"),
-                            recursive=True):
-            for m in _re.findall(r'class="([^"]*)"', Path(f).read_text()):
+        for path in _project_template_files():
+            for m in _re.findall(
+                r'class="([^"]*)"', path.read_text(encoding="utf-8"),
+            ):
                 m = _re.sub(r"{%[^%]*%}|{{[^}]*}}|{#[^#]*#}", " ", m)
                 tokens.update(m.split())
         # Python files that emit markup with Tailwind classes — glob the
@@ -6026,10 +6030,11 @@ class TestCompiledCssCoverage:
         for pkg in ("core", "coaching"):
             py_files += _glob.glob(str(django_root / pkg / "**" / "*.py"),
                                    recursive=True)
+        assert py_files, "py-file scan matched nothing — glob roots moved?"
         for f in sorted(py_files):
             if Path(f).name == "tests.py":
                 continue
-            src = Path(f).read_text()
+            src = Path(f).read_text(encoding="utf-8")
             for m in _re.findall(
                 r'["\']class["\']\s*:\s*["\']([^"\']*)["\']', src,
             ):
@@ -6044,7 +6049,12 @@ class TestCompiledCssCoverage:
             sel = t
             for ch in ":./[]#%":
                 sel = sel.replace(ch, "\\" + ch)
-            if ("." + sel) not in css:
+            # Delimiter-aware match (review finding: plain substring
+            # containment false-passes prefix classes — bare "shadow"
+            # would match inside ".shadow-lg" despite having no rule).
+            if not _re.search(
+                _re.escape("." + sel) + r"(?![-\w])", css,
+            ):
                 missing.append(t)
         assert not missing, (
             "Class tokens missing from compiled static/css/tw.css — "
