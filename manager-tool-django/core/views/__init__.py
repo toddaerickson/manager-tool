@@ -96,3 +96,4 @@ from core.views.reference import (  # noqa: F401
     history,
     resources,
 )
+from core.views.search import search_page  # noqa: F401

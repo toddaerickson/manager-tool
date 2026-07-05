@@ -62,6 +62,7 @@ urlpatterns = [
     path("feedback/", core_views.feedback_list, name="feedback"),
     path("feedback/add/", core_views.feedback_add, name="feedback-add"),
     path("feedback/<int:feedback_id>/delete/", core_views.feedback_delete, name="feedback-delete"),
+    path("search/", core_views.search_page, name="search"),
     path("analytics/", core_views.analytics, name="analytics"),
     path("history/", core_views.history, name="history"),
     path("audit/", core_views.audit_log, name="audit-log"),

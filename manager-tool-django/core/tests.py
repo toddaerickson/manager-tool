@@ -6060,3 +6060,148 @@ class TestCompiledCssCoverage:
             "Class tokens missing from compiled static/css/tw.css — "
             f"rebuild it (see docstring): {missing}"
         )
+
+
+@pytest.mark.django_db
+class TestUnifiedSearch:
+    """Roadmap PR 3: /search/?q= sweeps every content model via
+    for_manager and groups hits. Deep-link assertions cover the three
+    per-item-route archetypes (detail page, edit page x2); list-page
+    links are covered by the group-presence assertions. Cross-tenant
+    isolation matters double here — this is the one view that touches
+    every model at once."""
+
+    TOKEN = "zebrafish"
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="testpw",
+        )
+        client.force_login(u)
+        return u
+
+    def _manager(self, slug):
+        return Manager.objects.create(
+            username=f"search_{slug}", display_name=slug.title(),
+            password_hash="h", email=f"search_{slug}@example.com",
+        )
+
+    def _seed_all_models(self, m, token):
+        from core.models import (
+            ActionItem, CareerConversation, Decision, Delegation, Event,
+            Feedback, Goal, JournalEntry, OneOnOneSession, RunningNote,
+            TeamMember,
+        )
+        tm = TeamMember.objects.create(
+            manager_id=m.id, name=f"Pat {token}", role="Engineer",
+        )
+        OneOnOneSession.objects.create(
+            manager_id=m.id, team_member=tm, session_date="2026-07-01",
+            direct_notes=f"discussed {token} rollout", status="completed",
+        )
+        JournalEntry.objects.create(
+            manager_id=m.id, entry_date="2026-07-01",
+            content=f"thinking about {token} strategy",
+        )
+        RunningNote.objects.create(
+            manager_id=m.id, team_member=tm, note_date="2026-07-01",
+            content=f"{token} status update",
+        )
+        Decision.objects.create(
+            manager_id=m.id, title=f"Adopt {token}", context="ctx",
+        )
+        Feedback.objects.create(
+            manager_id=m.id, team_member=tm, feedback_type="praise",
+            situation=f"handled the {token} incident",
+        )
+        Delegation.objects.create(
+            manager_id=m.id, team_member=tm, task=f"own the {token} runbook",
+            status="active",
+        )
+        ActionItem.objects.create(
+            manager_id=m.id, description=f"review {token} PRs",
+            status="pending",
+        )
+        Goal.objects.create(
+            manager_id=m.id, team_member=tm, quarter="Q3 2026",
+            description=f"ship {token} v1",
+        )
+        CareerConversation.objects.create(
+            manager_id=m.id, team_member=tm,
+            conversation_date="2026-07-01", topic=f"{token} growth path",
+        )
+        Event.objects.create(
+            manager_id=m.id, title=f"{token} kickoff",
+            event_type="meeting", scheduled_date="2026-07-10",
+            scheduled_time="10:00", status="scheduled",
+        )
+
+    EXPECTED_GROUPS = (
+        "Meetings", "Journal", "Notes", "Decisions", "Feedback",
+        "Delegations", "To Do", "Goals", "Career", "Team", "Events",
+    )
+
+    def test_hits_every_model_grouped_with_deep_links(self, client):
+        m = self._manager("a")
+        self._login_as(client, m.email)
+        self._seed_all_models(m, self.TOKEN)
+        resp = client.get(f"/search/?q={self.TOKEN}")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        for label in self.EXPECTED_GROUPS:
+            assert label in body, f"missing group: {label}"
+        # Deep links to per-item pages, not just list pages
+        from core.models import Decision, JournalEntry, OneOnOneSession
+        s = OneOnOneSession.objects.for_manager(m.id).get()
+        e = JournalEntry.objects.for_manager(m.id).get()
+        d = Decision.objects.for_manager(m.id).get()
+        assert f"/meetings/{s.id}/" in body
+        assert f"/journal/{e.id}/edit/" in body
+        assert f"/decisions/{d.id}/edit/" in body
+
+    def test_cross_tenant_returns_zero_hits(self, client):
+        owner = self._manager("owner")
+        intruder = self._manager("intruder")
+        self._seed_all_models(owner, self.TOKEN)
+        self._login_as(client, intruder.email)
+        resp = client.get(f"/search/?q={self.TOKEN}")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        # The query echoes back in the input box (value="{{ q }}") — the
+        # isolation signal is that none of the OWNER'S CONTENT leaks.
+        assert "No matches" in body
+        for owner_content in (
+            f"discussed {self.TOKEN}", f"Pat {self.TOKEN}",
+            f"Adopt {self.TOKEN}", f"{self.TOKEN} kickoff",
+            f"thinking about {self.TOKEN}",
+        ):
+            assert owner_content not in body
+
+    def test_short_query_prompts_for_more(self, client):
+        m = self._manager("short")
+        self._login_as(client, m.email)
+        resp = client.get("/search/?q=z")
+        assert resp.status_code == 200
+        assert b"at least 2 characters" in resp.content
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger_search@example.com")
+        assert client.get("/search/?q=anything").status_code == 403
+
+    def test_per_model_cap_limits_each_group(self, client):
+        from core.models import ActionItem
+        m = self._manager("capped")
+        self._login_as(client, m.email)
+        for i in range(25):
+            ActionItem.objects.create(
+                manager_id=m.id, status="pending",
+                description=f"{self.TOKEN} capitem {i}",
+            )
+        body = client.get(f"/search/?q={self.TOKEN}").content.decode()
+        assert "(20)" in body, "group badge must show the capped count"
+        # Newest-first (-id): items 24..5 render, 4..0 fall past the cap.
+        assert "capitem 24" in body
+        assert "capitem 5" in body
+        assert "capitem 4 " not in body and "capitem 4<" not in body
+        assert "capitem 0 " not in body and "capitem 0<" not in body
