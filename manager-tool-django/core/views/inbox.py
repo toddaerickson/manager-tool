@@ -139,7 +139,13 @@ def inbox_triage(request, item_id: int):
     # Claim + create + stamp in ONE transaction: if the target-row
     # create raises, the CAS claim rolls back too, so the item returns
     # to the queue (visible, retryable) instead of a stuck "triaged"
-    # row with no target. audit_entity is set only on the create path.
+    # row with no target. Nothing renders or audits INSIDE the block:
+    # log_mutation swallows its own errors, and a swallowed audit-write
+    # failure leaves the connection in an aborted-transaction state that
+    # the next query (the list re-render) would trip over as a 500 — and
+    # would roll back the already-successful claim. So the block only
+    # writes + captures what to audit; the audit + render run after
+    # commit. `audit` stays None for the double-tap no-op.
     audit = None
     with transaction.atomic():
         claimed = (
@@ -147,58 +153,57 @@ def inbox_triage(request, item_id: int):
             .filter(pk=item_id, status__in=["pending", "failed"])
             .update(status="triaged" if target != "dismiss" else "dismissed")
         )
-        if claimed != 1:
-            # Already triaged/dismissed (double tap) or not yours —
-            # idempotent no-op from the UI's view.
-            return render(request, "_partials/inbox_rows.html",
-                          _page_context(manager))
-        item = InboxItem.objects.for_manager(mid).get(pk=item_id)
-
-        if target == "dismiss":
-            log_mutation(mid, "update", "InboxItem", item.id,
+        if claimed == 1:
+            item = InboxItem.objects.for_manager(mid).get(pk=item_id)
+            if target == "dismiss":
+                audit = ("update", "InboxItem", item.id,
                          f"Inbox dismissed: {item.body[:60]}")
-            return render(request, "_partials/inbox_rows.html",
-                          _page_context(manager))
+            else:
+                text = _text(item)
+                today = date.today().isoformat()
+                if target == "journal":
+                    created = JournalEntry.objects.create(
+                        manager_id=mid, entry_date=today, entry_type="daily",
+                        content=text, created_at=timezone.now(),
+                    )
+                    entity = "JournalEntry"
+                elif target == "todo":
+                    created = ActionItem.objects.create(
+                        manager_id=mid, description=text, status="pending",
+                        created_at=timezone.now(),
+                    )
+                    entity = "ActionItem"
+                elif target == "note":
+                    created = RunningNote.objects.create(
+                        manager_id=mid, team_member=member, note_date=today,
+                        content=text, created_at=timezone.now(),
+                    )
+                    entity = "RunningNote"
+                else:  # decision
+                    # First non-blank line as the title; guard against an
+                    # empty body (quick-add blocks it today, the email
+                    # path won't).
+                    lines = [ln for ln in item.body.splitlines() if ln.strip()]
+                    title = (item.subject or (lines[0] if lines else "Decision"))[:80]
+                    created = Decision.objects.create(
+                        manager_id=mid, title=title, context=item.body,
+                        status="active", created_at=timezone.now(),
+                    )
+                    entity = "Decision"
 
-        text = _text(item)
-        today = date.today().isoformat()
-        if target == "journal":
-            created = JournalEntry.objects.create(
-                manager_id=mid, entry_date=today, entry_type="daily",
-                content=text, created_at=timezone.now(),
-            )
-            entity = "JournalEntry"
-        elif target == "todo":
-            created = ActionItem.objects.create(
-                manager_id=mid, description=text, status="pending",
-                created_at=timezone.now(),
-            )
-            entity = "ActionItem"
-        elif target == "note":
-            created = RunningNote.objects.create(
-                manager_id=mid, team_member=member, note_date=today,
-                content=text, created_at=timezone.now(),
-            )
-            entity = "RunningNote"
-        else:  # decision
-            # First non-blank line as the title; guard against an empty
-            # body (quick-add blocks it today, but the email path won't).
-            lines = [ln for ln in item.body.splitlines() if ln.strip()]
-            title = (item.subject or (lines[0] if lines else "Decision"))[:80]
-            created = Decision.objects.create(
-                manager_id=mid, title=title, context=item.body,
-                status="active", created_at=timezone.now(),
-            )
-            entity = "Decision"
+                item.triaged_entity_type = entity
+                item.triaged_entity_id = created.id
+                item.save(update_fields=["triaged_entity_type",
+                                         "triaged_entity_id"])
+                audit = ("create", entity, created.id,
+                         f"Triaged from inbox: {text[:60]}")
+        # claimed != 1 -> already triaged/dismissed (double tap) or not
+        # yours: idempotent no-op from the UI's view, audit stays None.
 
-        item.triaged_entity_type = entity
-        item.triaged_entity_id = created.id
-        item.save(update_fields=["triaged_entity_type", "triaged_entity_id"])
-        audit = (entity, created.id, text[:60])
-
-    # Audit outside the txn (log_mutation is a separate write; the
-    # triage itself is already durably committed).
-    log_mutation(mid, "create", audit[0], audit[1],
-                 f"Triaged from inbox: {audit[2]}")
+    # Audit + re-render AFTER the txn commits: log_mutation is a separate,
+    # fire-and-forget write, so a failure there can't abort the committed
+    # triage/dismiss or surface as a 500.
+    if audit is not None:
+        log_mutation(mid, *audit)
     return render(request, "_partials/inbox_rows.html",
                   _page_context(manager))
