@@ -100,9 +100,12 @@ def _exercise_orm() -> None:
     import django
     django.setup()
 
+    from django.db import IntegrityError, transaction
+
     from coaching.models import CoachSuggestion
     from core.models import (
-        ActionItem, Config, JournalEntry, Manager, OneOnOneSession, TeamMember,
+        ActionItem, Config, InboxItem, JournalEntry, Manager,
+        OneOnOneSession, TeamMember,
     )
 
     _step("creating two managers via ORM")
@@ -137,6 +140,80 @@ def _exercise_orm() -> None:
     assert CoachSuggestion.objects.for_manager(m1.id).count() == 1
     assert CoachSuggestion.objects.for_manager(m2.id).count() == 0, \
         "m2 sees m1's coach suggestion — cross-app TenantManager regression"
+
+    _step("InboxItem (PR 4): isolation + per-manager message_id on real PG")
+    same_mid = "<smoke-shared@example.com>"
+    InboxItem.objects.create(
+        manager_id=m1.id, source="quick", body="m1 capture",
+    )
+    InboxItem.objects.create(
+        manager_id=m1.id, source="email", body="m1 email capture",
+        message_id=same_mid,
+    )
+    # The SAME Message-ID reaching a DIFFERENT manager (list/BCC/forward)
+    # must be allowed — dedupe is per-manager, not global. A global
+    # unique would silently drop m2's legitimate copy.
+    InboxItem.objects.create(
+        manager_id=m2.id, source="email", body="m2's copy of the same email",
+        message_id=same_mid,
+    )
+    # A duplicate for the SAME manager must be rejected (re-fetch dedupe).
+    try:
+        with transaction.atomic():
+            InboxItem.objects.create(
+                manager_id=m1.id, source="email", body="m1 re-fetch dupe",
+                message_id=same_mid,
+            )
+        _bail("same-manager duplicate message_id should have raised IntegrityError")
+    except IntegrityError:
+        _step("same-manager duplicate message_id correctly rejected")
+    # Multiple NULL message_ids (quick-add items) must coexist per manager.
+    InboxItem.objects.create(manager_id=m2.id, source="quick", body="null-mid a")
+    InboxItem.objects.create(manager_id=m2.id, source="quick", body="null-mid b")
+
+    # Bidirectional isolation, asserted AFTER both managers have rows.
+    assert InboxItem.objects.for_manager(m1.id).count() == 2, \
+        "m1 should see exactly its own 2 items"
+    assert InboxItem.objects.for_manager(m2.id).count() == 3, \
+        "m2 should see exactly its own 3 items (email copy + 2 quick)"
+
+    # Forced-failure no-orphan (mirrors the recurring-events smoke
+    # doctrine: transaction.atomic() rollback is only credibly proven on
+    # real PG). Replicates inbox_triage's exact transaction shape — CAS
+    # claim then failing target create — and asserts the claim rolled
+    # back with no orphan. The pytest suite covers the real view path;
+    # this proves the mechanism holds on Postgres, not just SQLite.
+    from unittest.mock import patch
+
+    from core.models import JournalEntry
+
+    victim = InboxItem.objects.create(
+        manager_id=m1.id, source="quick", body="must survive a failed file",
+    )
+    je_before = JournalEntry.objects.for_manager(m1.id).count()
+    try:
+        with patch(
+            "core.models.JournalEntry.objects.create",
+            side_effect=RuntimeError("forced"),
+        ), transaction.atomic():
+            claimed = (
+                InboxItem.objects.for_manager(m1.id)
+                .filter(pk=victim.id, status="pending")
+                .update(status="triaged")
+            )
+            assert claimed == 1
+            JournalEntry.objects.create(
+                manager_id=m1.id, entry_date="2026-07-05",
+                entry_type="daily", content="x",
+            )
+    except RuntimeError:
+        pass
+    victim.refresh_from_db()
+    assert victim.status == "pending", \
+        "forced create failure must roll the inbox claim back to pending"
+    assert JournalEntry.objects.for_manager(m1.id).count() == je_before, \
+        "no orphan JournalEntry may persist after a rolled-back triage"
+    _step("inbox triage forced-failure rollback holds on real PG")
 
     _step("exercising Config.update_or_create (Phase 2 upsert)")
     obj, created = Config.objects.update_or_create(

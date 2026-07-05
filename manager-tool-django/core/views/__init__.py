@@ -97,3 +97,9 @@ from core.views.reference import (  # noqa: F401
     resources,
 )
 from core.views.search import search_page  # noqa: F401
+from core.views.inbox import (  # noqa: F401
+    inbox_badge,
+    inbox_list,
+    inbox_quick_add,
+    inbox_triage,
+)

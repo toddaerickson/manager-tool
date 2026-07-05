@@ -561,3 +561,66 @@ class AuditLog(models.Model):
                 name="ix_audit_log_entity",
             ),
         ]
+
+
+# ============================================================
+# Inbox (personal-tool roadmap PR 4 — capture triage queue)
+# ============================================================
+
+
+class InboxItem(models.Model):
+    """A captured thought awaiting triage. Landing spot for the global
+    quick-add box (source='quick') and, in the email-in PR, the IMAP
+    poller (source='email'). Each pending item is one-click converted
+    into a JournalEntry / ActionItem / RunningNote / Decision, or
+    dismissed; triaged_entity_* records where it went.
+
+    status='failed' is reserved for the email poller's poison-message
+    path (a malformed email must be VISIBLE here, not just in Sentry).
+    message_id is the email Message-ID header, deduped PER MANAGER so a
+    re-fetched email can't create a duplicate (multiple NULLs are fine
+    for non-email items on both PG and SQLite).
+    """
+
+    manager_id = models.IntegerField(blank=True, null=True, db_index=True)
+    source = models.TextField(
+        default="quick",
+        choices=[("quick", "Quick add"), ("email", "Email")],
+    )
+    subject = models.TextField(blank=True, null=True)
+    body = models.TextField()
+    from_address = models.TextField(blank=True, null=True)
+    # NOT globally unique: an RFC 5322 Message-ID is minted once by the
+    # sender, so the same email reaching two managers (list/BCC/forward)
+    # carries one id — a global unique would silently drop the second
+    # tenant's copy, and the header is sender-controlled (a cross-tenant
+    # DoS). Dedupe is per-manager (see Meta.constraints). NULLs coexist.
+    message_id = models.TextField(blank=True, null=True)
+    received_at = models.DateTimeField(blank=True, null=True)
+    status = models.TextField(
+        default="pending",
+        choices=[
+            ("pending", "Pending"), ("triaged", "Triaged"),
+            ("dismissed", "Dismissed"), ("failed", "Failed"),
+        ],
+    )
+    triaged_entity_type = models.TextField(blank=True, null=True)
+    triaged_entity_id = models.IntegerField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = TenantManager()
+
+    class Meta:
+        db_table = "inbox_items"
+        indexes = [
+            models.Index(
+                fields=["manager_id", "status"],
+                name="ix_inbox_mgr_status",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["manager_id", "message_id"],
+                name="uq_inbox_manager_message_id",
+            ),
+        ]

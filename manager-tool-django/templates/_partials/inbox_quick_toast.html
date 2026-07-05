@@ -1,0 +1,5 @@
+{% if error %}
+<p class="text-xs text-red-400 pt-1">{{ error }}</p>
+{% else %}
+<p class="text-xs text-accent-400 pt-1">Captured — <a href="{% url 'inbox' %}" class="underline">inbox</a></p>
+{% endif %}

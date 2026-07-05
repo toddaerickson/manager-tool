@@ -56,6 +56,20 @@
                class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent-500">
       </form>
 
+      {% comment %} Quick capture (roadmap PR 4) — jot from any page into
+         the Inbox triage queue; the toast confirms and links there.
+         aria-label carries the accessible name, same compact-widget
+         rationale as the search box above. {% endcomment %}
+      <form hx-post="{% url 'inbox-quick' %}" hx-target="#quick-add-toast"
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            hx-on::after-request="if(event.detail.successful) this.querySelector('input').value=''"
+            class="px-2 pt-3">
+        <input type="text" name="body" placeholder="Jot something…"
+               aria-label="Quick capture to inbox"
+               class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent-500">
+        <div id="quick-add-toast"></div>
+      </form>
+
       <nav class="flex-1 px-2 py-4 space-y-6 text-sm">
         {% comment %}
         Sidebar IA mirrors CLAUDE.md. Only Dashboard is implemented in
@@ -65,6 +79,10 @@
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Manager</div>
           <a href="{% url 'dashboard' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'dashboard' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Dashboard</a>
+          <a href="{% url 'inbox' %}"
+             class="flex items-center px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'inbox' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Inbox
+            <span id="inbox-badge" hx-get="{% url 'inbox-badge' %}" hx-trigger="load" hx-swap="outerHTML" class="hidden"></span>
+          </a>
           <a href="{% url 'events-upcoming' %}"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-upcoming' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Upcoming</a>
           <a href="{% url 'journal' %}"
