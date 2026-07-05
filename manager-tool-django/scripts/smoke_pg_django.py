@@ -100,9 +100,12 @@ def _exercise_orm() -> None:
     import django
     django.setup()
 
+    from django.db import IntegrityError, transaction
+
     from coaching.models import CoachSuggestion
     from core.models import (
-        ActionItem, Config, JournalEntry, Manager, OneOnOneSession, TeamMember,
+        ActionItem, Config, InboxItem, JournalEntry, Manager,
+        OneOnOneSession, TeamMember,
     )
 
     _step("creating two managers via ORM")
@@ -137,6 +140,33 @@ def _exercise_orm() -> None:
     assert CoachSuggestion.objects.for_manager(m1.id).count() == 1
     assert CoachSuggestion.objects.for_manager(m2.id).count() == 0, \
         "m2 sees m1's coach suggestion — cross-app TenantManager regression"
+
+    _step("InboxItem (PR 4): isolation + unique message_id on real PG")
+    InboxItem.objects.create(
+        manager_id=m1.id, source="quick", body="m1 capture",
+    )
+    InboxItem.objects.create(
+        manager_id=m1.id, source="email", body="m1 email capture",
+        message_id="<smoke-1@example.com>",
+    )
+    assert InboxItem.objects.for_manager(m1.id).count() == 2
+    assert InboxItem.objects.for_manager(m2.id).count() == 0, \
+        "m2 sees m1's inbox items — TenantManager regression"
+    # Duplicate Message-ID must be rejected by the DB (email dedupe
+    # guarantee); multiple NULL message_ids must be allowed.
+    try:
+        with transaction.atomic():
+            InboxItem.objects.create(
+                manager_id=m2.id, source="email", body="dupe",
+                message_id="<smoke-1@example.com>",
+            )
+        _bail("duplicate inbox message_id should have raised IntegrityError")
+    except IntegrityError:
+        _step("duplicate message_id correctly rejected")
+    InboxItem.objects.create(manager_id=m2.id, source="quick", body="null-mid a")
+    InboxItem.objects.create(manager_id=m2.id, source="quick", body="null-mid b")
+    assert InboxItem.objects.for_manager(m2.id).count() == 2, \
+        "multiple NULL message_ids must coexist"
 
     _step("exercising Config.update_or_create (Phase 2 upsert)")
     obj, created = Config.objects.update_or_create(

@@ -1,0 +1,46 @@
+{% if items %}
+<div class="space-y-3">
+  {% for item in items %}
+  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-3">
+    <div class="flex items-baseline justify-between gap-3 mb-1">
+      <span class="text-xs text-slate-400">
+        {% if item.status == "failed" %}<span class="text-red-600 font-medium">failed email</span> ·{% endif %}
+        {{ item.get_source_display|lower }} · {{ item.created_at|date:"M j, g:i a" }}
+        {% if item.from_address %} · {{ item.from_address }}{% endif %}
+      </span>
+    </div>
+    {% if item.subject %}<div class="text-sm font-medium text-slate-900">{{ item.subject }}</div>{% endif %}
+    {% comment %} Clamp long bodies (email items can be many paragraphs) with a
+       Show more/less disclosure — same group/group-open idiom as meetings_detail. {% endcomment %}
+    <details class="group mb-2">
+      <summary class="cursor-pointer list-none">
+        <p class="text-sm text-slate-700 whitespace-pre-line line-clamp-4 group-open:hidden">{{ item.body }}</p>
+        <p class="hidden group-open:block text-sm text-slate-700 whitespace-pre-line">{{ item.body }}</p>
+        <span class="text-xs text-accent-700 hover:underline group-open:hidden">Show more</span>
+        <span class="text-xs text-accent-700 hover:underline hidden group-open:inline">Show less</span>
+      </summary>
+    </details>
+    <form hx-post="{% url 'inbox-triage' item.id %}"
+          hx-target="#inbox-rows"
+          hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+          class="flex flex-wrap items-center gap-2 text-xs">
+      <button name="target" value="journal" class="inline-flex items-center justify-center min-h-11 border border-slate-300 rounded px-3 hover:bg-slate-50">→ Journal</button>
+      <button name="target" value="todo" class="inline-flex items-center justify-center min-h-11 border border-slate-300 rounded px-3 hover:bg-slate-50">→ To Do</button>
+      <button name="target" value="decision" class="inline-flex items-center justify-center min-h-11 border border-slate-300 rounded px-3 hover:bg-slate-50">→ Decision</button>
+      <span class="inline-flex items-center gap-1">
+        <button name="target" value="note" class="inline-flex items-center justify-center min-h-11 border border-slate-300 rounded px-3 hover:bg-slate-50">→ Note</button>
+        <select name="member" id="member-{{ item.id }}"
+                aria-label="Team member for note"
+                class="border border-slate-300 rounded px-2 min-h-11 text-xs bg-white">
+          <option value="">Broadcast</option>
+          {% for m in members %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
+        </select>
+      </span>
+      <button name="target" value="dismiss" class="inline-flex items-center justify-center min-h-11 text-slate-400 hover:text-red-600 underline px-3 ml-auto">Dismiss</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="text-sm text-slate-500">Inbox zero. Capture a thought from the sidebar box on any page.</p>
+{% endif %}

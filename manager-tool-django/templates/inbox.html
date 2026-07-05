@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Inbox — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Inbox</h1>
+    <p class="text-sm text-slate-500 mt-1">Captured thoughts awaiting filing — from the sidebar quick-add (and, soon, email). Triage each into the right record, or dismiss.</p>
+  </header>
+
+  <div id="inbox-rows">
+    {% include "_partials/inbox_rows.html" %}
+  </div>
+</div>
+{% endblock %}

@@ -6205,3 +6205,187 @@ class TestUnifiedSearch:
         assert "capitem 5" in body
         assert "capitem 4 " not in body and "capitem 4<" not in body
         assert "capitem 0 " not in body and "capitem 0<" not in body
+
+
+@pytest.mark.django_db
+class TestInbox:
+    """Roadmap PR 4: capture triage queue. Quick-add lands pending
+    items; each triages into exactly one target record (CAS-guarded
+    against double submits); badge counts pending; tenant-isolated."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="testpw",
+        )
+        client.force_login(u)
+        return u
+
+    def _manager(self, slug):
+        return Manager.objects.create(
+            username=f"inbox_{slug}", display_name=slug.title(),
+            password_hash="h", email=f"inbox_{slug}@example.com",
+        )
+
+    def _item(self, m, body="captured thought", **kw):
+        from core.models import InboxItem
+        kw.setdefault("source", "quick")
+        return InboxItem.objects.create(manager_id=m.id, body=body, **kw)
+
+    def test_quick_add_creates_pending_item_and_audit_row(self, client):
+        from core.models import InboxItem
+        m = self._manager("qa")
+        self._login_as(client, m.email)
+        resp = client.post("/inbox/quick/", {"body": "call the auditor"})
+        assert resp.status_code == 200
+        item = InboxItem.objects.for_manager(m.id).get()
+        assert item.status == "pending" and item.source == "quick"
+        assert AuditLog.objects.for_manager(m.id).filter(
+            entity_type="InboxItem", entity_id=item.id,
+        ).count() == 1
+
+    def test_quick_add_empty_body_is_422(self, client):
+        from core.models import InboxItem
+        m = self._manager("empty")
+        self._login_as(client, m.email)
+        assert client.post("/inbox/quick/", {"body": "  "}).status_code == 422
+        assert InboxItem.objects.for_manager(m.id).count() == 0
+
+    def test_triage_to_journal(self, client):
+        m = self._manager("tj")
+        self._login_as(client, m.email)
+        item = self._item(m, subject="Idea", body="rotate demo duty")
+        resp = client.post(f"/inbox/{item.id}/triage/", {"target": "journal"})
+        assert resp.status_code == 200
+        entry = JournalEntry.objects.for_manager(m.id).get()
+        assert "rotate demo duty" in entry.content
+        assert "Idea" in entry.content
+        item.refresh_from_db()
+        assert item.status == "triaged"
+        assert item.triaged_entity_type == "JournalEntry"
+        assert item.triaged_entity_id == entry.id
+        assert AuditLog.objects.for_manager(m.id).filter(
+            entity_type="JournalEntry", entity_id=entry.id,
+        ).exists()
+
+    def test_triage_to_todo_and_decision(self, client):
+        from core.models import Decision
+        m = self._manager("td")
+        self._login_as(client, m.email)
+        a = self._item(m, body="book skip-levels")
+        b = self._item(m, subject="Adopt trunk-based dev", body="ctx here")
+        client.post(f"/inbox/{a.id}/triage/", {"target": "todo"})
+        client.post(f"/inbox/{b.id}/triage/", {"target": "decision"})
+        todo = ActionItem.objects.for_manager(m.id).get()
+        assert "book skip-levels" in todo.description
+        assert todo.status == "pending"
+        d = Decision.objects.for_manager(m.id).get()
+        assert d.title == "Adopt trunk-based dev"
+        assert d.context == "ctx here"
+
+    def test_triage_to_note_with_member(self, client):
+        from core.models import RunningNote
+        m = self._manager("tn")
+        self._login_as(client, m.email)
+        tm = TeamMember.objects.create(manager_id=m.id, name="Pat")
+        item = self._item(m, body="wants Q4 stretch role")
+        client.post(f"/inbox/{item.id}/triage/",
+                    {"target": "note", "member": str(tm.id)})
+        note = RunningNote.objects.for_manager(m.id).get()
+        assert note.team_member_id == tm.id
+        assert "stretch role" in note.content
+
+    def test_dismiss(self, client):
+        m = self._manager("dis")
+        self._login_as(client, m.email)
+        item = self._item(m)
+        client.post(f"/inbox/{item.id}/triage/", {"target": "dismiss"})
+        item.refresh_from_db()
+        assert item.status == "dismissed"
+        assert JournalEntry.objects.for_manager(m.id).count() == 0
+
+    def test_double_submit_files_exactly_once(self, client):
+        """The mobile double-tap: two POSTs race for one item; the CAS
+        claim must let exactly one create a target row."""
+        m = self._manager("race")
+        self._login_as(client, m.email)
+        item = self._item(m, body="only once")
+        r1 = client.post(f"/inbox/{item.id}/triage/", {"target": "journal"})
+        r2 = client.post(f"/inbox/{item.id}/triage/", {"target": "journal"})
+        assert r1.status_code == 200 and r2.status_code == 200
+        assert JournalEntry.objects.for_manager(m.id).count() == 1
+
+    def test_unknown_target_never_claims(self, client):
+        m = self._manager("unk")
+        self._login_as(client, m.email)
+        item = self._item(m)
+        assert client.post(
+            f"/inbox/{item.id}/triage/", {"target": "bogus"},
+        ).status_code == 422
+        item.refresh_from_db()
+        assert item.status == "pending", "invalid action must not claim"
+
+    def test_create_failure_rolls_back_claim(self, client, mocker):
+        """Atomicity guarantee: if the target-row create raises, the CAS
+        claim rolls back so the item returns to the queue (no stuck
+        'triaged' row with no target)."""
+        m = self._manager("rollback")
+        self._login_as(client, m.email)
+        item = self._item(m, body="must survive a failed file")
+        mocker.patch(
+            "core.views.inbox.JournalEntry.objects.create",
+            side_effect=RuntimeError("boom"),
+        )
+        try:
+            client.post(f"/inbox/{item.id}/triage/", {"target": "journal"})
+        except RuntimeError:
+            pass  # the view lets it 500; the point is the DB state
+        item.refresh_from_db()
+        assert item.status == "pending", "claim must roll back on create failure"
+        assert JournalEntry.objects.for_manager(m.id).count() == 0
+
+    def test_cross_tenant_triage_is_a_noop(self, client):
+        owner = self._manager("owner2")
+        intruder = self._manager("intr2")
+        item = self._item(owner, body="not yours")
+        self._login_as(client, intruder.email)
+        client.post(f"/inbox/{item.id}/triage/", {"target": "journal"})
+        item.refresh_from_db()
+        assert item.status == "pending", "intruder must not claim the item"
+        assert JournalEntry.objects.for_manager(intruder.id).count() == 0
+        assert JournalEntry.objects.for_manager(owner.id).count() == 0
+
+    def test_badge_counts_pending_only(self, client):
+        m = self._manager("badge")
+        self._login_as(client, m.email)
+        self._item(m)
+        self._item(m)
+        self._item(m, status="dismissed")
+        body = client.get("/inbox/badge/").content.decode()
+        assert ">2<" in body
+
+    def test_inbox_page_lists_pending_and_failed(self, client):
+        m = self._manager("page")
+        self._login_as(client, m.email)
+        self._item(m, body="pending one")
+        self._item(m, body="broken email", status="failed",
+                   source="email", from_address="x@y.z")
+        body = client.get("/inbox/").content.decode()
+        assert "pending one" in body
+        assert "broken email" in body and "failed email" in body
+
+    def test_no_manager_yields_403(self, client):
+        self._login_as(client, "stranger_inbox@example.com")
+        assert client.get("/inbox/").status_code == 403
+        assert client.post("/inbox/quick/", {"body": "x"}).status_code == 403
+
+    def test_page_renders_density_affordances(self, client):
+        """The design-pass fixes reach rendered output: 44px tap-floor
+        on triage buttons and the Show more/less body disclosure."""
+        m = self._manager("dens")
+        self._login_as(client, m.email)
+        self._item(m, body="x " * 400)  # long body -> clamp + expand
+        body = client.get("/inbox/").content.decode()
+        assert "min-h-11" in body, "triage buttons missing 44px tap floor"
+        assert "line-clamp-4" in body and "Show more" in body
+        assert 'aria-label="Team member for note"' in body
