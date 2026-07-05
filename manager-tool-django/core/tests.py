@@ -6244,11 +6244,14 @@ class TestInbox:
             entity_type="InboxItem", entity_id=item.id,
         ).count() == 1
 
-    def test_quick_add_empty_body_is_422(self, client):
+    def test_quick_add_empty_body_shows_toast_no_item(self, client):
+        # 200 (not 422) so htmx renders the toast; no item created.
         from core.models import InboxItem
         m = self._manager("empty")
         self._login_as(client, m.email)
-        assert client.post("/inbox/quick/", {"body": "  "}).status_code == 422
+        resp = client.post("/inbox/quick/", {"body": "  "})
+        assert resp.status_code == 200
+        assert b"Nothing to capture" in resp.content
         assert InboxItem.objects.for_manager(m.id).count() == 0
 
     def test_triage_to_journal(self, client):
@@ -6260,6 +6263,9 @@ class TestInbox:
         entry = JournalEntry.objects.for_manager(m.id).get()
         assert "rotate demo duty" in entry.content
         assert "Idea" in entry.content
+        # entry_type must be a valid choice, not the "" default that
+        # .create() would silently insert (blank type breaks the UI).
+        assert entry.entry_type == "daily"
         item.refresh_from_db()
         assert item.status == "triaged"
         assert item.triaged_entity_type == "JournalEntry"
@@ -6326,9 +6332,10 @@ class TestInbox:
         assert item.status == "pending", "invalid action must not claim"
 
     def test_create_failure_rolls_back_claim(self, client, mocker):
-        """Atomicity guarantee: if the target-row create raises, the CAS
-        claim rolls back so the item returns to the queue (no stuck
-        'triaged' row with no target)."""
+        """If the target-row create raises, the CAS claim rolls back so
+        the item returns to the queue (no stuck 'triaged' with no
+        target). create is mocked to raise, so this proves the STATUS
+        rollback specifically."""
         m = self._manager("rollback")
         self._login_as(client, m.email)
         item = self._item(m, body="must survive a failed file")
@@ -6342,7 +6349,36 @@ class TestInbox:
             pass  # the view lets it 500; the point is the DB state
         item.refresh_from_db()
         assert item.status == "pending", "claim must roll back on create failure"
-        assert JournalEntry.objects.for_manager(m.id).count() == 0
+
+    def test_stamp_failure_rolls_back_the_created_child(self, client, mocker):
+        """The real no-orphan proof: the JournalEntry create SUCCEEDS,
+        then the stamp save() fails — the whole transaction must roll
+        back, leaving BOTH the item pending AND no orphan JournalEntry.
+        (The create-mock test above can't prove this; nothing is ever
+        inserted there.)"""
+        from core.models import InboxItem
+        m = self._manager("orphan")
+        self._login_as(client, m.email)
+        item = self._item(m, body="no orphan allowed")
+        # Fail the post-create stamp (item.save with update_fields).
+        real_save = InboxItem.save
+
+        def boom(self_obj, *a, **k):
+            if k.get("update_fields") == [
+                "triaged_entity_type", "triaged_entity_id",
+            ]:
+                raise RuntimeError("stamp boom")
+            return real_save(self_obj, *a, **k)
+
+        mocker.patch.object(InboxItem, "save", autospec=True, side_effect=boom)
+        try:
+            client.post(f"/inbox/{item.id}/triage/", {"target": "journal"})
+        except RuntimeError:
+            pass
+        item.refresh_from_db()
+        assert item.status == "pending", "claim must roll back"
+        assert JournalEntry.objects.for_manager(m.id).count() == 0, \
+            "the created JournalEntry must NOT persist as an orphan"
 
     def test_cross_tenant_triage_is_a_noop(self, client):
         owner = self._manager("owner2")
@@ -6355,14 +6391,67 @@ class TestInbox:
         assert JournalEntry.objects.for_manager(intruder.id).count() == 0
         assert JournalEntry.objects.for_manager(owner.id).count() == 0
 
-    def test_badge_counts_pending_only(self, client):
+    def test_retriage_different_target_after_claim_is_noop(self, client):
+        """The CAS filter (status IN pending,failed) blocks a SECOND,
+        different triage action on an already-claimed item — not just a
+        same-target replay."""
+        m = self._manager("retriage")
+        self._login_as(client, m.email)
+        item = self._item(m, body="file me once")
+        client.post(f"/inbox/{item.id}/triage/", {"target": "journal"})
+        client.post(f"/inbox/{item.id}/triage/", {"target": "todo"})
+        assert JournalEntry.objects.for_manager(m.id).count() == 1
+        from core.models import ActionItem as _AI
+        assert _AI.objects.for_manager(m.id).count() == 0, \
+            "second (different) triage must not file the already-claimed item"
+
+    def test_note_with_cross_tenant_member_falls_back_to_broadcast(self, client):
+        """Raw-POST defense: a member_id belonging to ANOTHER manager
+        must resolve to broadcast (None), never attach cross-tenant."""
+        from core.models import RunningNote
+        owner = self._manager("noteowner")
+        other = self._manager("noteother")
+        other_member = TeamMember.objects.create(
+            manager_id=other.id, name="Not Yours",
+        )
+        self._login_as(client, owner.email)
+        item = self._item(owner, body="attach me somewhere")
+        client.post(f"/inbox/{item.id}/triage/",
+                    {"target": "note", "member": str(other_member.id)})
+        note = RunningNote.objects.for_manager(owner.id).get()
+        assert note.team_member_id is None, "must not attach cross-tenant member"
+
+    def test_note_with_nonnumeric_member_does_not_500(self, client):
+        from core.models import RunningNote
+        m = self._manager("junkmember")
+        self._login_as(client, m.email)
+        item = self._item(m, body="junk member id")
+        resp = client.post(f"/inbox/{item.id}/triage/",
+                           {"target": "note", "member": "abc"})
+        assert resp.status_code == 200
+        assert RunningNote.objects.for_manager(m.id).get().team_member_id is None
+
+    def test_decision_from_empty_body_does_not_crash(self, client):
+        """The Decision title falls back to 'Decision' when body has no
+        non-blank line (quick-add blocks this, but a seeded/email item
+        could hit it — must not IndexError into a 500)."""
+        from core.models import Decision
+        m = self._manager("emptybody")
+        self._login_as(client, m.email)
+        item = self._item(m, body="   \n  \n")  # whitespace-only
+        resp = client.post(f"/inbox/{item.id}/triage/", {"target": "decision"})
+        assert resp.status_code == 200
+        assert Decision.objects.for_manager(m.id).get().title == "Decision"
+
+    def test_badge_counts_pending_and_failed_not_dismissed(self, client):
         m = self._manager("badge")
         self._login_as(client, m.email)
-        self._item(m)
-        self._item(m)
-        self._item(m, status="dismissed")
+        self._item(m)                                   # pending
+        self._item(m, status="failed", source="email")  # failed counts too
+        self._item(m, status="dismissed")               # excluded
+        self._item(m, status="triaged")                 # excluded
         body = client.get("/inbox/badge/").content.decode()
-        assert ">2<" in body
+        assert ">2<" in body, "badge must count pending + failed, not the rest"
 
     def test_inbox_page_lists_pending_and_failed(self, client):
         m = self._manager("page")
@@ -6374,10 +6463,33 @@ class TestInbox:
         assert "pending one" in body
         assert "broken email" in body and "failed email" in body
 
-    def test_no_manager_yields_403(self, client):
+    def test_page_orders_newest_first(self, client):
+        m = self._manager("order")
+        self._login_as(client, m.email)
+        self._item(m, body="older capture")
+        self._item(m, body="newer capture")
+        body = client.get("/inbox/").content.decode()
+        assert body.index("newer capture") < body.index("older capture"), \
+            "newest item must render first (-created_at, -id)"
+
+    def test_page_escapes_subject_and_body(self, client):
+        """Parity with TestPageRenderEscapesUserContent — untrusted
+        capture text must be auto-escaped, not rendered as live markup."""
+        m = self._manager("xss")
+        self._login_as(client, m.email)
+        self._item(m, subject="<script>alert('s')</script>",
+                   body="<img src=x onerror=alert('b')>")
+        body = client.get("/inbox/").content.decode()
+        assert "<script>alert('s')</script>" not in body
+        assert "&lt;script&gt;" in body
+        assert "<img src=x onerror" not in body
+
+    def test_all_four_routes_403_without_manager(self, client):
         self._login_as(client, "stranger_inbox@example.com")
         assert client.get("/inbox/").status_code == 403
+        assert client.get("/inbox/badge/").status_code == 403
         assert client.post("/inbox/quick/", {"body": "x"}).status_code == 403
+        assert client.post("/inbox/1/triage/", {"target": "journal"}).status_code == 403
 
     def test_page_renders_density_affordances(self, client):
         """The design-pass fixes reach rendered output: 44px tap-floor

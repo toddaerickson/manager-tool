@@ -577,9 +577,9 @@ class InboxItem(models.Model):
 
     status='failed' is reserved for the email poller's poison-message
     path (a malformed email must be VISIBLE here, not just in Sentry).
-    message_id is the email Message-ID header — unique so a re-fetched
-    email can't create a duplicate (multiple NULLs are fine for
-    non-email items on both PG and SQLite).
+    message_id is the email Message-ID header, deduped PER MANAGER so a
+    re-fetched email can't create a duplicate (multiple NULLs are fine
+    for non-email items on both PG and SQLite).
     """
 
     manager_id = models.IntegerField(blank=True, null=True, db_index=True)
@@ -590,7 +590,12 @@ class InboxItem(models.Model):
     subject = models.TextField(blank=True, null=True)
     body = models.TextField()
     from_address = models.TextField(blank=True, null=True)
-    message_id = models.TextField(blank=True, null=True, unique=True)
+    # NOT globally unique: an RFC 5322 Message-ID is minted once by the
+    # sender, so the same email reaching two managers (list/BCC/forward)
+    # carries one id — a global unique would silently drop the second
+    # tenant's copy, and the header is sender-controlled (a cross-tenant
+    # DoS). Dedupe is per-manager (see Meta.constraints). NULLs coexist.
+    message_id = models.TextField(blank=True, null=True)
     received_at = models.DateTimeField(blank=True, null=True)
     status = models.TextField(
         default="pending",
@@ -611,5 +616,11 @@ class InboxItem(models.Model):
             models.Index(
                 fields=["manager_id", "status"],
                 name="ix_inbox_mgr_status",
+            ),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["manager_id", "message_id"],
+                name="uq_inbox_manager_message_id",
             ),
         ]
