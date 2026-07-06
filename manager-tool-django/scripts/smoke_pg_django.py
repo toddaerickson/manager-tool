@@ -179,16 +179,19 @@ def _exercise_orm() -> None:
 
     # Forced-failure no-orphan (mirrors the recurring-events smoke
     # doctrine: transaction.atomic() rollback is only credibly proven on
-    # real PG). Replicates inbox_triage's exact transaction shape — CAS
-    # claim then failing target create — and asserts the claim rolled
-    # back with no orphan. The pytest suite covers the real view path;
-    # this proves the mechanism holds on Postgres, not just SQLite.
+    # real PG). Replicates inbox_triage's exact transaction shape — the CAS
+    # claim uses status__in=["pending", "failed"] like the view, and the
+    # victim is seeded as a *failed* item so this also proves the
+    # failed->triaged reopen path (PR 5's poison-message items) rolls back
+    # correctly, not just pending items. The pytest suite covers the real
+    # view path; this proves the mechanism holds on Postgres, not SQLite.
     from unittest.mock import patch
 
     from core.models import JournalEntry
 
     victim = InboxItem.objects.create(
-        manager_id=m1.id, source="quick", body="must survive a failed file",
+        manager_id=m1.id, source="quick", status="failed",
+        body="must survive a failed file",
     )
     je_before = JournalEntry.objects.for_manager(m1.id).count()
     try:
@@ -198,7 +201,7 @@ def _exercise_orm() -> None:
         ), transaction.atomic():
             claimed = (
                 InboxItem.objects.for_manager(m1.id)
-                .filter(pk=victim.id, status="pending")
+                .filter(pk=victim.id, status__in=["pending", "failed"])
                 .update(status="triaged")
             )
             assert claimed == 1
@@ -209,8 +212,8 @@ def _exercise_orm() -> None:
     except RuntimeError:
         pass
     victim.refresh_from_db()
-    assert victim.status == "pending", \
-        "forced create failure must roll the inbox claim back to pending"
+    assert victim.status == "failed", \
+        "forced create failure must roll the failed-item claim back to failed"
     assert JournalEntry.objects.for_manager(m1.id).count() == je_before, \
         "no orphan JournalEntry may persist after a rolled-back triage"
     _step("inbox triage forced-failure rollback holds on real PG")
