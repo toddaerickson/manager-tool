@@ -21,6 +21,7 @@ SENSITIVE_KEYS = {
     "anthropic_api_key",
     "smtp_password",
     "google_client_secret",
+    "inbox_imap_password",
 }
 
 

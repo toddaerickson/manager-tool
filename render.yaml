@@ -120,3 +120,33 @@ services:
         value: prod
       - key: PYTHON_VERSION
         value: "3.11"
+
+  - type: cron
+    name: inbox-email-poll
+    runtime: python
+    repo: https://github.com/toddaerickson/manager-tool
+    rootDir: manager-tool-django
+    plan: starter
+    region: oregon
+    branch: main
+    schedule: "*/15 * * * *"  # every 15 minutes (roadmap PR 5)
+    buildCommand: pip install -r requirements.txt
+    startCommand: python manage.py poll_inbox_email
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      # CONFIG_ENCRYPTION_KEY is REQUIRED here: the IMAP app password is
+      # a SENSITIVE_KEYS config value. Without the key, get_config ERROR-
+      # logs the decryption failure and the poll skips the manager — a
+      # loud failure (PR 1's fail-loud fix), but still a failure. Keep it
+      # set so it never comes to that.
+      - key: CONFIG_ENCRYPTION_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: MANAGER_TOOL_ENV
+        value: prod
+      - key: PYTHON_VERSION
+        value: "3.11"

@@ -2,7 +2,7 @@
 
 Snapshot of where the Streamlit → Django migration stands. Update this doc when phase boundaries move; re-merge to main so it stays the source of truth for "where are we right now."
 
-**Last updated:** 2026-05-26
+**Last updated:** 2026-07-06
 **Live Django app:** https://manager-tool-django.onrender.com
 **Plan:** `MIGRATION_PLAN.md` · **Gates:** `PHASE_GATES.md` · **Open design questions:** `manager-tool-django/ARCHITECTURE_DEFICITS.md` · **Design system:** `manager-tool-django/DESIGN.md`
 
@@ -89,6 +89,9 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - **Nightly encrypted backups + ops hardening** (PRs #121/#125, 2026-07-04) — pg_dump→encrypt→restore-proof workflow with healthchecks.io dead-man switch; DB-touching `/health` (503 on dead DB); fail-loud `get_config` on decryption errors; gunicorn 2×4 gthread; no-silent-excepts guard in CI. Paid Neon (PG 17).
 - **Compiled Tailwind + vendored htmx** (PR #126) — Play CDN replaced by a 21KB compiled `static/css/tw.css` (CLI pinned v3.4.17; tokens in `tailwind.config.js`); htmx 2.0.4 vendored; `TestCompiledCssCoverage` fails CI on class-without-rebuild.
 - **Unified cross-model search** (PR #127) — sidebar box + `/search/?q=` across all 11 content models (tenant-scoped `icontains`, 20/group, deep links, match snippets).
+- **Inbox capture triage queue + sidebar quick-add** (PR #128, 2026-07-05) — `InboxItem` model + `/inbox/` one-click triage (journal/todo/note/decision/dismiss, CAS double-tap guard) + quick-add box in the sidebar; per-manager `message_id` dedupe; smoke extended (bidirectional isolation + forced-failure rollback on real PG). Review caught and fixed a dismiss-path audit-inside-transaction bug pre-merge. Follow-up **PR #129** OOB-refreshes the sidebar badge on capture/triage/dismiss.
+- **App-wide UI overhaul** (PRs #130/#132/#133/#134, 2026-07-05/06 — *ad-hoc, not part of the personal-tool roadmap*) — the drifting tile/shadow style was replaced app-wide with the flat-panel system DESIGN.md prescribes: border-only cards, grouped `divide-y` rows, `py-1.5` tables with `tabular-nums`, one stat-bar pattern, unified pills/headers/empty states (#130 record pages, #133 the remaining nine pages incl. Analytics/Meetings/Settings). #132 added a11y (associated `<label for=>` on all form inputs, AA contrast, responsive form grids, truncation tooltips); #134 rebuilt every row action as a ≥32px tap-target button. All prod-verified via `/health` SHA.
+- **Email-in capture: IMAP polling cron** (roadmap PR 5, this PR) — `poll_inbox_email` management command polls a dedicated Gmail mailbox (`imap.gmail.com:993`, stdlib `imaplib`/`email`) every 15 min via a new Render cron; sender allowlist (default: `manager_email`), per-manager Message-ID dedupe, HTML→text via a stdlib `HTMLParser` stripper, poison-message isolation (malformed email → visible `failed` item, queue continues), `\Seen` only after commit; IMAP creds in Settings (app password encrypted) + last-poll outcome readout.
 
 **Tooling additions in `.claude/`:**
 - **SessionStart hook** (PR #96) — creates `manager-tool-django/.venv` and installs requirements on every web session boot.
