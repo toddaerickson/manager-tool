@@ -11,9 +11,9 @@
     </p>
   </header>
 
-  <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not pending %}open{% endif %}>
-    <summary class="px-6 py-3 cursor-pointer select-none font-medium">Add to-do</summary>
-    <div id="todo-form-wrap" class="px-6 pb-6">
+  <details class="mb-6 bg-white border border-slate-200 rounded-md" {% if not pending %}open{% endif %}>
+    <summary class="px-3 py-2 cursor-pointer select-none font-medium">Add to-do</summary>
+    <div id="todo-form-wrap" class="px-3 pb-3">
       {% include "_partials/todo_form.html" %}
     </div>
   </details>

@@ -14,11 +14,12 @@
   pattern but loads via a separate request so the shell renders fast
   and the panel can be cached/refreshed independently.
   {% endcomment %}
+  {% comment %}Flat container — the sections inside carry their own
+     1px-bordered panels, so the wrapper adds no card chrome of its own.{% endcomment %}
   <div id="overview-panel"
        hx-get="{% url 'dashboard-overview' %}"
        hx-trigger="load"
-       hx-swap="innerHTML"
-       class="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
+       hx-swap="innerHTML">
     <div class="text-slate-400 text-sm">Loading overview…</div>
   </div>
 </div>
