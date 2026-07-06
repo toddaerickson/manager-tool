@@ -10,9 +10,9 @@
   </header>
 
   <div class="flex items-center gap-3 mb-4">
-    <label class="text-sm text-slate-600">Filter by member:</label>
-    <select onchange="window.location=this.value?'?member='+this.value:window.location.pathname"
-            class="text-sm border border-slate-300 rounded px-2 py-1">
+    <label for="member-filter" class="text-sm text-slate-600">Filter by member:</label>
+    <select id="member-filter" onchange="window.location=this.value?'?member='+this.value:window.location.pathname"
+            class="text-sm border border-slate-300 rounded px-2 py-1.5">
       <option value="">All members</option>
       {% for m in members %}
         <option value="{{ m.id }}" {% if selected_member == m.id|stringformat:"d" %}selected{% endif %}>{{ m.name }}</option>
@@ -44,7 +44,7 @@
         <tr id="delegation-row-{{ d.id }}" class="hover:bg-slate-50">
           <td class="px-3 py-1.5 break-words">
             {{ d.task }}
-            {% if d.outcome_expected %}<p class="text-xs text-slate-500 mt-0.5">{{ d.outcome_expected|truncatewords:15 }}</p>{% endif %}
+            {% if d.outcome_expected %}<p class="text-xs text-slate-500 mt-0.5" title="{{ d.outcome_expected }}">{{ d.outcome_expected|truncatewords:15 }}</p>{% endif %}
           </td>
           <td class="px-3 py-1.5">{% if d.team_member %}{{ d.team_member.name }}{% else %}—{% endif %}</td>
           <td class="px-3 py-1.5 tabular-nums {% if d.check_in_date and d.check_in_date < today_iso %}text-red-600 font-medium{% else %}text-slate-600{% endif %}">
@@ -52,7 +52,7 @@
           </td>
           <td class="px-3 py-1.5 text-slate-600">{{ d.autonomy_level|default:"—" }}</td>
           <td class="px-3 py-1.5 text-right">
-            <div class="flex flex-col items-end gap-1">
+            <div class="flex flex-col items-end gap-1.5">
               <a href="{% url 'delegations-edit' d.id %}" class="text-slate-700 hover:text-slate-900 underline">Edit</a>
               <button type="button"
                       hx-delete="{% url 'delegations-delete' d.id %}"
@@ -60,7 +60,7 @@
                       hx-swap="outerHTML"
                       hx-confirm="Delete this delegation?"
                       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                      class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+                      class="text-xs text-slate-500 hover:text-red-600 underline">Delete</button>
             </div>
           </td>
         </tr>

@@ -27,7 +27,7 @@
             {% for k, v in status_labels.items %}{% if k == d.status %}{{ v }}{% endif %}{% endfor %}{% if not d.status %}Active{% endif %}
           </span>
           {% if d.review_date %}
-            <span class="text-xs tabular-nums {% if d.review_date <= today_iso and d.status == 'active' %}text-red-600 font-medium{% else %}text-slate-400{% endif %}">
+            <span class="text-xs tabular-nums {% if d.review_date <= today_iso and d.status == 'active' %}text-red-600 font-medium{% else %}text-slate-500{% endif %}">
               review {{ d.review_date }}{% if d.review_date <= today_iso and d.status == 'active' %} (due){% endif %}
             </span>
           {% endif %}
@@ -38,10 +38,10 @@
                   hx-swap="outerHTML"
                   hx-confirm="Delete this decision?"
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                  class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+                  class="text-xs text-slate-500 hover:text-red-600 underline">Delete</button>
         </div>
       </div>
-      {% if d.rationale %}<p class="text-sm text-slate-600">{{ d.rationale|truncatewords:30 }}</p>{% endif %}
+      {% if d.rationale %}<p class="text-sm text-slate-600" title="{{ d.rationale }}">{{ d.rationale|truncatewords:30 }}</p>{% endif %}
       {% if d.actual_outcome %}<p class="text-xs text-slate-500 mt-1"><strong>Outcome:</strong> {{ d.actual_outcome }}</p>{% endif %}
     </div>
     {% endfor %}

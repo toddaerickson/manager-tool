@@ -16,7 +16,7 @@
       <td class="px-3 py-1.5">{{ g.team_member.name }}</td>
       <td class="px-3 py-1.5 break-words">
         {{ g.description }}
-        {% if g.key_results %}<p class="text-xs text-slate-500 mt-0.5 whitespace-pre-line">{{ g.key_results|truncatewords:20 }}</p>{% endif %}
+        {% if g.key_results %}<p class="text-xs text-slate-500 mt-0.5 whitespace-pre-line" title="{{ g.key_results }}">{{ g.key_results|truncatewords:20 }}</p>{% endif %}
       </td>
       <td class="px-3 py-1.5 tabular-nums text-slate-600">{{ g.quarter }}{% if g.target_date %}<br><span class="text-xs">by {{ g.target_date }}</span>{% endif %}</td>
       <td class="px-3 py-1.5">
@@ -27,7 +27,7 @@
         {% endwith %}
       </td>
       <td class="px-3 py-1.5 text-right">
-        <div class="flex flex-col items-end gap-1">
+        <div class="flex flex-col items-end gap-1.5">
           <a href="{% url 'goals-edit' g.id %}" class="text-slate-700 hover:text-slate-900 underline">Edit</a>
           <button type="button"
                   hx-delete="{% url 'goals-delete' g.id %}"
@@ -35,7 +35,7 @@
                   hx-swap="outerHTML"
                   hx-confirm="Delete this goal? Cannot be undone."
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                  class="text-xs text-slate-400 hover:text-red-600 underline">
+                  class="text-xs text-slate-500 hover:text-red-600 underline">
             Delete
           </button>
         </div>
