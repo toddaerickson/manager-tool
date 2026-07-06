@@ -31,7 +31,7 @@ detail page (the canonical URL the user pastes into Outlook invites).
 
   {# Right: Edit / Complete / Delete (Delete tertiary) #}
   <div class="col-span-3 sm:col-span-3 flex items-center justify-end gap-1 text-sm">
-    <a href="{% url 'events-edit' ev.id %}" class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">
+    <a href="{% url 'events-edit' ev.id %}" class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">
       Edit
     </a>
     <button type="button"
@@ -39,7 +39,7 @@ detail page (the canonical URL the user pastes into Outlook invites).
             hx-target="#event-row-{{ ev.id }}"
             hx-swap="outerHTML"
             hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-            class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">
+            class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">
       Complete
     </button>
     <button type="button"
@@ -48,7 +48,7 @@ detail page (the canonical URL the user pastes into Outlook invites).
             hx-swap="outerHTML"
             hx-confirm="Permanently delete {{ ev.title }}?"
             hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-            class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">
+            class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">
       Delete
     </button>
   </div>

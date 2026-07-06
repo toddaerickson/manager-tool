@@ -51,7 +51,7 @@
                  hx-swap="innerHTML"
                  hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event']"
                  hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                 class="block w-full border border-slate-300 rounded px-2 py-1.5 text-sm"
+                 class="block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
                  placeholder="Add comma-separated tags…">
         </div>
 
@@ -67,7 +67,7 @@
                     hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event']"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                     rows="6"
-                    class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-sm"
+                    class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
                     placeholder="Their 10 minutes — what's on their mind? Start here.">{{ session.direct_notes|default_if_none:"" }}</textarea>
         </div>
 
@@ -111,7 +111,7 @@
                     hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event']"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                     rows="6"
-                    class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-sm"
+                    class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
                     placeholder="Your 10 minutes — what you need to cover.">{{ session.manager_notes|default_if_none:"" }}</textarea>
         </details>
 
@@ -132,7 +132,7 @@
                     hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event']"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                     rows="6"
-                    class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-sm"
+                    class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
                     placeholder="Development, coaching, career growth.">{{ session.followup_notes|default_if_none:"" }}</textarea>
         </details>
 
@@ -140,7 +140,7 @@
         <div>
           <label class="block text-sm font-medium text-slate-700 mb-1">Linked event</label>
           <select name="event"
-                  class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-sm">
+                  class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm">
             <option value="">(no linked event)</option>
             {% for e in form.event.field.queryset %}
               <option value="{{ e.id }}" {% if session.event_id == e.id %}selected{% endif %}>

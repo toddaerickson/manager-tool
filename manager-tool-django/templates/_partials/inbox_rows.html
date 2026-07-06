@@ -32,7 +32,7 @@
         <label for="member-{{ item.id }}" class="text-xs text-slate-500">for</label>
         <select name="member" id="member-{{ item.id }}"
                 aria-label="Team member for note"
-                class="border border-slate-300 rounded px-2 min-h-11 text-xs bg-white">
+                class="border border-slate-300 rounded px-2 min-h-11 text-base sm:text-xs bg-white">
           <option value="">Broadcast</option>
           {% for m in members %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
         </select>

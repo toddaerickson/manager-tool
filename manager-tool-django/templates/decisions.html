@@ -31,14 +31,14 @@
               review {{ d.review_date }}{% if d.review_date <= today_iso and d.status == 'active' %} (due){% endif %}
             </span>
           {% endif %}
-          <a href="{% url 'decisions-edit' d.id %}" class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Edit</a>
+          <a href="{% url 'decisions-edit' d.id %}" class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Edit</a>
           <button type="button"
                   hx-delete="{% url 'decisions-delete' d.id %}"
                   hx-target="#decision-row-{{ d.id }}"
                   hx-swap="outerHTML"
                   hx-confirm="Delete this decision?"
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                  class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
+                  class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
         </div>
       </div>
       {% if d.rationale %}<p class="text-sm text-slate-600" title="{{ d.rationale }}">{{ d.rationale|truncatewords:30 }}</p>{% endif %}

@@ -36,7 +36,7 @@
   <form method="get" class="flex flex-wrap items-center gap-3 mb-4">
     <label class="text-sm text-slate-600" for="meeting-member-filter">Filter:</label>
     <select id="meeting-member-filter" name="member" onchange="this.form.submit()"
-            class="text-sm border border-slate-300 rounded px-2 py-1">
+            class="text-base sm:text-sm border border-slate-300 rounded px-2 py-1">
       <option value="">All members</option>
       {% for m in members %}
         <option value="{{ m.id }}" {% if selected_member == m.id %}selected{% endif %}>{{ m.name }}</option>
@@ -44,7 +44,7 @@
     </select>
     <input type="search" name="q" value="{{ search_query|default:'' }}"
            placeholder="Search notes…"
-           class="text-sm border border-slate-300 rounded px-2 py-1 w-56">
+           class="text-base sm:text-sm border border-slate-300 rounded px-2 py-1 w-56">
     {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}">{% endif %}
     <button type="submit"
             class="text-sm bg-accent-700 text-white rounded px-3 py-1 hover:bg-accent-800">Search</button>
@@ -96,14 +96,14 @@
           </div>
           <div class="flex items-center gap-1">
             <span class="text-xs text-slate-500 tabular-nums">{{ s.session_date }}</span>
-            <a href="{% url 'meetings-detail' s.id %}" class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Open</a>
+            <a href="{% url 'meetings-detail' s.id %}" class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Open</a>
             <button type="button"
                     hx-delete="{% url 'meetings-delete' s.id %}"
                     hx-target="#meeting-row-{{ s.id }}"
                     hx-swap="outerHTML"
                     hx-confirm="Delete this meeting?"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                    class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
+                    class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
           </div>
         </div>
         {% if s.direct_notes %}
@@ -137,14 +137,14 @@
           </div>
           <div class="flex items-center gap-1">
             <span class="text-xs text-slate-500 tabular-nums">{{ s.session_date }}</span>
-            <a href="{% url 'meetings-detail' s.id %}" class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Open</a>
+            <a href="{% url 'meetings-detail' s.id %}" class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Open</a>
             <button type="button"
                     hx-delete="{% url 'meetings-delete' s.id %}"
                     hx-target="#meeting-row-{{ s.id }}"
                     hx-swap="outerHTML"
                     hx-confirm="Delete this meeting?"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                    class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
+                    class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
           </div>
         </div>
         {% if s.direct_notes %}

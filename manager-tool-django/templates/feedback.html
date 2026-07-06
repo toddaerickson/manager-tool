@@ -12,7 +12,7 @@
   <div class="flex items-center gap-3 mb-4">
     <label for="member-filter" class="text-sm text-slate-600">Filter by member:</label>
     <select id="member-filter" onchange="window.location=this.value?'?member='+this.value:window.location.pathname"
-            class="text-sm border border-slate-300 rounded px-2 py-1.5">
+            class="text-base sm:text-sm border border-slate-300 rounded px-2 py-1.5">
       <option value="">All members</option>
       {% for m in members %}
         <option value="{{ m.id }}" {% if selected_member == m.id|stringformat:"d" %}selected{% endif %}>{{ m.name }}</option>
@@ -46,7 +46,7 @@
                   hx-swap="outerHTML"
                   hx-confirm="Delete this feedback?"
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                  class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
+                  class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
         </div>
       </div>
       {% if f.situation %}<p class="text-sm text-slate-600"><strong class="text-slate-700">S:</strong> {{ f.situation }}</p>{% endif %}
