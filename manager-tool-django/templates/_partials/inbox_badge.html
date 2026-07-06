@@ -1,1 +1,6 @@
-{% if count %}<span id="inbox-badge" class="ml-auto bg-accent-700 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">{{ count }}</span>{% else %}<span id="inbox-badge" class="hidden"></span>{% endif %}
+{% comment %} Dual-purpose: the sidebar loads this directly via hx-get
+   (hx-swap="outerHTML"), so the root must always carry id="inbox-badge" to
+   preserve the id. When re-rendered inside a triage/quick-add response it is
+   included with oob=True so htmx out-of-band refreshes the same element —
+   keeping the pending count from going stale after a capture or triage.
+{% endcomment %}{% if count %}<span id="inbox-badge"{% if oob %} hx-swap-oob="true"{% endif %} class="ml-auto bg-accent-700 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">{{ count }}</span>{% else %}<span id="inbox-badge"{% if oob %} hx-swap-oob="true"{% endif %} class="hidden"></span>{% endif %}
