@@ -8,7 +8,7 @@
         {{ e.entry_date }}
         <span class="text-xs text-slate-500 ml-1">{{ e.entry_type }}</span>
       </div>
-      <div class="flex items-center gap-3 text-sm">
+      <div class="flex items-center gap-1 text-sm">
         {% if e.mood %}
           <span title="Mood {{ e.mood }}">{% with emoji=mood_emoji|default_if_none:"" %}{% for k,v in mood_emoji.items %}{% if k == e.mood %}{{ v }}{% endif %}{% endfor %}{% endwith %} {{ e.mood }}/5</span>
         {% endif %}
@@ -16,7 +16,7 @@
           <span title="Energy {{ e.energy }}">{% for k,v in energy_emoji.items %}{% if k == e.energy %}{{ v }}{% endif %}{% endfor %} {{ e.energy }}/5</span>
         {% endif %}
         <a href="{% url 'journal-edit' e.id %}"
-           class="text-xs text-slate-600 hover:text-slate-900 underline">Edit</a>
+           class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Edit</a>
       </div>
     </div>
     {% if e.content %}
