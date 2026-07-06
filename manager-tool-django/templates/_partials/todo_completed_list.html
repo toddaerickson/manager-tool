@@ -8,7 +8,7 @@
       <tr>
         <th class="px-3 py-1.5 font-medium">Description</th>
         <th class="px-3 py-1.5 font-medium">Completed</th>
-        <th class="px-3 py-1.5 font-medium w-24"></th>
+        <th class="px-3 py-1.5 font-medium"></th>
       </tr>
     </thead>
     <tbody class="divide-y divide-slate-100 text-sm">
@@ -24,7 +24,7 @@
                   hx-target="#todo-completed"
                   hx-swap="innerHTML"
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                  class="text-xs text-slate-700 hover:text-slate-900 underline">
+                  class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">
             Restore
           </button>
         </td>

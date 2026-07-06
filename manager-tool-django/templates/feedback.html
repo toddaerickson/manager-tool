@@ -46,7 +46,7 @@
                   hx-swap="outerHTML"
                   hx-confirm="Delete this feedback?"
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                  class="text-xs text-slate-500 hover:text-red-600 underline">Delete</button>
+                  class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
         </div>
       </div>
       {% if f.situation %}<p class="text-sm text-slate-600"><strong class="text-slate-700">S:</strong> {{ f.situation }}</p>{% endif %}
