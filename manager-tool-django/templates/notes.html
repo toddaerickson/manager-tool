@@ -10,9 +10,9 @@
   </header>
 
   <div class="flex items-center gap-3 mb-4">
-    <label class="text-sm text-slate-600">Filter by member:</label>
-    <select onchange="window.location=this.value?'?member='+this.value:window.location.pathname"
-            class="text-sm border border-slate-300 rounded px-2 py-1">
+    <label for="member-filter" class="text-sm text-slate-600">Filter by member:</label>
+    <select id="member-filter" onchange="window.location=this.value?'?member='+this.value:window.location.pathname"
+            class="text-sm border border-slate-300 rounded px-2 py-1.5">
       <option value="">All notes</option>
       {% for m in members %}
         <option value="{{ m.id }}" {% if selected_member == m.id|stringformat:"d" %}selected{% endif %}>{{ m.name }}</option>
@@ -38,7 +38,7 @@
           {% else %}
             <span class="font-medium text-slate-500">Broadcast</span>
           {% endif %}
-          <span class="text-xs text-slate-400 ml-2">
+          <span class="text-xs text-slate-500 ml-2">
             {% for k, v in category_labels.items %}{% if k == n.category %}{{ v }}{% endif %}{% endfor %}
           </span>
         </div>
@@ -50,7 +50,7 @@
                   hx-swap="outerHTML"
                   hx-confirm="Delete this note?"
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                  class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+                  class="text-xs text-slate-500 hover:text-red-600 underline">Delete</button>
         </div>
       </div>
       <p class="text-sm text-slate-700 whitespace-pre-line">{{ n.content }}</p>

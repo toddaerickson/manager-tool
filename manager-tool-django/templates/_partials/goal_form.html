@@ -5,37 +5,37 @@
       class="space-y-3">
   {% csrf_token %}
 
-  <div class="grid grid-cols-2 gap-3">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
     <div>
-      <label class="block text-sm font-medium text-slate-700">Team member *</label>
+      <label for="{{ form.team_member.id_for_label }}" class="block text-sm font-medium text-slate-700">Team member *</label>
       {{ form.team_member }}
       {% if form.team_member.errors %}<p class="text-xs text-red-600 mt-1">{{ form.team_member.errors.0 }}</p>{% endif %}
     </div>
     <div>
-      <label class="block text-sm font-medium text-slate-700">Quarter</label>
+      <label for="{{ form.quarter.id_for_label }}" class="block text-sm font-medium text-slate-700">Quarter</label>
       {{ form.quarter }}
     </div>
   </div>
 
   <div>
-    <label class="block text-sm font-medium text-slate-700">Goal description *</label>
+    <label for="{{ form.description.id_for_label }}" class="block text-sm font-medium text-slate-700">Goal description *</label>
     {{ form.description }}
     {% if form.description.errors %}<p class="text-xs text-red-600 mt-1">{{ form.description.errors.0 }}</p>{% endif %}
   </div>
 
   <div>
-    <label class="block text-sm font-medium text-slate-700">Key results</label>
+    <label for="{{ form.key_results.id_for_label }}" class="block text-sm font-medium text-slate-700">Key results</label>
     {{ form.key_results }}
     <p class="text-xs text-slate-500 mt-1">One key result per line.</p>
   </div>
 
-  <div class="grid grid-cols-2 gap-3">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
     <div>
-      <label class="block text-sm font-medium text-slate-700">Target date</label>
+      <label for="{{ form.target_date.id_for_label }}" class="block text-sm font-medium text-slate-700">Target date</label>
       {{ form.target_date }}
     </div>
     <div>
-      <label class="block text-sm font-medium text-slate-700">Status</label>
+      <label for="{{ form.status.id_for_label }}" class="block text-sm font-medium text-slate-700">Status</label>
       {{ form.status }}
     </div>
   </div>

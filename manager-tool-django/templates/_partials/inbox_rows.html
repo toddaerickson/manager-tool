@@ -3,7 +3,7 @@
   {% for item in items %}
   <div class="px-3 py-2.5 hover:bg-slate-50">
     <div class="flex items-baseline justify-between gap-3 mb-1">
-      <span class="text-xs text-slate-400">
+      <span class="text-xs text-slate-500">
         {% if item.status == "failed" %}<span class="text-red-600 font-medium">failed email</span> ·{% endif %}
         {{ item.get_source_display|lower }} · {{ item.created_at|date:"M j, g:i a" }}
         {% if item.from_address %} · {{ item.from_address }}{% endif %}
@@ -37,7 +37,7 @@
           {% for m in members %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
         </select>
       </span>
-      <button name="target" value="dismiss" class="inline-flex items-center justify-center min-h-11 text-slate-400 hover:text-red-600 underline px-3 ml-auto">Dismiss</button>
+      <button name="target" value="dismiss" class="inline-flex items-center justify-center min-h-11 text-slate-500 hover:text-red-600 underline px-3 ml-auto">Dismiss</button>
     </form>
   </div>
   {% endfor %}

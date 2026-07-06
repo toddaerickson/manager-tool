@@ -1,40 +1,40 @@
 <form method="post" action="{% url 'delegations-add' %}" class="space-y-3">
   {% csrf_token %}
 
-  <div class="grid grid-cols-2 gap-3">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
     <div>
-      <label class="block text-sm font-medium text-slate-700">Task *</label>
+      <label for="{{ form.task.id_for_label }}" class="block text-sm font-medium text-slate-700">Task *</label>
       {{ form.task }}
       {% if form.task.errors %}<p class="text-xs text-red-600 mt-1">{{ form.task.errors.0 }}</p>{% endif %}
     </div>
     <div>
-      <label class="block text-sm font-medium text-slate-700">Delegate to</label>
+      <label for="{{ form.team_member.id_for_label }}" class="block text-sm font-medium text-slate-700">Delegate to</label>
       {{ form.team_member }}
     </div>
   </div>
 
   <div>
-    <label class="block text-sm font-medium text-slate-700">Expected outcome</label>
+    <label for="{{ form.outcome_expected.id_for_label }}" class="block text-sm font-medium text-slate-700">Expected outcome</label>
     {{ form.outcome_expected }}
   </div>
 
-  <div class="grid grid-cols-3 gap-3">
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
     <div>
-      <label class="block text-sm font-medium text-slate-700">Autonomy level</label>
+      <label for="{{ form.autonomy_level.id_for_label }}" class="block text-sm font-medium text-slate-700">Autonomy level</label>
       {{ form.autonomy_level }}
     </div>
     <div>
-      <label class="block text-sm font-medium text-slate-700">Check-in date</label>
+      <label for="{{ form.check_in_date.id_for_label }}" class="block text-sm font-medium text-slate-700">Check-in date</label>
       {{ form.check_in_date }}
     </div>
     <div>
-      <label class="block text-sm font-medium text-slate-700">Status</label>
+      <label for="{{ form.status.id_for_label }}" class="block text-sm font-medium text-slate-700">Status</label>
       {{ form.status }}
     </div>
   </div>
 
   <div>
-    <label class="block text-sm font-medium text-slate-700">Notes</label>
+    <label for="{{ form.notes.id_for_label }}" class="block text-sm font-medium text-slate-700">Notes</label>
     {{ form.notes }}
   </div>
 
