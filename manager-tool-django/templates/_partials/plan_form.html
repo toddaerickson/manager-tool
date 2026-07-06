@@ -5,31 +5,31 @@
       class="space-y-3">
   {% csrf_token %}
 
-  <div class="grid grid-cols-2 gap-3">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
     <div>
-      <label class="block text-sm font-medium text-slate-700">Team member *</label>
+      <label for="{{ plan_form.team_member.id_for_label }}" class="block text-sm font-medium text-slate-700">Team member *</label>
       {{ plan_form.team_member }}
       {% if plan_form.team_member.errors %}<p class="text-xs text-red-600 mt-1">{{ plan_form.team_member.errors.0 }}</p>{% endif %}
     </div>
     <div>
-      <label class="block text-sm font-medium text-slate-700">Title *</label>
+      <label for="{{ plan_form.title.id_for_label }}" class="block text-sm font-medium text-slate-700">Title *</label>
       {{ plan_form.title }}
       {% if plan_form.title.errors %}<p class="text-xs text-red-600 mt-1">{{ plan_form.title.errors.0 }}</p>{% endif %}
     </div>
   </div>
 
   <div>
-    <label class="block text-sm font-medium text-slate-700">Description</label>
+    <label for="{{ plan_form.description.id_for_label }}" class="block text-sm font-medium text-slate-700">Description</label>
     {{ plan_form.description }}
   </div>
 
-  <div class="grid grid-cols-2 gap-3">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
     <div>
-      <label class="block text-sm font-medium text-slate-700">Target date</label>
+      <label for="{{ plan_form.target_date.id_for_label }}" class="block text-sm font-medium text-slate-700">Target date</label>
       {{ plan_form.target_date }}
     </div>
     <div>
-      <label class="block text-sm font-medium text-slate-700">Status</label>
+      <label for="{{ plan_form.status.id_for_label }}" class="block text-sm font-medium text-slate-700">Status</label>
       {{ plan_form.status }}
     </div>
   </div>

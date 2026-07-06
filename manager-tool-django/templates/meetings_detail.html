@@ -15,7 +15,7 @@
           {% if session.status == "draft" %}
             <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 ml-1">Draft</span>
           {% else %}
-            <span class="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700 ml-1">Completed</span>
+            <span class="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 ml-1">Completed</span>
           {% endif %}
         </p>
       </div>
@@ -37,12 +37,12 @@
 
     {# ── Main column: 10/10/10 recorder ── #}
     <div class="lg:col-span-2 space-y-4">
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-6 space-y-5">
+      <div class="bg-white border border-slate-200 rounded-md p-6 space-y-5">
 
         {# Tags — autosaved on blur. Normalized server-side (lowercase, trim, dedupe). #}
         <div>
           <label class="block text-sm font-medium text-slate-700 mb-1" for="meeting-tags-input">Tags</label>
-          <p class="text-xs text-slate-400 mb-1">Comma-separated (e.g. <code>career, project-x</code>). Click a tag on the list page to filter.</p>
+          <p class="text-xs text-slate-500 mb-1">Comma-separated (e.g. <code>career, project-x</code>). Click a tag on the list page to filter.</p>
           <input id="meeting-tags-input" type="text" name="tags"
                  value="{{ session.tags|default_if_none:'' }}"
                  hx-post="{% url 'meetings-autosave' session.id %}"
@@ -58,7 +58,7 @@
         {# Their Agenda #}
         <div>
           <label class="block text-sm font-medium text-slate-700 mb-1">Their Agenda</label>
-          <p class="text-xs text-slate-400 mb-1">Their 10 minutes — what's on their mind? Start here.</p>
+          <p class="text-xs text-slate-500 mb-1">Their 10 minutes — what's on their mind? Start here.</p>
           <textarea name="direct_notes"
                     hx-post="{% url 'meetings-autosave' session.id %}"
                     hx-trigger="keyup changed delay:2s"
@@ -81,10 +81,10 @@
             </svg>
             Your Agenda
             {% if not session.direct_notes and not session.manager_notes %}
-              <span class="text-xs font-normal text-slate-400 ml-1">— start with theirs</span>
+              <span class="text-xs font-normal text-slate-500 ml-1">— start with theirs</span>
             {% endif %}
           </summary>
-          <p class="text-xs text-slate-400 mt-1 mb-1">Your 10 minutes — what you need to cover.</p>
+          <p class="text-xs text-slate-500 mt-1 mb-1">Your 10 minutes — what you need to cover.</p>
           {% if not session.manager_notes and prep_count %}
             {# Prep mode: one-click pull of this direct's open items into the box. #}
             {{ prep_agenda|json_script:"prep-agenda-data" }}
@@ -123,7 +123,7 @@
             </svg>
             Coaching / Their Future
           </summary>
-          <p class="text-xs text-slate-400 mt-1 mb-1">Development, coaching, career growth.</p>
+          <p class="text-xs text-slate-500 mt-1 mb-1">Development, coaching, career growth.</p>
           <textarea name="followup_notes"
                     hx-post="{% url 'meetings-autosave' session.id %}"
                     hx-trigger="keyup changed delay:2s"
@@ -153,13 +153,13 @@
         {# Save indicator #}
         <div id="save-indicator" class="text-right">
           {% if session.updated_at %}
-            <span class="text-xs text-slate-400">Last saved at {{ session.updated_at|time:"g:i A" }}</span>
+            <span class="text-xs text-slate-500">Last saved at {{ session.updated_at|time:"g:i A" }}</span>
           {% endif %}
         </div>
       </div>
 
       {# ── Action items ── #}
-      <div id="meeting-actions" class="bg-white rounded-lg shadow-sm border border-slate-200 p-6">
+      <div id="meeting-actions" class="bg-white border border-slate-200 rounded-md p-6">
         {% include "_partials/meeting_action_items.html" %}
       </div>
     </div>
@@ -169,8 +169,8 @@
 
       {# Last 4 meetings #}
       {% if last_4_meetings %}
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
-        <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Recent meetings</div>
+      <div class="bg-white border border-slate-200 rounded-md p-4">
+        <div class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Recent meetings</div>
         <div class="space-y-2">
           {% for m in last_4_meetings %}
           <a href="{% url 'meetings-detail' m.id %}" class="block text-sm hover:bg-slate-50 rounded px-1 py-1 -mx-1">
@@ -185,9 +185,9 @@
       {% endif %}
 
       {# Open delegations #}
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+      <div class="bg-white border border-slate-200 rounded-md p-4">
         <div class="flex items-center justify-between mb-2">
-          <div class="text-xs uppercase tracking-wider text-slate-500">Open delegations</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-slate-500">Open delegations</div>
           <a href="{% url 'delegations' %}?member={{ session.team_member_id }}" class="text-xs text-blue-600 hover:text-blue-800">View all &rarr;</a>
         </div>
         {% if open_delegations %}
@@ -195,19 +195,19 @@
           {% for d in open_delegations %}
           <li class="text-sm text-slate-700">
             {{ d.task|truncatechars:60 }}
-            {% if d.check_in_date %}<span class="text-xs text-slate-400 ml-1">due {{ d.check_in_date }}</span>{% endif %}
+            {% if d.check_in_date %}<span class="text-xs text-slate-500 ml-1">due {{ d.check_in_date }}</span>{% endif %}
           </li>
           {% endfor %}
         </ul>
         {% else %}
-        <p class="text-sm text-slate-400">None</p>
+        <p class="text-sm text-slate-500">None</p>
         {% endif %}
       </div>
 
       {# Active goals #}
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+      <div class="bg-white border border-slate-200 rounded-md p-4">
         <div class="flex items-center justify-between mb-2">
-          <div class="text-xs uppercase tracking-wider text-slate-500">Active goals</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-slate-500">Active goals</div>
           <a href="{% url 'goals' %}?member={{ session.team_member_id }}" class="text-xs text-blue-600 hover:text-blue-800">View all &rarr;</a>
         </div>
         {% if active_goals %}
@@ -215,19 +215,19 @@
           {% for g in active_goals %}
           <li class="text-sm text-slate-700">
             {{ g.description|truncatechars:60 }}
-            {% if g.quarter %}<span class="text-xs text-slate-400 ml-1">{{ g.quarter }}</span>{% endif %}
+            {% if g.quarter %}<span class="text-xs text-slate-500 ml-1">{{ g.quarter }}</span>{% endif %}
           </li>
           {% endfor %}
         </ul>
         {% else %}
-        <p class="text-sm text-slate-400">None</p>
+        <p class="text-sm text-slate-500">None</p>
         {% endif %}
       </div>
 
       {# Recent feedback #}
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+      <div class="bg-white border border-slate-200 rounded-md p-4">
         <div class="flex items-center justify-between mb-2">
-          <div class="text-xs uppercase tracking-wider text-slate-500">Recent feedback</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-slate-500">Recent feedback</div>
           <a href="{% url 'feedback' %}?member={{ session.team_member_id }}" class="text-xs text-blue-600 hover:text-blue-800">View all &rarr;</a>
         </div>
         {% if recent_feedback %}
@@ -235,7 +235,7 @@
           {% for f in recent_feedback %}
           <li class="text-sm text-slate-700">
             {% if f.feedback_type == "positive" %}
-              <span class="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">+</span>
+              <span class="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">+</span>
             {% else %}
               <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">&Delta;</span>
             {% endif %}
@@ -244,19 +244,19 @@
           {% endfor %}
         </ul>
         {% else %}
-        <p class="text-sm text-slate-400">None</p>
+        <p class="text-sm text-slate-500">None</p>
         {% endif %}
       </div>
 
       {# Open action items from prior meetings #}
       {% if open_actions %}
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
-        <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Open action items</div>
+      <div class="bg-white border border-slate-200 rounded-md p-4">
+        <div class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Open action items</div>
         <ul class="space-y-1.5">
           {% for a in open_actions %}
           <li class="text-sm text-slate-700">
             {{ a.description|truncatechars:60 }}
-            {% if a.due_date %}<span class="text-xs text-slate-400 ml-1">due {{ a.due_date }}</span>{% endif %}
+            {% if a.due_date %}<span class="text-xs text-slate-500 ml-1">due {{ a.due_date }}</span>{% endif %}
           </li>
           {% endfor %}
         </ul>

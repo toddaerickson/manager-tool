@@ -16,7 +16,7 @@
           {{ ev.scheduled_date }} at {{ ev.scheduled_time }}
           {% if ev.duration_minutes %} · {{ ev.duration_minutes }} min{% endif %}
           {% if ev.status != "scheduled" %}
-            · <span class="font-medium">{{ ev.status }}</span>
+            · <span class="text-xs px-1.5 py-0.5 rounded {% if ev.status == 'completed' %}bg-emerald-100 text-emerald-700{% else %}bg-amber-100 text-amber-700{% endif %}">{{ ev.status }}</span>
           {% endif %}
         </p>
       </div>
@@ -27,37 +27,37 @@
     </div>
   </header>
 
-  <dl class="bg-white rounded-lg shadow-sm border border-slate-200 divide-y divide-slate-100">
-    <div class="px-4 py-3 grid grid-cols-3 gap-3">
+  <dl class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
+    <div class="px-3 py-2.5 grid grid-cols-3 gap-3">
       <dt class="text-sm text-slate-500">Type</dt>
       <dd class="col-span-2 text-sm">{{ ev.get_event_type_display|default:ev.event_type }}</dd>
     </div>
     {% if ev.team_member %}
-    <div class="px-4 py-3 grid grid-cols-3 gap-3">
+    <div class="px-3 py-2.5 grid grid-cols-3 gap-3">
       <dt class="text-sm text-slate-500">Participant</dt>
       <dd class="col-span-2 text-sm">{{ ev.team_member.name }}</dd>
     </div>
     {% endif %}
     {% if ev.location %}
-    <div class="px-4 py-3 grid grid-cols-3 gap-3">
+    <div class="px-3 py-2.5 grid grid-cols-3 gap-3">
       <dt class="text-sm text-slate-500">Location</dt>
       <dd class="col-span-2 text-sm break-words">{{ ev.location }}</dd>
     </div>
     {% endif %}
     {% if ev.recurrence_rule %}
-    <div class="px-4 py-3 grid grid-cols-3 gap-3">
+    <div class="px-3 py-2.5 grid grid-cols-3 gap-3">
       <dt class="text-sm text-slate-500">Series</dt>
       <dd class="col-span-2 text-sm">{{ ev.recurrence_rule|capfirst }}{% if ev.parent_event %} (one of N){% endif %}</dd>
     </div>
     {% endif %}
     {% if ev.agenda %}
-    <div class="px-4 py-3">
+    <div class="px-3 py-2.5">
       <dt class="text-sm text-slate-500 mb-1">Agenda</dt>
       <dd class="text-sm whitespace-pre-wrap break-words">{{ ev.agenda }}</dd>
     </div>
     {% endif %}
     {% if ev.notes %}
-    <div class="px-4 py-3">
+    <div class="px-3 py-2.5">
       <dt class="text-sm text-slate-500 mb-1">Notes</dt>
       <dd class="text-sm whitespace-pre-wrap break-words">{{ ev.notes }}</dd>
     </div>
@@ -71,12 +71,12 @@
   coaching pane (the "context" half of the contract).
   {% endcomment %}
   {% if invite_success %}
-  <div class="mt-4 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800">
+  <div class="mt-4 rounded-md bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-800">
     {{ invite_success }}
   </div>
   {% endif %}
   {% if invite_error %}
-  <div class="mt-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">
+  <div class="mt-4 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">
     {{ invite_error }}
   </div>
   {% endif %}
@@ -88,7 +88,7 @@
          class="inline-flex items-center gap-1.5 bg-accent-700 text-white text-sm px-4 py-2 rounded hover:bg-accent-800">
         Open meeting notes
         {% if meeting_session.status == "draft" %}
-          <span class="text-xs px-1.5 py-0.5 rounded bg-amber-400/30">Draft</span>
+          <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Draft</span>
         {% endif %}
       </a>
     {% elif ev.team_member %}

@@ -9,9 +9,9 @@
     <p class="text-sm text-slate-500 mt-1">{{ members|length }} member{{ members|length|pluralize }}</p>
   </header>
 
-  <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not members %}open{% endif %}>
-    <summary class="px-6 py-3 cursor-pointer select-none font-medium">Add member</summary>
-    <div id="member-form-wrap" class="px-6 pb-6">
+  <details class="mb-6 bg-white border border-slate-200 rounded-md" {% if not members %}open{% endif %}>
+    <summary class="px-3 py-2 cursor-pointer select-none font-medium">Add member</summary>
+    <div id="member-form-wrap" class="px-3 pb-3">
       {% include "_partials/team_member_form.html" %}
     </div>
   </details>

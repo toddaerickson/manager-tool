@@ -11,8 +11,8 @@
 
   {# ── Cadence health ── #}
   {% if cadence %}
-  <div class="mb-5 bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-3">
-    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">Meeting cadence</div>
+  <div class="mb-5 bg-white border border-slate-200 rounded-md px-5 py-3">
+    <div class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Meeting cadence</div>
     <div class="flex flex-wrap gap-3">
       {% for c in cadence %}
       <div class="flex items-center gap-1.5 text-sm">
@@ -24,7 +24,7 @@
         {% elif c.days_since > 7 %}
           <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">{{ c.days_since }}d ago</span>
         {% else %}
-          <span class="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">{{ c.days_since }}d ago</span>
+          <span class="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">{{ c.days_since }}d ago</span>
         {% endif %}
       </div>
       {% endfor %}
@@ -75,9 +75,9 @@
   {% endif %}
 
   {# ── Start new meeting ── #}
-  <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not drafts and not completed %}open{% endif %}>
-    <summary class="px-6 py-3 cursor-pointer select-none font-medium">Start new meeting</summary>
-    <div class="px-6 pb-6">
+  <details class="mb-6 bg-white border border-slate-200 rounded-md" {% if not drafts and not completed %}open{% endif %}>
+    <summary class="px-3 py-2 cursor-pointer select-none font-medium">Start new meeting</summary>
+    <div class="px-3 pb-3">
       {% include "_partials/meeting_form.html" %}
     </div>
   </details>
@@ -85,10 +85,10 @@
   {# ── Draft meetings ── #}
   {% if drafts %}
   <div class="mb-4">
-    <div class="text-xs uppercase tracking-wider text-slate-500 mb-2">In progress</div>
-    <div class="space-y-3">
+    <div class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">In progress</div>
+    <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
       {% for s in drafts %}
-      <div id="meeting-row-{{ s.id }}" class="bg-white rounded-lg shadow-sm border border-amber-200 px-5 py-4">
+      <div id="meeting-row-{{ s.id }}" class="px-3 py-2.5 hover:bg-slate-50">
         <div class="flex items-center justify-between mb-1">
           <div class="text-sm">
             <span class="font-medium">{{ s.team_member.name }}</span>
@@ -103,7 +103,7 @@
                     hx-swap="outerHTML"
                     hx-confirm="Delete this meeting?"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                    class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+                    class="text-xs text-slate-500 hover:text-red-600 underline">Delete</button>
           </div>
         </div>
         {% if s.direct_notes %}
@@ -126,14 +126,14 @@
   {# ── Completed meetings ── #}
   {% if completed %}
   <div>
-    {% if drafts %}<div class="text-xs uppercase tracking-wider text-slate-500 mb-2 mt-4">Completed</div>{% endif %}
-    <div class="space-y-3">
+    {% if drafts %}<div class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2 mt-4">Completed</div>{% endif %}
+    <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
       {% for s in completed %}
-      <div id="meeting-row-{{ s.id }}" class="bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-4">
+      <div id="meeting-row-{{ s.id }}" class="px-3 py-2.5 hover:bg-slate-50">
         <div class="flex items-center justify-between mb-1">
           <div class="text-sm">
             <span class="font-medium">{{ s.team_member.name }}</span>
-            <span class="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700 ml-2">Completed</span>
+            <span class="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 ml-2">Completed</span>
           </div>
           <div class="flex items-center gap-3">
             <span class="text-xs text-slate-500 tabular-nums">{{ s.session_date }}</span>
@@ -144,7 +144,7 @@
                     hx-swap="outerHTML"
                     hx-confirm="Delete this meeting?"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                    class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+                    class="text-xs text-slate-500 hover:text-red-600 underline">Delete</button>
           </div>
         </div>
         {% if s.direct_notes %}
@@ -165,9 +165,7 @@
   {% endif %}
 
   {% if not drafts and not completed %}
-  <div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
-    No meetings yet. Start one above.
-  </div>
+  <p class="text-sm text-slate-500">No meetings yet. Start one above.</p>
   {% endif %}
 </div>
 {% endblock %}

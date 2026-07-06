@@ -16,15 +16,15 @@
   </header>
 
   {% if not any_events %}
-    <div class="text-center text-slate-500 py-12 bg-white rounded-lg shadow-sm border border-slate-200">
+    <p class="text-sm text-slate-500">
       Nothing scheduled. <a href="{% url 'events-schedule' %}" class="underline">Schedule one</a>.
-    </div>
+    </p>
   {% else %}
     <div class="space-y-6">
       {% for label, events in groups %}
       <section>
-        <h2 class="text-sm font-medium text-slate-700 mb-2">{{ label }}</h2>
-        <div class="bg-white rounded-lg shadow-sm border border-slate-200 divide-y divide-slate-100">
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">{{ label }}</h2>
+        <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
           {% for ev in events %}
             {% include "_partials/event_row.html" with ev=ev %}
           {% endfor %}

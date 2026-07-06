@@ -9,115 +9,119 @@
     <p class="text-sm text-slate-500 mt-1">Meeting cadence, feedback health, goal progress, and action item stats.</p>
   </header>
 
-  {# ---- Stat cards ---- #}
-  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3 text-center">
-      <div class="text-2xl font-semibold">{{ team_count }}</div>
+  {# ---- Stat bar ---- #}
+  <div class="grid grid-cols-2 sm:grid-cols-4 bg-white border border-slate-200 rounded-md divide-x divide-slate-100 overflow-hidden mb-8">
+    <div class="px-3 py-2 text-center">
+      <div class="text-lg font-semibold tabular-nums">{{ team_count }}</div>
       <div class="text-xs text-slate-500">Team members</div>
     </div>
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3 text-center">
-      <div class="text-2xl font-semibold">{{ total_events }}</div>
+    <div class="px-3 py-2 text-center">
+      <div class="text-lg font-semibold tabular-nums">{{ total_events }}</div>
       <div class="text-xs text-slate-500">Events (all time)</div>
     </div>
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3 text-center">
-      <div class="text-2xl font-semibold">{{ total_feedback }}</div>
+    <div class="px-3 py-2 text-center">
+      <div class="text-lg font-semibold tabular-nums">{{ total_feedback }}</div>
       <div class="text-xs text-slate-500">Feedback given</div>
     </div>
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3 text-center">
-      <div class="text-2xl font-semibold">{{ streak }}</div>
+    <div class="px-3 py-2 text-center">
+      <div class="text-lg font-semibold tabular-nums">{{ streak }}</div>
       <div class="text-xs text-slate-500">Journal streak</div>
     </div>
   </div>
 
   {# ---- Meeting cadence ---- #}
   <section class="mb-8">
-    <h2 class="text-lg font-semibold mb-3">Meeting Cadence</h2>
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Meeting Cadence</h2>
     {% if meeting_cadence %}
-    <table class="min-w-full bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-      <thead class="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
-        <tr><th class="px-4 py-3">Member</th><th class="px-4 py-3">Last meeting</th><th class="px-4 py-3">Days ago</th><th class="px-4 py-3">Status</th></tr>
-      </thead>
-      <tbody class="divide-y divide-slate-100">
-        {% for m in meeting_cadence %}
-        <tr>
-          <td class="px-4 py-2 text-sm">{{ m.name }}</td>
-          <td class="px-4 py-2 text-sm text-slate-600">{{ m.last_date|default:"Never" }}</td>
-          <td class="px-4 py-2 text-sm tabular-nums">{{ m.days_ago|default:"—" }}</td>
-          <td class="px-4 py-2 text-sm">
-            {% if m.days_ago is None %}
-              <span class="text-red-600 font-medium">Never met</span>
-            {% elif m.days_ago > 14 %}
-              <span class="text-amber-600 font-medium">Overdue (&gt;14 days)</span>
-            {% else %}
-              <span class="text-green-600">On track</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="bg-white border border-slate-200 rounded-md overflow-hidden">
+      <table class="min-w-full">
+        <thead class="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-200">
+          <tr><th class="px-3 py-1.5 font-medium">Member</th><th class="px-3 py-1.5 font-medium">Last meeting</th><th class="px-3 py-1.5 font-medium">Days ago</th><th class="px-3 py-1.5 font-medium">Status</th></tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 text-sm">
+          {% for m in meeting_cadence %}
+          <tr class="hover:bg-slate-50">
+            <td class="px-3 py-1.5">{{ m.name }}</td>
+            <td class="px-3 py-1.5 text-slate-600">{{ m.last_date|default:"Never" }}</td>
+            <td class="px-3 py-1.5 text-right tabular-nums">{{ m.days_ago|default:"—" }}</td>
+            <td class="px-3 py-1.5">
+              {% if m.days_ago is None %}
+                <span class="text-red-600 font-medium">Never met</span>
+              {% elif m.days_ago > 14 %}
+                <span class="text-amber-600 font-medium">Overdue (&gt;14 days)</span>
+              {% else %}
+                <span class="text-green-600">On track</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     {% else %}
-    <p class="text-sm text-slate-400 py-4">Complete some meetings to see cadence data.</p>
+    <p class="text-sm text-slate-500">Complete some meetings to see cadence data.</p>
     {% endif %}
   </section>
 
   {# ---- Feedback health ---- #}
   <section class="mb-8">
-    <h2 class="text-lg font-semibold mb-3">Feedback Health</h2>
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Feedback Health</h2>
     {% if feedback_ratios %}
-    <table class="min-w-full bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-      <thead class="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
-        <tr><th class="px-4 py-3">Member</th><th class="px-4 py-3">Positive</th><th class="px-4 py-3">Constructive</th><th class="px-4 py-3">Ratio</th></tr>
-      </thead>
-      <tbody class="divide-y divide-slate-100">
-        {% for f in feedback_ratios %}
-        <tr>
-          <td class="px-4 py-2 text-sm">{{ f.name }}</td>
-          <td class="px-4 py-2 text-sm text-green-700 tabular-nums">{{ f.positive }}</td>
-          <td class="px-4 py-2 text-sm text-amber-700 tabular-nums">{{ f.constructive }}</td>
-          <td class="px-4 py-2 text-sm">
-            {% if f.ratio_pct >= 80 %}
-              <span class="text-green-600">{{ f.ratio_pct }}%</span>
-            {% elif f.ratio_pct >= 60 %}
-              <span class="text-amber-600">{{ f.ratio_pct }}%</span>
-            {% else %}
-              <span class="text-red-600">{{ f.ratio_pct }}%</span>
-            {% endif %}
-            <span class="text-xs text-slate-400 ml-1">positive</span>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="bg-white border border-slate-200 rounded-md overflow-hidden">
+      <table class="min-w-full">
+        <thead class="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-200">
+          <tr><th class="px-3 py-1.5 font-medium">Member</th><th class="px-3 py-1.5 font-medium">Positive</th><th class="px-3 py-1.5 font-medium">Constructive</th><th class="px-3 py-1.5 font-medium">Ratio</th></tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 text-sm">
+          {% for f in feedback_ratios %}
+          <tr class="hover:bg-slate-50">
+            <td class="px-3 py-1.5">{{ f.name }}</td>
+            <td class="px-3 py-1.5 text-green-700 text-right tabular-nums">{{ f.positive }}</td>
+            <td class="px-3 py-1.5 text-amber-700 text-right tabular-nums">{{ f.constructive }}</td>
+            <td class="px-3 py-1.5">
+              {% if f.ratio_pct >= 80 %}
+                <span class="text-green-600">{{ f.ratio_pct }}%</span>
+              {% elif f.ratio_pct >= 60 %}
+                <span class="text-amber-600">{{ f.ratio_pct }}%</span>
+              {% else %}
+                <span class="text-red-600">{{ f.ratio_pct }}%</span>
+              {% endif %}
+              <span class="text-xs text-slate-400 ml-1">positive</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     <p class="text-xs text-slate-500 mt-2">Ideal: >80% positive (Losada & Heaphy).</p>
     {% else %}
-    <p class="text-sm text-slate-400 py-4">Record feedback to see health metrics.</p>
+    <p class="text-sm text-slate-500">Record feedback to see health metrics.</p>
     {% endif %}
   </section>
 
   {# ---- Action items ---- #}
   <section class="mb-8">
-    <h2 class="text-lg font-semibold mb-3">Action Items</h2>
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3 text-center">
-        <div class="text-xl font-semibold">{{ action_total }}</div>
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Action Items</h2>
+    <div class="grid grid-cols-2 sm:grid-cols-4 bg-white border border-slate-200 rounded-md divide-x divide-slate-100 overflow-hidden">
+      <div class="px-3 py-2 text-center">
+        <div class="text-lg font-semibold tabular-nums">{{ action_total }}</div>
         <div class="text-xs text-slate-500">Total</div>
       </div>
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3 text-center">
-        <div class="text-xl font-semibold text-green-700">{{ action_completed }}</div>
+      <div class="px-3 py-2 text-center">
+        <div class="text-lg font-semibold tabular-nums text-green-700">{{ action_completed }}</div>
         <div class="text-xs text-slate-500">Completed</div>
       </div>
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3 text-center">
-        <div class="text-xl font-semibold">{{ action_pending }}</div>
+      <div class="px-3 py-2 text-center">
+        <div class="text-lg font-semibold tabular-nums">{{ action_pending }}</div>
         <div class="text-xs text-slate-500">Pending</div>
       </div>
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3 text-center">
-        <div class="text-xl font-semibold {% if action_overdue > 0 %}text-red-600{% endif %}">{{ action_overdue }}</div>
+      <div class="px-3 py-2 text-center">
+        <div class="text-lg font-semibold tabular-nums {% if action_overdue > 0 %}text-red-600{% endif %}">{{ action_overdue }}</div>
         <div class="text-xs text-slate-500">Overdue</div>
       </div>
     </div>
     {% if action_total > 0 %}
-    <div class="mt-3 bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3">
+    <div class="mt-3 bg-white border border-slate-200 rounded-md px-3 py-2">
       <div class="flex items-center gap-3">
         <div class="flex-1 bg-slate-100 rounded-full h-3">
           <div class="bg-green-600 h-3 rounded-full" style="width: {{ completion_pct }}%"></div>
@@ -130,18 +134,18 @@
 
   {# ---- Goal progress ---- #}
   <section>
-    <h2 class="text-lg font-semibold mb-3">Goals by Status</h2>
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Goals by Status</h2>
     {% if goal_stats %}
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <div class="grid grid-cols-2 sm:grid-cols-4 bg-white border border-slate-200 rounded-md divide-x divide-slate-100 overflow-hidden">
       {% for status, count in goal_stats.items %}
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3 text-center">
-        <div class="text-xl font-semibold">{{ count }}</div>
+      <div class="px-3 py-2 text-center">
+        <div class="text-lg font-semibold tabular-nums">{{ count }}</div>
         <div class="text-xs text-slate-500">{{ status|capfirst }}</div>
       </div>
       {% endfor %}
     </div>
     {% else %}
-    <p class="text-sm text-slate-400 py-4">Set goals to track progress.</p>
+    <p class="text-sm text-slate-500">Set goals to track progress.</p>
     {% endif %}
   </section>
 </div>

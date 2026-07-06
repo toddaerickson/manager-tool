@@ -14,11 +14,11 @@
     </p>
   </header>
 
-  <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not existing_id %}open{% endif %}>
-    <summary class="px-6 py-3 cursor-pointer select-none font-medium">
+  <details class="mb-6 bg-white border border-slate-200 rounded-md" {% if not existing_id %}open{% endif %}>
+    <summary class="px-3 py-2 cursor-pointer select-none font-medium">
       {% if existing_id %}Edit today's entry{% else %}Write today's entry{% endif %}
     </summary>
-    <div id="journal-form-wrap" class="px-6 pb-6">
+    <div id="journal-form-wrap" class="px-3 pb-3">
       {% include "_partials/journal_form.html" %}
     </div>
   </details>

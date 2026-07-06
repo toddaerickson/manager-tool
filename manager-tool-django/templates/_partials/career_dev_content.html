@@ -7,69 +7,71 @@ updates without a full reload (D4 consistency fix).
 
   {# ---- Skills ---- #}
   <section class="mb-8">
-    <h2 class="text-lg font-semibold mb-3">Skills</h2>
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Skills</h2>
 
-    <details class="mb-4 bg-white rounded-lg shadow-sm border border-slate-200">
-      <summary class="px-6 py-3 cursor-pointer select-none font-medium text-sm">Add skill</summary>
-      <div class="px-6 pb-6" id="skill-form-wrap">
+    <details class="mb-4 bg-white border border-slate-200 rounded-md">
+      <summary class="px-3 py-2 cursor-pointer select-none font-medium text-sm">Add skill</summary>
+      <div class="px-3 pb-3" id="skill-form-wrap">
         {% include "_partials/skill_form.html" %}
       </div>
     </details>
 
     {% if skills %}
-    <table class="min-w-full bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
-      <thead class="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
+    <div class="bg-white border border-slate-200 rounded-md overflow-hidden">
+    <table class="min-w-full">
+      <thead class="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-200">
         <tr>
-          <th class="px-4 py-3">Member</th>
-          <th class="px-4 py-3">Skill</th>
-          <th class="px-4 py-3">Proficiency</th>
-          <th class="px-4 py-3">Tags</th>
-          <th class="px-4 py-3 w-16"></th>
+          <th class="px-3 py-1.5 font-medium">Member</th>
+          <th class="px-3 py-1.5 font-medium">Skill</th>
+          <th class="px-3 py-1.5 font-medium">Proficiency</th>
+          <th class="px-3 py-1.5 font-medium">Tags</th>
+          <th class="px-3 py-1.5 font-medium w-16"></th>
         </tr>
       </thead>
-      <tbody class="divide-y divide-slate-100">
+      <tbody class="divide-y divide-slate-100 text-sm">
         {% for s in skills %}
-        <tr id="skill-row-{{ s.id }}">
-          <td class="px-4 py-2 text-sm">{{ s.team_member.name }}</td>
-          <td class="px-4 py-2 text-sm">{{ s.skill_name }}{% if s.notes %}<br><span class="text-xs text-slate-500">{{ s.notes|truncatewords:10 }}</span>{% endif %}</td>
-          <td class="px-4 py-2 text-sm text-slate-600">{{ s.proficiency|default:"—" }}</td>
-          <td class="px-4 py-2 text-xs text-slate-500">
+        <tr id="skill-row-{{ s.id }}" class="hover:bg-slate-50">
+          <td class="px-3 py-1.5">{{ s.team_member.name }}</td>
+          <td class="px-3 py-1.5">{{ s.skill_name }}{% if s.notes %}<br><span class="text-xs text-slate-500">{{ s.notes|truncatewords:10 }}</span>{% endif %}</td>
+          <td class="px-3 py-1.5 text-slate-600">{{ s.proficiency|default:"—" }}</td>
+          <td class="px-3 py-1.5 text-xs text-slate-500">
             {% if s.is_strength %}<span class="bg-green-100 text-green-800 px-1.5 py-0.5 rounded">Strength</span>{% endif %}
             {% if s.is_growth_area %}<span class="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Growth</span>{% endif %}
           </td>
-          <td class="px-4 py-2 text-right">
+          <td class="px-3 py-1.5 text-right">
             <button type="button"
                     hx-delete="{% url 'skills-delete' s.id %}"
                     hx-target="#career-dev-content"
                     hx-swap="outerHTML"
                     hx-confirm="Delete this skill?"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                    class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+                    class="text-xs text-slate-500 hover:text-red-600 underline">Delete</button>
           </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
-    <p class="text-sm text-slate-400 py-4">No skills tracked yet.</p>
+    <p class="text-sm text-slate-500">No skills tracked yet.</p>
     {% endif %}
   </section>
 
   {# ---- Development Plans ---- #}
   <section class="mb-8">
-    <h2 class="text-lg font-semibold mb-3">Development Plans</h2>
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Development Plans</h2>
 
-    <details class="mb-4 bg-white rounded-lg shadow-sm border border-slate-200">
-      <summary class="px-6 py-3 cursor-pointer select-none font-medium text-sm">Add plan</summary>
-      <div class="px-6 pb-6" id="plan-form-wrap">
+    <details class="mb-4 bg-white border border-slate-200 rounded-md">
+      <summary class="px-3 py-2 cursor-pointer select-none font-medium text-sm">Add plan</summary>
+      <div class="px-3 pb-3" id="plan-form-wrap">
         {% include "_partials/plan_form.html" %}
       </div>
     </details>
 
     {% if plans %}
-    <div class="space-y-3">
+    <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
       {% for p in plans %}
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-4">
+      <div class="px-3 py-2.5 hover:bg-slate-50">
         <div class="flex items-center justify-between mb-1">
           <div>
             <span class="text-sm font-medium">{{ p.title }}</span>
@@ -94,7 +96,7 @@ updates without a full reload (D4 consistency fix).
                       hx-target="#career-dev-content"
                       hx-swap="outerHTML"
                       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                      class="text-xs text-slate-400 hover:text-slate-600 underline ml-1">Pause</button>
+                      class="text-xs text-slate-500 hover:text-slate-600 underline ml-1">Pause</button>
             {% elif p.status == "paused" %}
               <button type="button"
                       hx-post="{% url 'plans-status' p.id %}"
@@ -122,7 +124,7 @@ updates without a full reload (D4 consistency fix).
                       hx-target="#career-dev-content"
                       hx-swap="outerHTML"
                       hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                      class="text-slate-400 hover:text-green-600">&#9744;</button>
+                      class="text-slate-500 hover:text-green-600">&#9744;</button>
               <span>{{ ms.description }}</span>
               {% if ms.target_date %}<span class="text-xs text-slate-400">by {{ ms.target_date }}</span>{% endif %}
             {% endif %}
@@ -151,25 +153,25 @@ updates without a full reload (D4 consistency fix).
       {% endfor %}
     </div>
     {% else %}
-    <p class="text-sm text-slate-400 py-4">No development plans yet.</p>
+    <p class="text-sm text-slate-500">No development plans yet.</p>
     {% endif %}
   </section>
 
   {# ---- Career Conversations ---- #}
   <section>
-    <h2 class="text-lg font-semibold mb-3">Career Conversations</h2>
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Career Conversations</h2>
 
-    <details class="mb-4 bg-white rounded-lg shadow-sm border border-slate-200">
-      <summary class="px-6 py-3 cursor-pointer select-none font-medium text-sm">Log conversation</summary>
-      <div class="px-6 pb-6" id="convo-form-wrap">
+    <details class="mb-4 bg-white border border-slate-200 rounded-md">
+      <summary class="px-3 py-2 cursor-pointer select-none font-medium text-sm">Log conversation</summary>
+      <div class="px-3 pb-3" id="convo-form-wrap">
         {% include "_partials/convo_form.html" %}
       </div>
     </details>
 
     {% if convos %}
-    <div class="space-y-3">
+    <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
       {% for c in convos %}
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-4">
+      <div class="px-3 py-2.5 hover:bg-slate-50">
         <div class="flex items-center justify-between mb-1">
           <span class="text-sm font-medium">{{ c.team_member.name }}</span>
           <span class="text-xs text-slate-500 tabular-nums">{{ c.conversation_date }}</span>
@@ -181,7 +183,7 @@ updates without a full reload (D4 consistency fix).
       {% endfor %}
     </div>
     {% else %}
-    <p class="text-sm text-slate-400 py-4">No career conversations logged yet.</p>
+    <p class="text-sm text-slate-500">No career conversations logged yet.</p>
     {% endif %}
   </section>
 

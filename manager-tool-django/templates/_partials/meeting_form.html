@@ -1,14 +1,14 @@
 <form method="post" action="{% url 'meetings-add' %}" class="space-y-3">
   {% csrf_token %}
 
-  <div class="grid grid-cols-2 gap-3">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
     <div>
-      <label class="block text-sm font-medium text-slate-700">Team member *</label>
+      <label for="{{ form.team_member.id_for_label }}" class="block text-sm font-medium text-slate-700">Team member *</label>
       {{ form.team_member }}
       {% if form.team_member.errors %}<p class="text-xs text-red-600 mt-1">{{ form.team_member.errors.0 }}</p>{% endif %}
     </div>
     <div>
-      <label class="block text-sm font-medium text-slate-700">Date *</label>
+      <label for="{{ form.session_date.id_for_label }}" class="block text-sm font-medium text-slate-700">Date *</label>
       {{ form.session_date }}
       {% if form.session_date.errors %}<p class="text-xs text-red-600 mt-1">{{ form.session_date.errors.0 }}</p>{% endif %}
     </div>
