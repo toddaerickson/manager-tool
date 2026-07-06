@@ -9,7 +9,7 @@
     <p class="text-sm text-slate-500 mt-1">Record decisions with context and rationale. Review outcomes later.</p>
   </header>
 
-  <details class="mb-6 border border-slate-200 rounded-md" {% if not decisions %}open{% endif %}>
+  <details class="mb-6 bg-white border border-slate-200 rounded-md" {% if not decisions %}open{% endif %}>
     <summary class="px-3 py-2 cursor-pointer select-none font-medium">Log decision</summary>
     <div class="px-3 pb-3">
       {% include "_partials/decision_form.html" %}

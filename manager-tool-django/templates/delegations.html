@@ -73,13 +73,20 @@
   {% endif %}
 
   {% if completed %}
-  <details class="bg-slate-50 border border-slate-200 rounded-md mb-6">
+  <details class="bg-white border border-slate-200 rounded-md mb-6">
     <summary class="px-3 py-2 cursor-pointer select-none text-sm font-medium text-slate-600">
       Completed / stalled ({{ completed|length }})
     </summary>
     <div class="px-3 pb-3">
       <table class="min-w-full">
-        <tbody class="divide-y divide-slate-200 text-sm">
+        <thead class="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-200">
+          <tr>
+            <th class="px-3 py-1.5 font-medium">Task</th>
+            <th class="px-3 py-1.5 font-medium">To</th>
+            <th class="px-3 py-1.5 font-medium">Status</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 text-sm">
           {% for d in completed %}
           <tr>
             <td class="px-3 py-1.5 text-slate-500">{{ d.task }}</td>

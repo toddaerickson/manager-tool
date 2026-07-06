@@ -30,11 +30,11 @@
   {% if feedback_list %}
   <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
     {% for f in feedback_list %}
-    <div id="feedback-row-{{ f.id }}" class="px-3 py-2.5 hover:bg-slate-50 transition">
+    <div id="feedback-row-{{ f.id }}" class="px-3 py-2.5 hover:bg-slate-50">
       <div class="flex items-center justify-between mb-1">
         <div class="text-sm">
           <span class="font-medium">{{ f.team_member.name }}</span>
-          <span class="ml-2 text-xs px-1.5 py-0.5 rounded {% if f.feedback_type == 'positive' %}bg-emerald-100 text-emerald-800{% else %}bg-amber-100 text-amber-800{% endif %}">
+          <span class="ml-2 text-xs px-1.5 py-0.5 rounded {% if f.feedback_type == 'positive' %}bg-emerald-100 text-emerald-700{% else %}bg-amber-100 text-amber-700{% endif %}">
             {{ f.feedback_type|capfirst }}
           </span>
         </div>
