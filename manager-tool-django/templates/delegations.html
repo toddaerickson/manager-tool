@@ -20,76 +20,80 @@
     </select>
   </div>
 
-  <details class="mb-6 bg-white rounded-lg shadow-sm border border-slate-200" {% if not active %}open{% endif %}>
-    <summary class="px-6 py-3 cursor-pointer select-none font-medium">Add delegation</summary>
-    <div class="px-6 pb-6">
+  <details class="mb-6 bg-white border border-slate-200 rounded-md" {% if not active %}open{% endif %}>
+    <summary class="px-3 py-2 cursor-pointer select-none font-medium">Add delegation</summary>
+    <div class="px-3 pb-3">
       {% include "_partials/delegation_form.html" %}
     </div>
   </details>
 
   {% if active %}
-  <table class="min-w-full bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden mb-6">
-    <thead class="bg-slate-50 text-left text-xs uppercase tracking-wider text-slate-500">
-      <tr>
-        <th class="px-4 py-3">Task</th>
-        <th class="px-4 py-3">To</th>
-        <th class="px-4 py-3">Check-in</th>
-        <th class="px-4 py-3">Level</th>
-        <th class="px-4 py-3 w-24"></th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-slate-100">
-      {% for d in active %}
-      <tr id="delegation-row-{{ d.id }}">
-        <td class="px-4 py-3 text-sm break-words">
-          {{ d.task }}
-          {% if d.outcome_expected %}<p class="text-xs text-slate-500 mt-0.5">{{ d.outcome_expected|truncatewords:15 }}</p>{% endif %}
-        </td>
-        <td class="px-4 py-3 text-sm">{% if d.team_member %}{{ d.team_member.name }}{% else %}—{% endif %}</td>
-        <td class="px-4 py-3 text-sm tabular-nums {% if d.check_in_date and d.check_in_date < today_iso %}text-red-600 font-medium{% else %}text-slate-600{% endif %}">
-          {% if d.check_in_date %}{{ d.check_in_date }}{% if d.check_in_date < today_iso %} <span class="text-xs">(overdue)</span>{% endif %}{% else %}—{% endif %}
-        </td>
-        <td class="px-4 py-3 text-sm text-slate-600">{{ d.autonomy_level|default:"—" }}</td>
-        <td class="px-4 py-3 text-right text-sm">
-          <div class="flex flex-col items-end gap-1">
-            <a href="{% url 'delegations-edit' d.id %}" class="text-slate-700 hover:text-slate-900 underline">Edit</a>
-            <button type="button"
-                    hx-delete="{% url 'delegations-delete' d.id %}"
-                    hx-target="#delegation-row-{{ d.id }}"
-                    hx-swap="outerHTML"
-                    hx-confirm="Delete this delegation?"
-                    hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                    class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
-          </div>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200 mb-6">
-    No active delegations.
-  </div>
-  {% endif %}
-
-  {% if completed %}
-  <details class="bg-slate-50 rounded-lg border border-slate-200">
-    <summary class="px-6 py-3 cursor-pointer select-none text-sm font-medium text-slate-600">
-      Completed / stalled ({{ completed|length }})
-    </summary>
-    <table class="min-w-full mt-2">
-      <tbody class="divide-y divide-slate-200">
-        {% for d in completed %}
+  <div class="bg-white border border-slate-200 rounded-md overflow-hidden mb-6">
+    <table class="min-w-full">
+      <thead class="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-200">
         <tr>
-          <td class="px-4 py-2 text-sm text-slate-500">{{ d.task }}</td>
-          <td class="px-4 py-2 text-sm text-slate-500">{% if d.team_member %}{{ d.team_member.name }}{% else %}—{% endif %}</td>
-          <td class="px-4 py-2 text-xs">
-            {% for k, v in status_labels.items %}{% if k == d.status %}{{ v }}{% endif %}{% endfor %}
+          <th class="px-3 py-1.5 font-medium">Task</th>
+          <th class="px-3 py-1.5 font-medium">To</th>
+          <th class="px-3 py-1.5 font-medium">Check-in</th>
+          <th class="px-3 py-1.5 font-medium">Level</th>
+          <th class="px-3 py-1.5 font-medium w-24"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 text-sm">
+        {% for d in active %}
+        <tr id="delegation-row-{{ d.id }}" class="hover:bg-slate-50">
+          <td class="px-3 py-1.5 break-words">
+            {{ d.task }}
+            {% if d.outcome_expected %}<p class="text-xs text-slate-500 mt-0.5">{{ d.outcome_expected|truncatewords:15 }}</p>{% endif %}
+          </td>
+          <td class="px-3 py-1.5">{% if d.team_member %}{{ d.team_member.name }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-1.5 tabular-nums {% if d.check_in_date and d.check_in_date < today_iso %}text-red-600 font-medium{% else %}text-slate-600{% endif %}">
+            {% if d.check_in_date %}{{ d.check_in_date }}{% if d.check_in_date < today_iso %} <span class="text-xs">(overdue)</span>{% endif %}{% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-1.5 text-slate-600">{{ d.autonomy_level|default:"—" }}</td>
+          <td class="px-3 py-1.5 text-right">
+            <div class="flex flex-col items-end gap-1">
+              <a href="{% url 'delegations-edit' d.id %}" class="text-slate-700 hover:text-slate-900 underline">Edit</a>
+              <button type="button"
+                      hx-delete="{% url 'delegations-delete' d.id %}"
+                      hx-target="#delegation-row-{{ d.id }}"
+                      hx-swap="outerHTML"
+                      hx-confirm="Delete this delegation?"
+                      hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                      class="text-xs text-slate-400 hover:text-red-600 underline">Delete</button>
+            </div>
           </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-slate-500 mb-6">No active delegations.</p>
+  {% endif %}
+
+  {% if completed %}
+  <details class="bg-slate-50 border border-slate-200 rounded-md mb-6">
+    <summary class="px-3 py-2 cursor-pointer select-none text-sm font-medium text-slate-600">
+      Completed / stalled ({{ completed|length }})
+    </summary>
+    <div class="px-3 pb-3">
+      <table class="min-w-full">
+        <tbody class="divide-y divide-slate-200 text-sm">
+          {% for d in completed %}
+          <tr>
+            <td class="px-3 py-1.5 text-slate-500">{{ d.task }}</td>
+            <td class="px-3 py-1.5 text-slate-500">{% if d.team_member %}{{ d.team_member.name }}{% else %}—{% endif %}</td>
+            <td class="px-3 py-1.5">
+              <span class="text-xs px-1.5 py-0.5 rounded {% if d.status == 'completed' %}bg-emerald-100 text-emerald-700{% elif d.status == 'stalled' %}bg-amber-100 text-amber-700{% else %}bg-slate-100 text-slate-600{% endif %}">
+                {% for k, v in status_labels.items %}{% if k == d.status %}{{ v }}{% endif %}{% endfor %}
+              </span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </details>
   {% endif %}
 </div>
