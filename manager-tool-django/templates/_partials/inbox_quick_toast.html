@@ -2,4 +2,6 @@
 <p class="text-xs text-red-400 pt-1">{{ error }}</p>
 {% else %}
 <p class="text-xs text-accent-400 pt-1">Captured — <a href="{% url 'inbox' %}" class="underline">inbox</a></p>
+{# OOB-refresh the sidebar count so it reflects the just-captured item. #}
+{% include "_partials/inbox_badge.html" with oob=True %}
 {% endif %}

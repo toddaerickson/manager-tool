@@ -44,3 +44,7 @@
 {% else %}
 <p class="text-sm text-slate-500">Inbox zero. Capture a thought from the sidebar box on any page.</p>
 {% endif %}
+{% comment %} Triage responses set oob_badge to out-of-band refresh the
+   sidebar count. NOT rendered on the full page (inbox_list omits the flag) —
+   a second badge element there would collide with the sidebar's id.
+{% endcomment %}{% if oob_badge %}{% include "_partials/inbox_badge.html" with oob=True %}{% endif %}

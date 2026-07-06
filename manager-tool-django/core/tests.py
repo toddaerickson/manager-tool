@@ -6501,3 +6501,58 @@ class TestInbox:
         assert "min-h-11" in body, "triage buttons missing 44px tap floor"
         assert "line-clamp-4" in body and "Show more" in body
         assert 'aria-label="Team member for note"' in body
+
+    def test_quick_add_response_oob_refreshes_badge(self, client):
+        """The quick-add toast carries an hx-swap-oob badge so the sidebar
+        count reflects the just-captured item without a full page reload."""
+        m = self._manager("qaoob")
+        self._login_as(client, m.email)
+        body = client.post(
+            "/inbox/quick/", {"body": "fresh thought"},
+        ).content.decode()
+        assert 'hx-swap-oob="true"' in body
+        assert 'id="inbox-badge"' in body
+        assert ">1<" in body, "OOB badge must show the new pending count"
+
+    def test_empty_quick_add_does_not_oob_refresh(self, client):
+        """Nothing captured -> nothing changed -> no stray badge swap."""
+        m = self._manager("noref")
+        self._login_as(client, m.email)
+        body = client.post("/inbox/quick/", {"body": "   "}).content.decode()
+        assert "hx-swap-oob" not in body
+
+    def test_triage_response_oob_refreshes_badge(self, client):
+        """Filing an item drops the pending count; the rows response OOB
+        refreshes the badge to the remaining count."""
+        m = self._manager("troob")
+        self._login_as(client, m.email)
+        self._item(m, body="keep me pending")
+        victim = self._item(m, body="file me")
+        body = client.post(
+            f"/inbox/{victim.id}/triage/", {"target": "journal"},
+        ).content.decode()
+        assert 'hx-swap-oob="true"' in body
+        assert ">1<" in body, "OOB badge must show remaining count after triage"
+
+    def test_dismiss_response_oob_refreshes_badge(self, client):
+        """Dismiss also changes the count, so it OOB-refreshes too."""
+        m = self._manager("disoob")
+        self._login_as(client, m.email)
+        only = self._item(m, body="dismiss me")
+        body = client.post(
+            f"/inbox/{only.id}/triage/", {"target": "dismiss"},
+        ).content.decode()
+        assert 'hx-swap-oob="true"' in body
+        # Count is now zero -> the hidden-span variant, not a visible pill.
+        assert 'id="inbox-badge" hx-swap-oob="true" class="hidden"' in body
+
+    def test_full_page_has_exactly_one_inbox_badge(self, client):
+        """The rows partial's OOB badge is gated OFF on the full page, so
+        the sidebar's id="inbox-badge" is never duplicated (a duplicate id
+        is invalid and would break the badge's swap target)."""
+        m = self._manager("dupid")
+        self._login_as(client, m.email)
+        self._item(m, body="one")
+        body = client.get("/inbox/").content.decode()
+        assert body.count('id="inbox-badge"') == 1
+        assert "hx-swap-oob" not in body, "full page must carry no OOB badge"

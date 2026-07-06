@@ -48,6 +48,24 @@ def _page_context(manager):
     }
 
 
+def _rows_response(request, manager, *, status=200):
+    """Render the triage row list AND out-of-band refresh the sidebar badge.
+
+    Every triage (file or dismiss) changes the pending count, but the badge
+    in base.html only loads once (hx-trigger="load"). Passing oob_badge=True
+    appends an hx-swap-oob copy of the badge to this fragment so the count
+    updates in place — the same OOB idiom the journal-streak / todo-count
+    partials use. oob_badge is NOT set on the full-page render (inbox_list),
+    where a second id="inbox-badge" would collide with the sidebar's.
+    """
+    ctx = {
+        **_page_context(manager),
+        "count": _pending(manager.id).count(),
+        "oob_badge": True,
+    }
+    return render(request, "_partials/inbox_rows.html", ctx, status=status)
+
+
 @login_required
 def inbox_list(request):
     manager, err = _require_manager(request)
@@ -87,8 +105,11 @@ def inbox_quick_add(request):
     )
     log_mutation(manager.id, "create", "InboxItem", item.id,
                  f"Inbox capture: {body[:60]}")
+    # count drives the OOB badge refresh in the toast partial so the sidebar
+    # count reflects the just-captured item without a full page reload.
     return render(request, "_partials/inbox_quick_toast.html", {
         "captured": body,
+        "count": _pending(manager.id).count(),
     })
 
 
@@ -116,8 +137,7 @@ def inbox_triage(request, item_id: int):
     # Validate BEFORE claiming: an invalid action must never take the
     # item out of the queue.
     if target not in TRIAGE_TARGETS:
-        return render(request, "_partials/inbox_rows.html",
-                      _page_context(manager), status=422)
+        return _rows_response(request, manager, status=422)
 
     # Resolve the note's member before opening the transaction (its own
     # tenant-scoped read).
@@ -205,5 +225,4 @@ def inbox_triage(request, item_id: int):
     # triage/dismiss or surface as a 500.
     if audit is not None:
         log_mutation(mid, *audit)
-    return render(request, "_partials/inbox_rows.html",
-                  _page_context(manager))
+    return _rows_response(request, manager)
