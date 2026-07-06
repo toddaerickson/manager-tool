@@ -956,6 +956,31 @@ class ConfigSettingsForm(forms.Form):
             "autocomplete": "new-password",
         }),
     )
+    # Email-in capture (roadmap PR 5) — dedicated Gmail mailbox polled
+    # over IMAP by the inbox-email-poll cron. Host/port are hardcoded to
+    # imap.gmail.com:993 in the command, so only the credentials and the
+    # sender allowlist are configurable.
+    inbox_imap_user = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            "class": _INPUT_CLS, "placeholder": "capture.address@gmail.com",
+        }),
+    )
+    inbox_imap_password = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(attrs={
+            "class": _INPUT_CLS,
+            "placeholder": "Gmail app password (leave blank to keep existing)",
+            "autocomplete": "new-password",
+        }),
+    )
+    inbox_allowed_senders = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={
+            "class": _INPUT_CLS,
+            "placeholder": "you@work.com, you@personal.com",
+        }),
+    )
 
     def clean_smtp_port(self):
         port = self.cleaned_data.get("smtp_port", "").strip()

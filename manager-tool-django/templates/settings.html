@@ -114,6 +114,44 @@
       </div>
     </div>
 
+    {# Email-in capture (roadmap PR 5) #}
+    <div class="bg-white border border-slate-200 rounded-md px-6 py-6">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Email-in capture</h2>
+      <p class="text-xs text-slate-500 mb-3">
+        A dedicated Gmail mailbox polled every 15 minutes — email it and the
+        message lands in your Inbox for triage. Use a fresh Gmail account with
+        2FA + an
+        <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" class="text-accent-700 hover:underline">App Password</a>;
+        only mail from allowed senders is captured. The password is stored encrypted.
+      </p>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label for="{{ config_form.inbox_imap_user.id_for_label }}" class="block text-sm font-medium text-slate-700">Capture mailbox (Gmail)</label>
+          {{ config_form.inbox_imap_user }}
+        </div>
+        <div>
+          <label for="{{ config_form.inbox_imap_password.id_for_label }}" class="block text-sm font-medium text-slate-700">
+            App password
+            {% if has_imap_password %}
+              <span class="text-xs text-emerald-700 ml-1">(set)</span>
+            {% endif %}
+          </label>
+          {{ config_form.inbox_imap_password }}
+        </div>
+        <div class="sm:col-span-2">
+          <label for="{{ config_form.inbox_allowed_senders.id_for_label }}" class="block text-sm font-medium text-slate-700">Allowed senders</label>
+          {{ config_form.inbox_allowed_senders }}
+          <p class="text-xs text-slate-500 mt-1">
+            Comma-separated. Blank = only your email address above. Mail from
+            anyone else is ignored.
+          </p>
+        </div>
+      </div>
+      {% if inbox_last_poll %}
+        <p class="text-xs text-slate-500 mt-3">Last poll: <span class="tabular-nums">{{ inbox_last_poll }}</span></p>
+      {% endif %}
+    </div>
+
     <div class="flex justify-end">
       <button type="submit" class="bg-accent-700 text-white text-sm px-4 py-2 rounded hover:bg-accent-800">
         Save settings

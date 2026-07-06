@@ -6556,3 +6556,217 @@ class TestInbox:
         body = client.get("/inbox/").content.decode()
         assert body.count('id="inbox-badge"') == 1
         assert "hx-swap-oob" not in body, "full page must carry no OOB badge"
+
+
+@pytest.mark.django_db
+class TestInboxEmailPoll:
+    """Roadmap PR 5: poll_inbox_email cron. All IMAP traffic is mocked
+    (imaplib.IMAP4_SSL patched); the safety properties under test are
+    the sender allowlist, run-twice dedupe on Message-ID, HTML-only
+    body stripping, poison-message isolation (a malformed email lands
+    as a VISIBLE failed item and never blocks the queue), the dry-run
+    no-op, and the last-poll outcome stamp."""
+
+    class _FakeIMAP:
+        """Stands in for imaplib.IMAP4_SSL. `mailbox` is a list of raw
+        message bytes; `seen` is a shared index-set so \\Seen state
+        survives across command runs within one test (like a real
+        mailbox would)."""
+
+        mailbox = []
+        seen = set()
+
+        def __init__(self, host, port):
+            self.host, self.port = host, port
+
+        def login(self, user, password):
+            return ("OK", [b"Logged in"])
+
+        def select(self, box):
+            return ("OK", [b"1"])
+
+        def search(self, charset, criterion):
+            assert criterion == "UNSEEN"
+            unseen = [
+                str(i + 1).encode()
+                for i in range(len(self.mailbox))
+                if i not in self.seen
+            ]
+            return ("OK", [b" ".join(unseen)])
+
+        def fetch(self, num, spec):
+            # BODY.PEEK[] must NOT implicitly mark seen — mirror that.
+            assert "PEEK" in spec, "poller must fetch with BODY.PEEK[]"
+            raw = self.mailbox[int(num) - 1]
+            return ("OK", [(b"1 (BODY[] {%d}" % len(raw), raw), b")"])
+
+        def store(self, num, flags, value):
+            assert flags == "+FLAGS" and value == "\\Seen"
+            self.seen.add(int(num) - 1)
+            return ("OK", [b""])
+
+        def logout(self):
+            return ("BYE", [b""])
+
+    # ------------------------------------------------------------------
+    def _manager(self, slug):
+        return Manager.objects.create(
+            username=f"poll_{slug}", display_name=slug.title(),
+            password_hash="h", email=f"poll_{slug}@example.com",
+        )
+
+    def _configure(self, m, allowed=None):
+        from core.services.config import set_config
+        set_config("inbox_imap_user", m.id, "capture@gmail.com")
+        set_config("inbox_imap_password", m.id, "gmail-app-pass")
+        if allowed is not None:
+            set_config("inbox_allowed_senders", m.id, allowed)
+        else:
+            set_config("manager_email", m.id, "todd@example.com")
+
+    def _raw(self, from_addr="todd@example.com", subject="Test subject",
+             body="hello from email", message_id="<m1@example.com>",
+             charset="utf-8", html=None):
+        lines = [
+            f"From: Todd <{from_addr}>",
+            f"Subject: {subject}",
+            "Date: Mon, 06 Jul 2026 09:00:00 -0400",
+        ]
+        if message_id:
+            lines.append(f"Message-ID: {message_id}")
+        if html is not None:
+            lines.append(f'Content-Type: text/html; charset="{charset}"')
+            payload = html
+        else:
+            lines.append(f'Content-Type: text/plain; charset="{charset}"')
+            payload = body
+        return ("\r\n".join(lines) + "\r\n\r\n" + payload).encode()
+
+    def _run(self, mailbox, *, seen=None, dry_run=False):
+        from io import StringIO
+        from unittest.mock import patch
+
+        from django.core.management import call_command
+
+        fake = self._FakeIMAP
+        fake.mailbox = mailbox
+        fake.seen = seen if seen is not None else set()
+        out = StringIO()
+        with patch("imaplib.IMAP4_SSL", fake):
+            kwargs = {"stdout": out}
+            if dry_run:
+                kwargs["dry_run"] = True
+            call_command("poll_inbox_email", **kwargs)
+        return out.getvalue(), fake.seen
+
+    # ------------------------------------------------------------------
+    def test_allowed_sender_creates_pending_item(self):
+        from core.models import InboxItem
+        m = self._manager("ok")
+        self._configure(m)
+        _out, seen = self._run([self._raw()])
+        item = InboxItem.objects.for_manager(m.id).get()
+        assert item.source == "email" and item.status == "pending"
+        assert item.subject == "Test subject"
+        assert item.body == "hello from email"
+        assert item.from_address == "todd@example.com"
+        assert item.message_id == "<m1@example.com>"
+        assert item.received_at is not None
+        assert seen == {0}, "message must be marked seen after commit"
+
+    def test_disallowed_sender_rejected_no_item(self):
+        from core.models import InboxItem
+        m = self._manager("spam")
+        self._configure(m)
+        _out, seen = self._run([self._raw(from_addr="attacker@evil.com")])
+        assert InboxItem.objects.for_manager(m.id).count() == 0
+        assert seen == {0}, "rejected mail is still marked seen (dropped)"
+
+    def test_allowlist_config_overrides_manager_email(self):
+        from core.models import InboxItem
+        m = self._manager("allow")
+        self._configure(m, allowed="second@work.com")
+        # manager_email is NOT in the explicit allowlist -> rejected.
+        from core.services.config import set_config
+        set_config("manager_email", m.id, "todd@example.com")
+        self._run([
+            self._raw(from_addr="todd@example.com",
+                      message_id="<rej@example.com>"),
+            self._raw(from_addr="second@work.com",
+                      message_id="<acc@example.com>"),
+        ])
+        items = InboxItem.objects.for_manager(m.id)
+        assert items.count() == 1
+        assert items.get().from_address == "second@work.com"
+
+    def test_run_twice_dedupes_on_message_id(self):
+        from core.models import InboxItem
+        m = self._manager("dupe")
+        self._configure(m)
+        mailbox = [self._raw()]
+        _out, seen = self._run(mailbox)
+        # Simulate \Seen flag loss (or an overlapping run): clear the
+        # flag so the same message is re-presented, and poll again.
+        _out2, _seen2 = self._run(mailbox, seen=set())
+        assert InboxItem.objects.for_manager(m.id).count() == 1
+        assert "1 duplicate" in _out2
+
+    def test_html_only_body_is_stripped(self):
+        from core.models import InboxItem
+        m = self._manager("html")
+        self._configure(m)
+        html = ("<html><head><style>p{color:red}</style></head><body>"
+                "<p>Line one &amp; more</p><script>alert(1)</script>"
+                "<div>Line two</div></body></html>")
+        self._run([self._raw(html=html)])
+        body = InboxItem.objects.for_manager(m.id).get().body
+        assert "Line one & more" in body, "entities must be unescaped"
+        assert "Line two" in body
+        assert "<" not in body, "no tags may survive"
+        assert "alert(1)" not in body, "script contents must be dropped"
+        assert "color:red" not in body, "style contents must be dropped"
+
+    def test_poison_message_lands_failed_and_queue_continues(self):
+        from core.models import InboxItem
+        m = self._manager("poison")
+        self._configure(m)
+        # Unknown charset -> LookupError inside body extraction: a
+        # genuine parse failure, not a mocked one.
+        poison = self._raw(charset="totally-bogus-charset",
+                           message_id="<bad@example.com>")
+        good = self._raw(subject="After the poison",
+                         message_id="<good@example.com>")
+        _out, seen = self._run([poison, good])
+        items = InboxItem.objects.for_manager(m.id)
+        failed = items.get(status="failed")
+        assert failed.subject == "(unparseable email)"
+        assert failed.body, "failed item must carry a raw excerpt"
+        ok = items.get(status="pending")
+        assert ok.subject == "After the poison"
+        assert seen == {0, 1}, "both messages consumed; queue not blocked"
+
+    def test_dry_run_writes_nothing(self):
+        from core.models import Config, InboxItem
+        m = self._manager("dry")
+        self._configure(m)
+        out, seen = self._run([self._raw()], dry_run=True)
+        assert "DRY-RUN" in out and "1 unseen" in out
+        assert InboxItem.objects.for_manager(m.id).count() == 0
+        assert seen == set(), "dry-run must not mark anything seen"
+        assert not Config.objects.filter(
+            manager_id=m.id, key="inbox_last_poll",
+        ).exists(), "dry-run must not stamp the last-poll outcome"
+
+    def test_last_poll_outcome_stamped(self):
+        from core.models import Config
+        m = self._manager("stamp")
+        self._configure(m)
+        self._run([self._raw()])
+        stamp = Config.objects.get(manager_id=m.id, key="inbox_last_poll")
+        assert "ok: 1 new" in stamp.value
+
+    def test_unconfigured_manager_is_skipped(self):
+        from core.models import InboxItem
+        m = self._manager("skip")  # no inbox_imap_user config at all
+        _out, _seen = self._run([self._raw()])
+        assert InboxItem.objects.for_manager(m.id).count() == 0

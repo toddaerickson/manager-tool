@@ -12,6 +12,7 @@ from core.forms import (
 from core.services.config import (
     SENSITIVE_KEYS,
     get_all_config,
+    get_config,
     has_config,
     set_config,
 )
@@ -30,7 +31,13 @@ CONFIG_FIELDS = (
     "smtp_port",
     "smtp_user",
     "smtp_password",
+    "inbox_imap_user",
+    "inbox_imap_password",
+    "inbox_allowed_senders",
 )
+
+# Password-style fields: a blank submission means "keep existing".
+_KEEP_IF_BLANK = {"anthropic_api_key", "smtp_password", "inbox_imap_password"}
 
 
 @login_required
@@ -49,8 +56,7 @@ def settings_page(request):
             profile_form.save()
             for field in CONFIG_FIELDS:
                 value = config_form.cleaned_data.get(field, "")
-                # Password-style fields: blank means "keep existing".
-                if field in {"anthropic_api_key", "smtp_password"}:
+                if field in _KEEP_IF_BLANK:
                     if value:
                         set_config(field, manager.id, value)
                 else:
@@ -64,7 +70,7 @@ def settings_page(request):
         config_initial = {}
         all_config = get_all_config(manager.id)
         for field in CONFIG_FIELDS:
-            if field in {"anthropic_api_key", "smtp_password"}:
+            if field in _KEEP_IF_BLANK:
                 continue
             config_initial[field] = all_config.get(field, "")
         config_form = ConfigSettingsForm(initial=config_initial)
@@ -76,6 +82,10 @@ def settings_page(request):
         "current_config": get_all_config(manager.id),
         "has_anthropic_key": has_config("anthropic_api_key", manager.id),
         "has_smtp_password": has_config("smtp_password", manager.id),
+        "has_imap_password": has_config("inbox_imap_password", manager.id),
+        # Written by the poll cron every run (direct upsert, no audit
+        # noise) — "is email-in alive?" is answerable from this page.
+        "inbox_last_poll": get_config("inbox_last_poll", manager.id),
         "sensitive_keys": SENSITIVE_KEYS,
     })
 
