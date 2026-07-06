@@ -6770,3 +6770,91 @@ class TestInboxEmailPoll:
         m = self._manager("skip")  # no inbox_imap_user config at all
         _out, _seen = self._run([self._raw()])
         assert InboxItem.objects.for_manager(m.id).count() == 0
+
+    # ---- review-round regression tests (PR #135 code review) ----
+
+    def test_unclosed_script_tag_does_not_swallow_body_tail(self):
+        """HTMLParser's CDATA mode treats everything after an unclosed
+        <script> as script content; the first-pass stripper would drop
+        the entire tail SILENTLY (status stays pending — invisible
+        loss). The keep-all fallback must preserve the tail."""
+        from core.models import InboxItem
+        m = self._manager("cdata")
+        self._configure(m)
+        html = ("<div>Intro text</div><script>var x=1;"
+                "<div>Tail that must NOT be lost</div>")
+        self._run([self._raw(html=html)])
+        body = InboxItem.objects.for_manager(m.id).get().body
+        assert "Intro text" in body
+        assert "Tail that must NOT be lost" in body
+
+    def test_comma_display_name_sender_still_matches_allowlist(self):
+        """parseaddr returns ('','') for an unquoted comma display name
+        ('Erickson, Todd <t@x>'), which would silently DROP legit mail.
+        _sender_of must recover the real address via getaddresses."""
+        from core.models import InboxItem
+        m = self._manager("comma")
+        self._configure(m)
+        raw = self._raw()
+        raw = raw.replace(
+            b"From: Todd <todd@example.com>",
+            b"From: Erickson, Todd <todd@example.com>",
+        )
+        self._run([raw])
+        item = InboxItem.objects.for_manager(m.id).get()
+        assert item.from_address == "todd@example.com"
+        assert item.status == "pending"
+
+    def test_poison_refetch_dedupes_on_message_id(self):
+        """A poison message keeps its Message-ID, so a re-fetch after
+        flag loss dedupes into ONE failed row instead of duplicating."""
+        from core.models import InboxItem
+        m = self._manager("repoison")
+        self._configure(m)
+        poison = self._raw(charset="totally-bogus-charset",
+                           message_id="<poison@example.com>")
+        self._run([poison])
+        self._run([poison], seen=set())  # simulate \Seen flag loss
+        assert InboxItem.objects.for_manager(m.id).filter(
+            status="failed",
+        ).count() == 1
+
+    def test_enabled_but_passwordless_manager_stamps_error(self):
+        """inbox_imap_user set but password missing (or undecryptable
+        after a CONFIG_ENCRYPTION_KEY rotation): the Settings last-poll
+        stamp must show the error, not freeze on a stale healthy value."""
+        from core.models import Config, InboxItem
+        from core.services.config import set_config
+        m = self._manager("nopass")
+        set_config("inbox_imap_user", m.id, "capture@gmail.com")
+        # no password on purpose
+        self._run([self._raw()])
+        stamp = Config.objects.get(manager_id=m.id, key="inbox_last_poll")
+        assert stamp.value and "error:" in stamp.value
+        assert InboxItem.objects.for_manager(m.id).count() == 0
+
+    def test_settings_blank_imap_password_keeps_existing(self, client):
+        """The keep-if-blank secret pattern must cover the new field: a
+        settings save with a blank password preserves the stored one."""
+        from django.contrib.auth import get_user_model
+
+        from core.services.config import get_config
+        m = self._manager("keep")
+        u = get_user_model().objects.create_user(
+            username=m.email, email=m.email, password="testpw",
+        )
+        client.force_login(u)
+        base = {"display_name": "Todd", "timezone": ""}
+        r1 = client.post("/settings/", {
+            **base, "inbox_imap_user": "capture@gmail.com",
+            "inbox_imap_password": "first-secret",
+        })
+        assert r1.status_code == 302
+        assert get_config("inbox_imap_password", m.id) == "first-secret"
+        r2 = client.post("/settings/", {
+            **base, "inbox_imap_user": "capture@gmail.com",
+            "inbox_imap_password": "",
+        })
+        assert r2.status_code == 302
+        assert get_config("inbox_imap_password", m.id) == "first-secret", \
+            "blank submission must keep the existing password"
