@@ -10,7 +10,7 @@
   </header>
 
   {# ---- Daily wisdom ---- #}
-  <div class="bg-indigo-50 border border-indigo-200 rounded-lg px-5 py-4 mb-8">
+  <div class="bg-indigo-50 border border-indigo-200 rounded-md px-5 py-4 mb-8">
     <div class="text-xs text-indigo-500 uppercase tracking-wider mb-1">Today's wisdom (#{{ daily.number }})</div>
     <p class="text-sm text-indigo-900">{{ daily.text }}</p>
     <p class="text-xs text-indigo-600 mt-1">— {{ daily.section }}</p>
@@ -36,9 +36,9 @@
   {% endif %}
 
   {% if results %}
-  <div class="space-y-2">
+  <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
     {% for w in results %}
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-3">
+    <div class="px-3 py-2.5 hover:bg-slate-50">
       <div class="flex items-start justify-between gap-2">
         <p class="text-sm text-slate-800">{{ w.text }}</p>
         <span class="text-xs text-slate-400 shrink-0">#{{ w.number }}</span>
@@ -48,16 +48,16 @@
     {% endfor %}
   </div>
   {% elif query %}
-  <p class="text-sm text-slate-400 py-4">No results for "{{ query }}".</p>
+  <p class="text-sm text-slate-500 py-4">No results for "{{ query }}".</p>
   {% endif %}
 
   {# ---- Section index (when not searching) ---- #}
   {% if not query and not section_filter and sections %}
   <h2 class="text-lg font-semibold mb-3">Browse by book</h2>
-  <div class="space-y-1">
+  <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
     {% for sec, count in sections.items %}
     <a href="?section={{ sec|urlencode }}"
-       class="block bg-white rounded-lg shadow-sm border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50">
+       class="block px-3 py-2.5 text-sm hover:bg-slate-50">
       {{ sec }} <span class="text-xs text-slate-400 ml-1">({{ count }})</span>
     </a>
     {% endfor %}

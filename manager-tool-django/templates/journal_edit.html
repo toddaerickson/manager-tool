@@ -9,46 +9,46 @@
     <p class="text-sm text-slate-500 mt-1">{{ entry.entry_date }} — {{ entry.entry_type }}</p>
   </header>
 
-  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
+  <div class="bg-white border border-slate-200 rounded-md px-6 py-6">
     <form method="post" class="space-y-3">
       {% csrf_token %}
 
-      <div class="grid grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
-          <label class="block text-sm font-medium text-slate-700">Date *</label>
+          <label for="{{ form.entry_date.id_for_label }}" class="block text-sm font-medium text-slate-700">Date *</label>
           {{ form.entry_date }}
           {% if form.entry_date.errors %}<p class="text-xs text-red-600 mt-1">{{ form.entry_date.errors.0 }}</p>{% endif %}
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-700">Type</label>
+          <label for="{{ form.entry_type.id_for_label }}" class="block text-sm font-medium text-slate-700">Type</label>
           {{ form.entry_type }}
         </div>
       </div>
 
       <div>
-        <label class="block text-sm font-medium text-slate-700">What's on your mind?</label>
+        <label for="{{ form.content.id_for_label }}" class="block text-sm font-medium text-slate-700">What's on your mind?</label>
         {{ form.content }}
         {% if form.content.errors %}<p class="text-xs text-red-600 mt-1">{{ form.content.errors.0 }}</p>{% endif %}
       </div>
 
-      <div class="grid grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
-          <label class="block text-sm font-medium text-slate-700">Mood</label>
+          <label for="{{ form.mood.id_for_label }}" class="block text-sm font-medium text-slate-700">Mood</label>
           {{ form.mood }}
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-700">Energy</label>
+          <label for="{{ form.energy.id_for_label }}" class="block text-sm font-medium text-slate-700">Energy</label>
           {{ form.energy }}
         </div>
       </div>
 
       <div>
-        <label class="block text-sm font-medium text-slate-700">Private notes</label>
+        <label for="{{ form.private_notes.id_for_label }}" class="block text-sm font-medium text-slate-700">Private notes</label>
         {{ form.private_notes }}
       </div>
 
       <div>
-        <label class="block text-sm font-medium text-slate-700">Tags</label>
+        <label for="{{ form.tags.id_for_label }}" class="block text-sm font-medium text-slate-700">Tags</label>
         {{ form.tags }}
       </div>
 

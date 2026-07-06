@@ -8,8 +8,8 @@
     <h1 class="text-2xl font-semibold">Settings</h1>
   </header>
 
-  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6 mb-6">
-    <h2 class="text-sm font-semibold text-slate-700 mb-3">Account</h2>
+  <div class="bg-white border border-slate-200 rounded-md px-6 py-6 mb-6">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Account</h2>
     <dl class="text-sm space-y-2">
       <div class="flex justify-between">
         <dt class="text-slate-500">Email</dt>
@@ -34,25 +34,25 @@
     {% csrf_token %}
 
     {# Profile #}
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
-      <h2 class="text-sm font-semibold text-slate-700 mb-3">Profile</h2>
+    <div class="bg-white border border-slate-200 rounded-md px-6 py-6">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Profile</h2>
       <div class="space-y-3">
         <div>
-          <label class="block text-sm font-medium text-slate-700">Display name</label>
+          <label for="{{ form.display_name.id_for_label }}" class="block text-sm font-medium text-slate-700">Display name</label>
           {{ form.display_name }}
           {% if form.display_name.errors %}<p class="text-xs text-red-600 mt-1">{{ form.display_name.errors.0 }}</p>{% endif %}
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-700">Timezone</label>
+          <label for="{{ form.timezone.id_for_label }}" class="block text-sm font-medium text-slate-700">Timezone</label>
           {{ form.timezone }}
         </div>
       </div>
     </div>
 
     {# AI Coaching #}
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
-      <div class="flex items-center justify-between mb-3">
-        <h2 class="text-sm font-semibold text-slate-700">AI Coaching</h2>
+    <div class="bg-white border border-slate-200 rounded-md px-6 py-6">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500">AI Coaching</h2>
         {% if has_anthropic_key %}
           <span class="text-xs px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">Key configured</span>
         {% else %}
@@ -65,45 +65,45 @@
         platform's <code class="text-xs bg-slate-100 px-1 rounded">ANTHROPIC_API_KEY</code> env var.
       </p>
       <div>
-        <label class="block text-sm font-medium text-slate-700">Anthropic API Key</label>
+        <label for="{{ config_form.anthropic_api_key.id_for_label }}" class="block text-sm font-medium text-slate-700">Anthropic API Key</label>
         {{ config_form.anthropic_api_key }}
         {% if config_form.anthropic_api_key.errors %}<p class="text-xs text-red-600 mt-1">{{ config_form.anthropic_api_key.errors.0 }}</p>{% endif %}
       </div>
     </div>
 
     {# SMTP / Email #}
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
-      <h2 class="text-sm font-semibold text-slate-700 mb-1">Email &amp; SMTP</h2>
+    <div class="bg-white border border-slate-200 rounded-md px-6 py-6">
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Email &amp; SMTP</h2>
       <p class="text-xs text-slate-500 mb-3">
         Needed for calendar invites and the weekly digest. For Gmail, generate an
         <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" class="text-indigo-600 hover:underline">App Password</a>
         and use it below. SMTP password is stored encrypted.
       </p>
-      <div class="grid grid-cols-2 gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
-          <label class="block text-sm font-medium text-slate-700">Your name (From:)</label>
+          <label for="{{ config_form.manager_name.id_for_label }}" class="block text-sm font-medium text-slate-700">Your name (From:)</label>
           {{ config_form.manager_name }}
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-700">Email address</label>
+          <label for="{{ config_form.manager_email.id_for_label }}" class="block text-sm font-medium text-slate-700">Email address</label>
           {{ config_form.manager_email }}
           {% if config_form.manager_email.errors %}<p class="text-xs text-red-600 mt-1">{{ config_form.manager_email.errors.0 }}</p>{% endif %}
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-700">SMTP server</label>
+          <label for="{{ config_form.smtp_server.id_for_label }}" class="block text-sm font-medium text-slate-700">SMTP server</label>
           {{ config_form.smtp_server }}
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-700">SMTP port</label>
+          <label for="{{ config_form.smtp_port.id_for_label }}" class="block text-sm font-medium text-slate-700">SMTP port</label>
           {{ config_form.smtp_port }}
           {% if config_form.smtp_port.errors %}<p class="text-xs text-red-600 mt-1">{{ config_form.smtp_port.errors.0 }}</p>{% endif %}
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-700">SMTP username</label>
+          <label for="{{ config_form.smtp_user.id_for_label }}" class="block text-sm font-medium text-slate-700">SMTP username</label>
           {{ config_form.smtp_user }}
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-700">
+          <label for="{{ config_form.smtp_password.id_for_label }}" class="block text-sm font-medium text-slate-700">
             SMTP password
             {% if has_smtp_password %}
               <span class="text-xs text-emerald-700 ml-1">(set)</span>
@@ -122,8 +122,8 @@
   </form>
 
   {# Weekly digest test send #}
-  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6 my-6">
-    <h2 class="text-sm font-semibold text-slate-700 mb-1">Weekly digest</h2>
+  <div class="bg-white border border-slate-200 rounded-md px-6 py-6 my-6">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Weekly digest</h2>
     <p class="text-xs text-slate-500 mb-3">
       Sends a summary of upcoming events, overdue actions, and your journal streak
       to your configured email — useful for verifying SMTP. The Monday cron runs
@@ -139,8 +139,8 @@
   </div>
 
   {# Current configuration readout #}
-  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
-    <h2 class="text-sm font-semibold text-slate-700 mb-3">Current configuration</h2>
+  <div class="bg-white border border-slate-200 rounded-md px-6 py-6">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Current configuration</h2>
     {% if current_config %}
       <dl class="text-sm space-y-1 font-mono">
         {% for key, value in current_config.items %}

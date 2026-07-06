@@ -1,19 +1,19 @@
-<div class="text-sm font-medium text-slate-700 mb-3">Action items</div>
+<div class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Action items</div>
 
 {% if action_items %}
 <ul class="space-y-2 mb-4">
   {% for a in action_items %}
   <li class="flex items-center justify-between text-sm">
     <span class="text-slate-700">{{ a.description }}</span>
-    <span class="text-xs text-slate-400 ml-2 shrink-0">
+    <span class="text-xs text-slate-500 ml-2 shrink-0">
       {% if a.due_date %}due {{ a.due_date }}{% endif %}
-      <span class="px-1.5 py-0.5 rounded {% if a.status == 'completed' %}bg-green-100 text-green-700{% else %}bg-slate-100 text-slate-600{% endif %}">{{ a.status }}</span>
+      <span class="text-xs px-1.5 py-0.5 rounded {% if a.status == 'completed' %}bg-emerald-100 text-emerald-700{% else %}bg-slate-100 text-slate-600{% endif %}">{{ a.status }}</span>
     </span>
   </li>
   {% endfor %}
 </ul>
 {% else %}
-<p class="text-sm text-slate-400 mb-4">No action items yet.</p>
+<p class="text-sm text-slate-500 mb-4">No action items yet.</p>
 {% endif %}
 
 <form hx-post="{% url 'meetings-add-action' session.id %}"

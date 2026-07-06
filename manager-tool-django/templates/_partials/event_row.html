@@ -6,7 +6,7 @@ once Outlook owns "when" (D2 contract). Title is a link to the event
 detail page (the canonical URL the user pastes into Outlook invites).
 {% endcomment %}
 <div id="event-row-{{ ev.id }}"
-     class="grid grid-cols-12 gap-3 px-4 py-3 items-start">
+     class="grid grid-cols-12 gap-3 px-3 py-2.5 items-start hover:bg-slate-50">
   {# Left: start time + duration #}
   <div class="col-span-2 sm:col-span-2 text-sm text-slate-700">
     <div class="font-medium tabular-nums">{{ ev.scheduled_time }}</div>
@@ -48,7 +48,7 @@ detail page (the canonical URL the user pastes into Outlook invites).
             hx-swap="outerHTML"
             hx-confirm="Permanently delete {{ ev.title }}?"
             hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-            class="text-xs text-slate-400 hover:text-red-600 underline mt-1">
+            class="text-xs text-slate-500 hover:text-red-600 underline mt-1">
       Delete
     </button>
   </div>

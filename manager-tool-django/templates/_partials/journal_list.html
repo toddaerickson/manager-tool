@@ -1,8 +1,8 @@
 {% if entries %}
-<h2 class="text-lg font-semibold mb-3">Recent entries</h2>
-<div class="space-y-3">
+<h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Recent entries</h2>
+<div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
   {% for e in entries %}
-  <div id="journal-row-{{ e.id }}" class="bg-white rounded-lg shadow-sm border border-slate-200 px-5 py-4">
+  <div id="journal-row-{{ e.id }}" class="px-3 py-2.5 hover:bg-slate-50">
     <div class="flex items-center justify-between mb-1">
       <div class="text-sm font-medium text-slate-800">
         {{ e.entry_date }}
@@ -34,7 +34,5 @@
   {% endfor %}
 </div>
 {% else %}
-<div class="text-center text-slate-500 py-8 bg-white rounded-lg shadow-sm border border-slate-200">
-  No journal entries yet. Write your first one above.
-</div>
+<p class="text-sm text-slate-500">No journal entries yet. Write your first one above.</p>
 {% endif %}
