@@ -12,7 +12,7 @@
   <div class="flex items-center gap-3 mb-6">
     <label class="text-sm text-slate-600">Filter by member:</label>
     <select onchange="window.location='?member='+this.value"
-            class="text-sm border border-slate-300 rounded px-2 py-1">
+            class="text-base sm:text-sm border border-slate-300 rounded px-2 py-1">
       <option value="">All members</option>
       {% for m in members %}
         <option value="{{ m.id }}" {% if selected_member == m.id|stringformat:"d" %}selected{% endif %}>{{ m.name }}</option>

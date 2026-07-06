@@ -19,7 +19,7 @@ from .models import (
 
 _INPUT_CLS = (
     "mt-1 block w-full border border-slate-300 rounded "
-    "px-2 py-1.5 text-sm"
+    "px-2 py-1.5 text-base sm:text-sm"
 )
 
 

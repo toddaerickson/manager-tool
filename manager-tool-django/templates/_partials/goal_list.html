@@ -1,5 +1,5 @@
 {% if goals %}
-<div class="bg-white border border-slate-200 rounded-md overflow-hidden">
+<div class="bg-white border border-slate-200 rounded-md overflow-x-auto">
 <table class="min-w-full">
   <thead class="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-200">
     <tr>
@@ -28,14 +28,14 @@
       </td>
       <td class="px-3 py-1.5 text-right">
         <div class="flex items-center justify-end gap-1">
-          <a href="{% url 'goals-edit' g.id %}" class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Edit</a>
+          <a href="{% url 'goals-edit' g.id %}" class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Edit</a>
           <button type="button"
                   hx-delete="{% url 'goals-delete' g.id %}"
                   hx-target="#goal-row-{{ g.id }}"
                   hx-swap="outerHTML"
                   hx-confirm="Delete this goal? Cannot be undone."
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                  class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">
+                  class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">
             Delete
           </button>
         </div>

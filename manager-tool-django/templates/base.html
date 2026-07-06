@@ -53,7 +53,7 @@
       <form action="{% url 'search' %}" method="get" class="px-2 pt-3">
         <input type="search" name="q" placeholder="Search everything…"
                aria-label="Search everything"
-               class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent-500">
+               class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 min-h-11 sm:min-h-0 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent-500">
       </form>
 
       {% comment %} Quick capture (roadmap PR 4) — jot from any page into
@@ -66,11 +66,11 @@
             class="px-2 pt-3">
         <input type="text" name="body" placeholder="Jot something…"
                aria-label="Quick capture to inbox"
-               class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent-500">
+               class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1.5 min-h-11 sm:min-h-0 text-base sm:text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-accent-500">
         <div id="quick-add-toast"></div>
       </form>
 
-      <nav class="flex-1 px-2 py-4 space-y-6 text-sm">
+      <nav class="flex-1 overflow-y-auto px-2 py-4 space-y-6 text-sm">
         {% comment %}
         Sidebar IA mirrors CLAUDE.md. Only Dashboard is implemented in
         Phase 4; others are visible placeholders for Phase 5 builds.

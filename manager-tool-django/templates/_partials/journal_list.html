@@ -16,7 +16,7 @@
           <span title="Energy {{ e.energy }}">{% for k,v in energy_emoji.items %}{% if k == e.energy %}{{ v }}{% endif %}{% endfor %} {{ e.energy }}/5</span>
         {% endif %}
         <a href="{% url 'journal-edit' e.id %}"
-           class="inline-flex items-center min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Edit</a>
+           class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Edit</a>
       </div>
     </div>
     {% if e.content %}
