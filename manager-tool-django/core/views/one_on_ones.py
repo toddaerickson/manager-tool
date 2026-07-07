@@ -248,16 +248,10 @@ def one_on_ones_autosave(request, session_id: int):
             changed = True
 
     if "actual_duration_minutes" in request.POST:
-        raw = request.POST["actual_duration_minutes"].strip()
-        if raw == "":
-            new_duration = None  # cleared = not recorded
-        else:
-            try:
-                # Clamp to a sane day-bounded range; garbage keeps the
-                # stored value rather than silently nulling it.
-                new_duration = min(max(int(raw), 0), 1440)
-            except ValueError:
-                new_duration = session.actual_duration_minutes
+        new_duration = OneOnOneSession.normalize_duration(
+            request.POST["actual_duration_minutes"],
+            session.actual_duration_minutes,
+        )
         if new_duration != session.actual_duration_minutes:
             session.actual_duration_minutes = new_duration
             changed = True

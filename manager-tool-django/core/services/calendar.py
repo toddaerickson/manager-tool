@@ -84,9 +84,10 @@ EVENT_TYPE_LABELS = {
     "other": "Meeting",
 }
 
-# App recurrence rule -> RFC 5545 FREQ clause (roadmap PR 10). COUNT
-# comes from RECURRENCE_COUNTS at call time — single source of truth
-# with the materializer; never hardcode counts here.
+# App recurrence rule -> RFC 5545 FREQ clause (roadmap PR 10). Keys
+# must stay in lockstep with core.services.events.RECURRENCE_COUNTS —
+# CI-guarded by test_rrule_freq_keys_track_recurrence_counts, so a new
+# rule added to the materializer can't silently lose its RRULE mapping.
 _RRULE_FREQ = {
     "weekly": "FREQ=WEEKLY",
     "monthly": "FREQ=MONTHLY",
@@ -94,20 +95,25 @@ _RRULE_FREQ = {
 }
 
 
-def rrule_for_rule(rule):
-    """RFC 5545 RRULE value for an app recurrence rule, or None when the
-    rule is unknown (callers fall back to a single-occurrence invite).
+def rrule_for_rule(rule, count):
+    """RFC 5545 RRULE value for an app recurrence rule, or None when
+    the rule is unknown OR the series has fewer than 2 occurrences —
+    both degrade to a single-occurrence invite.
+
+    `count` is the ACTUAL series size (parent + materialized children
+    in the DB), not RECURRENCE_COUNTS: an until_date-capped series must
+    not over-invite dates that were never materialized, and an orphaned
+    child (parent deleted via SET_NULL, recurrence_rule still set) has
+    no children so it degrades to a single invite by construction
+    (review findings). The Event rows stay the source of truth.
 
     Documented caveat: RFC 5545 FREQ=MONTHLY on day 29-31 SKIPS months
     without that day, while the app's materializer clamps to month-end
-    (add_months_anchored). The app's Event rows stay the source of
-    truth; the invite is a convenience mirror."""
-    from core.services.events import RECURRENCE_COUNTS
-
+    (add_months_anchored)."""
     freq = _RRULE_FREQ.get(rule)
-    if freq is None:
+    if freq is None or count < 2:
         return None
-    return f"{freq};COUNT={RECURRENCE_COUNTS[rule]}"
+    return f"{freq};COUNT={int(count)}"
 
 
 def generate_ics(event, organizer_name=None, organizer_email=None,

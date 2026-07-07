@@ -166,7 +166,7 @@ The smoke tests seed a second manager via app helpers (NOT raw SQL — round-3 r
 Sidebar nav is dispatched via a string→callable dict at `web_app.py:2005`. Renames change the *label* on the button, not the page key — that keeps cached `nav_page` values resolving across deploys. `tests/test_dispatch.py` parses the file via AST and asserts every value resolves to a defined function.
 
 ## Known limitations
-- Recurring-series invites: the series PARENT sends one `RRULE:FREQ=…;COUNT=…` invite (counts from `RECURRENCE_COUNTS`); children/one-offs send single `VEVENT`s. Caveat: RFC 5545 monthly on day 29–31 SKIPS short months while the app's materializer clamps to month-end — the app's Event rows stay the source of truth.
+- Recurring-series invites: the series PARENT sends one `RRULE:FREQ=…;COUNT=…` invite (COUNT = actual series size in the DB — parent + children — so until-capped series and orphaned children degrade correctly); children/one-offs send single `VEVENT`s, and a parent invite stamps `calendar_invite_sent` on its children. Caveat: RFC 5545 monthly on day 29–31 SKIPS short months while the app's materializer clamps to month-end — the app's Event rows stay the source of truth.
 - `prefill_series_id` flow (clicking the expiry warning to extend a series) populates from session_state and is lost on browser refresh — same limitation as the rest of the app's session-state-driven nav.
 - Streamlit version is unpinned upper (`streamlit>=1.38.0`); deliberately no bespoke CSS pinned to internal class names.
 

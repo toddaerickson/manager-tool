@@ -287,6 +287,28 @@ class OneOnOneSession(models.Model):
             ),
         ]
 
+    DURATION_MAX_MINUTES = 1440
+
+    @staticmethod
+    def normalize_duration(raw: str | None, current: int | None) -> int | None:
+        """Normalize an actual-duration input (roadmap PR 10, sibling of
+        normalize_tags so every write path shares one rule set):
+        '' clears (None); a numeric string — decimals included, since
+        <input type=number> submits '45.5' — clamps into 0..1440;
+        anything unparseable keeps `current`, so garbage can never
+        silently null a recorded value."""
+        s = (raw or "").strip()
+        if s == "":
+            return None
+        try:
+            # float() first: accepts '45.5'; int(float('nan')) raises
+            # ValueError and int(float('1e999')) raises OverflowError —
+            # both fall through to keeping the stored value.
+            return min(max(int(float(s)), 0),
+                       OneOnOneSession.DURATION_MAX_MINUTES)
+        except (ValueError, OverflowError):
+            return current
+
     @staticmethod
     def normalize_tags(raw: str | None) -> str:
         """Normalize a raw tags input into the canonical CSV storage form.

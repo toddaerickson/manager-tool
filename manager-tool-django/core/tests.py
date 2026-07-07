@@ -7565,23 +7565,45 @@ class TestRruleInvites:
         defaults.update(kw)
         return Event.objects.create(**defaults)
 
+    def _series(self, m, tm, rule="weekly", **kw):
+        from datetime import date as _date
+
+        from core.services.events import create_recurring_events
+        return create_recurring_events(
+            manager_id=m.id, title="1:1", event_type="one_on_one",
+            start_date=_date(2026, 7, 6), scheduled_time="10:00",
+            rule=rule, team_member=tm, **kw,
+        )
+
     # ---- rrule_for_rule unit tests ----
 
-    def test_rrule_strings_track_recurrence_counts(self):
+    def test_rrule_strings_use_actual_count(self):
         from core.services.calendar import rrule_for_rule
-        from core.services.events import RECURRENCE_COUNTS
-        assert rrule_for_rule("weekly") == \
-            f"FREQ=WEEKLY;COUNT={RECURRENCE_COUNTS['weekly']}"
-        assert rrule_for_rule("monthly") == \
-            f"FREQ=MONTHLY;COUNT={RECURRENCE_COUNTS['monthly']}"
-        assert rrule_for_rule("quarterly") == \
-            f"FREQ=MONTHLY;INTERVAL=3;COUNT={RECURRENCE_COUNTS['quarterly']}"
+        assert rrule_for_rule("weekly", 12) == "FREQ=WEEKLY;COUNT=12"
+        assert rrule_for_rule("monthly", 12) == "FREQ=MONTHLY;COUNT=12"
+        assert rrule_for_rule("quarterly", 8) == \
+            "FREQ=MONTHLY;INTERVAL=3;COUNT=8"
+        # COUNT mirrors the actual series size, not the rule's max —
+        # an until_date-capped series must not over-invite.
+        assert rrule_for_rule("weekly", 3) == "FREQ=WEEKLY;COUNT=3"
 
-    def test_rrule_unknown_rule_is_none(self):
+    def test_rrule_unknown_rule_or_singleton_is_none(self):
         from core.services.calendar import rrule_for_rule
-        assert rrule_for_rule("daily") is None
-        assert rrule_for_rule("") is None
-        assert rrule_for_rule(None) is None
+        assert rrule_for_rule("daily", 12) is None
+        assert rrule_for_rule("", 12) is None
+        assert rrule_for_rule(None, 12) is None
+        # A one-row "series" (orphaned child, or until-capped to the
+        # start date) degrades to a single-occurrence invite.
+        assert rrule_for_rule("weekly", 1) is None
+        assert rrule_for_rule("weekly", 0) is None
+
+    def test_rrule_freq_keys_track_recurrence_counts(self):
+        """Drift guard (review finding): a rule added to the
+        materializer without an RRULE mapping — or vice versa — must
+        fail CI, not silently downgrade series invites."""
+        from core.services.calendar import _RRULE_FREQ
+        from core.services.events import RECURRENCE_COUNTS
+        assert set(_RRULE_FREQ) == set(RECURRENCE_COUNTS)
 
     # ---- generate_ics ----
 
@@ -7610,12 +7632,72 @@ class TestRruleInvites:
     def test_series_parent_sends_rrule_invite(self, client):
         from unittest.mock import patch
         m, tm = self._login(client, "parent")
-        parent = self._event(m, tm, recurrence_rule="weekly")
+        parent = self._series(m, tm)  # weekly → 1 parent + 11 children
         with patch("core.services.calendar.send_calendar_invite",
                    return_value=(True, "sent")) as mock_send:
             client.post(f"/events/{parent.id}/invite/")
         assert mock_send.call_count == 1
         assert mock_send.call_args.kwargs["rrule"] == "FREQ=WEEKLY;COUNT=12"
+
+    def test_until_capped_series_counts_actual_rows(self, client):
+        """Review finding: COUNT must mirror the materialized rows —
+        a series capped by until_date must not over-invite."""
+        from datetime import date as _date
+        from unittest.mock import patch
+        m, tm = self._login(client, "capped")
+        parent = self._series(m, tm, until_date=_date(2026, 7, 20))
+        assert Event.objects.for_manager(m.id).filter(
+            parent_event=parent).count() == 2  # 7/13 + 7/20
+        with patch("core.services.calendar.send_calendar_invite",
+                   return_value=(True, "sent")) as mock_send:
+            client.post(f"/events/{parent.id}/invite/")
+        assert mock_send.call_args.kwargs["rrule"] == "FREQ=WEEKLY;COUNT=3"
+
+    def test_orphaned_child_degrades_to_single_invite(self, client):
+        """Review finding: deleting a parent SET_NULLs the children but
+        leaves recurrence_rule — an orphaned child must NOT be treated
+        as a series parent and re-invite the whole series."""
+        from unittest.mock import patch
+        m, tm = self._login(client, "orphan")
+        parent = self._series(m, tm)
+        child = Event.objects.for_manager(m.id).filter(
+            parent_event=parent).order_by("scheduled_date").first()
+        Event.objects.for_manager(m.id).filter(pk=parent.id).delete()
+        child.refresh_from_db()
+        assert child.parent_event_id is None, "SET_NULL premise"
+        assert child.recurrence_rule == "weekly", "rule survives delete"
+        with patch("core.services.calendar.send_calendar_invite",
+                   return_value=(True, "sent")) as mock_send:
+            client.post(f"/events/{child.id}/invite/")
+        assert mock_send.call_args.kwargs["rrule"] is None, \
+            "orphaned child must send a single-occurrence invite"
+
+    def test_parent_invite_stamps_children_sent(self, client):
+        """Review finding: the parent's RRULE invite covers every child
+        date — children must show the sent state so their pages don't
+        offer a double-booking invite button."""
+        from unittest.mock import patch
+        m, tm = self._login(client, "stamp")
+        parent = self._series(m, tm)
+        with patch("core.services.calendar.send_calendar_invite",
+                   return_value=(True, "sent")):
+            client.post(f"/events/{parent.id}/invite/")
+        kids = Event.objects.for_manager(m.id).filter(parent_event=parent)
+        assert kids.count() == 11
+        assert not kids.exclude(calendar_invite_sent=1).exists(), \
+            "every child must be stamped calendar_invite_sent"
+
+    def test_failed_parent_invite_stamps_nothing(self, client):
+        from unittest.mock import patch
+        m, tm = self._login(client, "failstamp")
+        parent = self._series(m, tm)
+        with patch("core.services.calendar.send_calendar_invite",
+                   return_value=(False, "SMTP not configured")):
+            client.post(f"/events/{parent.id}/invite/")
+        parent.refresh_from_db()
+        assert parent.calendar_invite_sent in (0, None)
+        assert not Event.objects.for_manager(m.id).filter(
+            parent_event=parent, calendar_invite_sent=1).exists()
 
     def test_child_event_sends_single_invite(self, client):
         from unittest.mock import patch
@@ -7643,12 +7725,23 @@ class TestRruleInvites:
     def test_quarterly_parent_maps_to_monthly_interval_3(self, client):
         from unittest.mock import patch
         m, tm = self._login(client, "quarterly")
-        parent = self._event(m, tm, recurrence_rule="quarterly")
+        parent = self._series(m, tm, rule="quarterly")  # 8 dates
         with patch("core.services.calendar.send_calendar_invite",
                    return_value=(True, "sent")) as mock_send:
             client.post(f"/events/{parent.id}/invite/")
         assert mock_send.call_args.kwargs["rrule"] == \
             "FREQ=MONTHLY;INTERVAL=3;COUNT=8"
+
+    def test_childless_flagged_event_sends_single_invite(self, client):
+        """An event with recurrence_rule but no materialized children
+        (never a real series, or data drift) must not claim COUNT=12."""
+        from unittest.mock import patch
+        m, tm = self._login(client, "bare")
+        ev = self._event(m, tm, recurrence_rule="weekly")
+        with patch("core.services.calendar.send_calendar_invite",
+                   return_value=(True, "sent")) as mock_send:
+            client.post(f"/events/{ev.id}/invite/")
+        assert mock_send.call_args.kwargs["rrule"] is None
 
 
 @pytest.mark.django_db
@@ -7715,6 +7808,29 @@ class TestActualDuration:
         self._autosave(client, s, "-5")
         s.refresh_from_db()
         assert s.actual_duration_minutes == 0
+
+    def test_autosave_accepts_decimal_input(self, client):
+        """Review finding: <input type=number> submits '45.5' (typed or
+        pasted); it must round down, not be discarded as garbage."""
+        _m, _tm, s = self._setup(client, "decimal")
+        self._autosave(client, s, "45.5")
+        s.refresh_from_db()
+        assert s.actual_duration_minutes == 45
+
+    def test_normalize_duration_edge_cases(self):
+        """Model-level normalizer (review finding: one rule set for
+        every write path, sibling of normalize_tags)."""
+        nd = OneOnOneSession.normalize_duration
+        assert nd("", 30) is None
+        assert nd("  ", 30) is None
+        assert nd(None, 30) is None
+        assert nd("25", 30) == 25
+        assert nd("45.5", 30) == 45
+        assert nd("nan", 30) == 30
+        assert nd("inf", 30) == 30
+        assert nd("1e999", 30) == 30
+        assert nd("junk", 30) == 30
+        assert nd("junk", None) is None
 
     def test_autosave_without_field_leaves_duration_alone(self, client):
         """Requests that don't carry the field (older cached pages mid-

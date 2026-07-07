@@ -37,7 +37,11 @@
 
     {# ── Main column: 10/10/10 recorder ── #}
     <div class="lg:col-span-2 space-y-4">
-      <div class="bg-white border border-slate-200 rounded-md p-6 space-y-5">
+      {% comment %}id is the autosave contract: every hx-include points
+      at this container, so a new autosaved field only needs to live
+      inside it — no per-input selector lists to keep in sync (review
+      finding: the old 5x copy-pasted lists).{% endcomment %}
+      <div id="meeting-autosave-fields" class="bg-white border border-slate-200 rounded-md p-6 space-y-5">
 
         {# Tags + actual duration — autosaved on blur. Tags normalized server-side (lowercase, trim, dedupe). #}
         <div class="flex flex-col sm:flex-row gap-3">
@@ -50,7 +54,7 @@
                    hx-trigger="blur changed, keyup[key=='Enter'] changed"
                    hx-target="#save-indicator"
                    hx-swap="innerHTML"
-                   hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event'],[name='actual_duration_minutes']"
+                   hx-include="#meeting-autosave-fields"
                    hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                    class="block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
                    placeholder="Add comma-separated tags…">
@@ -65,7 +69,7 @@
                    hx-trigger="blur changed, keyup[key=='Enter'] changed"
                    hx-target="#save-indicator"
                    hx-swap="innerHTML"
-                   hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event'],[name='actual_duration_minutes']"
+                   hx-include="#meeting-autosave-fields"
                    hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                    class="block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm tabular-nums"
                    placeholder="30">
@@ -81,7 +85,7 @@
                     hx-trigger="keyup changed delay:2s"
                     hx-target="#save-indicator"
                     hx-swap="innerHTML"
-                    hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event'],[name='actual_duration_minutes']"
+                    hx-include="#meeting-autosave-fields"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                     rows="6"
                     class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
@@ -126,7 +130,7 @@
                     hx-trigger="keyup changed delay:2s"
                     hx-target="#save-indicator"
                     hx-swap="innerHTML"
-                    hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event'],[name='actual_duration_minutes']"
+                    hx-include="#meeting-autosave-fields"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                     rows="6"
                     class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
@@ -147,7 +151,7 @@
                     hx-trigger="keyup changed delay:2s"
                     hx-target="#save-indicator"
                     hx-swap="innerHTML"
-                    hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event'],[name='actual_duration_minutes']"
+                    hx-include="#meeting-autosave-fields"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                     rows="6"
                     class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
