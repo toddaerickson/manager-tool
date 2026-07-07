@@ -23,7 +23,33 @@
   <details class="mb-6 bg-white border border-slate-200 rounded-md" {% if not feedback_list %}open{% endif %}>
     <summary class="px-3 py-2 cursor-pointer select-none font-medium">Record feedback</summary>
     <div class="px-3 pb-3">
-      {% include "_partials/feedback_form.html" %}
+      {% comment %}AI assist (roadmap PR 9): rough notes -> drafted S/B/I
+      initials. The textarea lives OUTSIDE the record form so "Record
+      feedback" never posts it; the draft swaps only the form below, so
+      notes persist.{% endcomment %}
+      <div class="mb-3 pb-3 border-b border-slate-200">
+        <label for="sbi-notes" class="block text-sm font-medium text-slate-700">Rough notes — let AI draft the S/B/I</label>
+        <textarea id="sbi-notes" name="notes" rows="2"
+                  placeholder="Jot what happened in your own words&hellip;"
+                  class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"></textarea>
+        <div class="mt-2 flex items-center justify-end gap-2">
+          <span id="sbi-indicator" class="htmx-indicator text-xs text-slate-500 italic">Drafting&hellip;</span>
+          <button type="button"
+                  hx-post="{% url 'feedback-draft-sbi' %}"
+                  hx-include="#sbi-notes, #feedback-form-wrap select"
+                  hx-target="#feedback-form-wrap"
+                  hx-swap="innerHTML"
+                  hx-indicator="#sbi-indicator"
+                  hx-disabled-elt="this"
+                  hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                  class="inline-flex items-center min-h-11 sm:min-h-8 px-2.5 rounded text-xs font-medium text-accent-700 border border-accent-200 bg-white hover:bg-accent-50">
+            Draft S/B/I
+          </button>
+        </div>
+      </div>
+      <div id="feedback-form-wrap">
+        {% include "_partials/feedback_form.html" %}
+      </div>
     </div>
   </details>
 

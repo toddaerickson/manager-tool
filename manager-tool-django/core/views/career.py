@@ -79,6 +79,8 @@ def career_dev(request):
     for p in plans:
         p.milestones_list = milestones_by_plan.get(p.id, [])
 
+    from core.forms import _current_quarter
+
     return render(request, "career_dev.html", {
         "skills": skills,
         "plans": plans,
@@ -88,6 +90,7 @@ def career_dev(request):
         "skill_form": SkillForm(manager_id=mid),
         "plan_form": DevelopmentPlanForm(manager_id=mid),
         "convo_form": CareerConversationForm(manager_id=mid),
+        "current_quarter": _current_quarter(),
     })
 
 
@@ -206,6 +209,51 @@ def milestones_complete(request, milestone_id: int):
     if updated == 0:
         return HttpResponse(status=404)
     return _career_dev_partial(request, manager)
+
+
+@login_required
+@require_http_methods(["POST"])
+def career_quarterly_review(request):
+    """HTMX: draft a quarterly review for one direct (roadmap PR 9).
+    Synchronous by design — this PR is schema-free, so there is no
+    column to park a background result in (the prep-brief poll pattern
+    needed prep_brief_requested_at). Generation NEVER writes to the DB;
+    saving is the explicit convos_add form in the result partial."""
+    from datetime import date as _date
+
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    mid = manager.id
+
+    from coaching.services import generate_quarterly_review, quarter_bounds
+
+    quarter = request.POST.get("quarter", "").strip()
+    member_raw = request.POST.get("team_member", "").strip()
+
+    def _error(msg, status=422):
+        return render(request, "_partials/quarterly_review.html", {
+            "review_error": msg,
+        }, status=status)
+
+    if not member_raw.isdigit():
+        return _error("Pick a team member first.")
+    if not quarter or quarter_bounds(quarter) is None:
+        return _error('Quarter must look like "Q3 2026".')
+
+    review = generate_quarterly_review(int(member_raw), mid, quarter)
+    if review is None:
+        return HttpResponse(status=404)
+
+    member = get_object_or_404(
+        TeamMember.objects.active_for_manager(mid), pk=int(member_raw),
+    )
+    return render(request, "_partials/quarterly_review.html", {
+        "review": review,
+        "member": member,
+        "quarter": quarter,
+        "today_iso": _date.today().isoformat(),
+    })
 
 
 @login_required

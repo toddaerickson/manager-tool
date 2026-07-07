@@ -20,6 +20,44 @@
     </select>
   </div>
 
+  {% comment %}Quarterly review draft (roadmap PR 9). Sits OUTSIDE
+  #career-dev-content so the save-as-conversation swap (which replaces
+  that div) leaves the generated draft on screen.{% endcomment %}
+  <section class="mb-8">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Quarterly Review Draft</h2>
+    <div class="bg-white border border-slate-200 rounded-md px-3 py-2">
+      <form hx-post="{% url 'career-quarterly-review' %}"
+            hx-target="#quarterly-review-result"
+            hx-swap="innerHTML"
+            hx-indicator="#qr-indicator"
+            hx-disabled-elt="find button[type='submit']"
+            class="flex flex-wrap items-end gap-2">
+        {% csrf_token %}
+        <div class="flex-1 min-w-40">
+          <label for="qr-member" class="block text-sm font-medium text-slate-700">Team member</label>
+          <select id="qr-member" name="team_member"
+                  class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm">
+            <option value="">Select team member</option>
+            {% for m in members %}
+              <option value="{{ m.id }}" {% if selected_member == m.id|stringformat:"d" %}selected{% endif %}>{{ m.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="w-28">
+          <label for="qr-quarter" class="block text-sm font-medium text-slate-700">Quarter</label>
+          <input id="qr-quarter" name="quarter" value="{{ current_quarter }}"
+                 class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm">
+        </div>
+        <div class="flex items-center gap-2 ml-auto shrink-0">
+          <span id="qr-indicator" class="htmx-indicator text-xs text-slate-500 italic">Drafting&hellip;</span>
+          <button type="submit"
+                  class="bg-accent-700 text-white text-sm px-4 py-2 rounded hover:bg-accent-800 shrink-0">Generate draft</button>
+        </div>
+      </form>
+      <div id="quarterly-review-result"></div>
+    </div>
+  </section>
+
   {% include "_partials/career_dev_content.html" %}
 </div>
 {% endblock %}

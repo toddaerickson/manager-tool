@@ -61,6 +61,58 @@ def feedback_add(request):
 
 
 @login_required
+@require_http_methods(["POST"])
+def feedback_draft_sbi(request):
+    """HTMX: draft S/B/I fields from rough notes (roadmap PR 9). Swaps
+    the feedback form back in with the drafted values as editable
+    initials — the AI NEVER writes to the DB; saving stays the user's
+    explicit 'Record feedback' submit."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    mid = manager.id
+
+    # Carry the user's member/type picks through the swap either way.
+    initial = {}
+    member = None
+    member_raw = request.POST.get("team_member", "").strip()
+    if member_raw.isdigit():
+        member = (
+            TeamMember.objects.active_for_manager(mid)
+            .filter(pk=int(member_raw))
+            .first()
+        )
+        if member:
+            initial["team_member"] = member.id
+    feedback_type = request.POST.get("feedback_type", "").strip()
+    if feedback_type in ("positive", "constructive"):
+        initial["feedback_type"] = feedback_type
+
+    notes = request.POST.get("notes", "").strip()
+    if not notes:
+        return render(request, "_partials/feedback_form.html", {
+            "form": FeedbackForm(manager_id=mid, initial=initial),
+            "draft_error": "Type a few rough notes first, then Draft S/B/I.",
+        }, status=422)
+
+    from coaching.services import draft_sbi
+    draft = draft_sbi(
+        notes, mid,
+        member_name=member.name if member else None,
+        feedback_type=initial.get("feedback_type"),
+    )
+    initial.update({
+        "situation": draft["situation"],
+        "behavior": draft["behavior"],
+        "impact": draft["impact"],
+    })
+    return render(request, "_partials/feedback_form.html", {
+        "form": FeedbackForm(manager_id=mid, initial=initial),
+        "draft_note": draft["note"] or "Draft filled in below — edit before recording.",
+    })
+
+
+@login_required
 @require_http_methods(["DELETE"])
 def feedback_delete(request, feedback_id: int):
     manager, err = _require_manager(request)
