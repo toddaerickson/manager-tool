@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}New 1:1 — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">New 1:1</h1>
+    <p class="text-sm text-slate-500 mt-1">Pick a member and date to start a structured 1:1 — you'll drop straight into the 10/10/10 recorder.</p>
+  </header>
+
+  <div class="bg-white border border-slate-200 rounded-md p-3">
+    {% include "_partials/meeting_form.html" %}
+  </div>
+
+  <p class="mt-3 text-sm text-slate-500">
+    <a href="{% url 'meetings' %}" class="underline hover:text-slate-700">← All meetings</a>
+  </p>
+</div>
+{% endblock %}

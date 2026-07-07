@@ -108,6 +108,9 @@
 
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Directs</div>
+          <a href="{% url 'meetings-new' %}"
+             title="Start a new 1:1 meeting (10/10/10 recorder)"
+             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'meetings-new' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">New 1:1</a>
           <a href="{% url 'meetings' %}"
              title="Structured 1:1 session records (10/10/10 recorder)"
              class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'meetings' or request.resolver_match.url_name == 'meetings-detail' %}bg-accent-700{% else %}hover:bg-slate-800{% endif %}">Meetings</a>

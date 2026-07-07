@@ -50,6 +50,7 @@ urlpatterns = [
     path("decisions/<int:decision_id>/edit/", core_views.decisions_edit, name="decisions-edit"),
     path("decisions/<int:decision_id>/delete/", core_views.decisions_delete, name="decisions-delete"),
     path("meetings/", core_views.one_on_ones_list, name="meetings"),
+    path("meetings/new/", core_views.one_on_ones_new, name="meetings-new"),
     path("meetings/add/", core_views.one_on_ones_add, name="meetings-add"),
     path("meetings/<int:session_id>/", core_views.one_on_ones_detail, name="meetings-detail"),
     path("meetings/<int:session_id>/autosave/", core_views.one_on_ones_autosave, name="meetings-autosave"),
