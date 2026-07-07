@@ -20,6 +20,17 @@
      (render.yaml's buildCommand runs this on every deploy.) {% endcomment %}
   <link rel="stylesheet" href="{% static 'css/tw.css' %}">
 
+  {% comment %} PWA (roadmap PR 7) — manifest + icons make the app
+     installable (Add to Home Screen, standalone window). Deliberately
+     NO service worker in v1: offline caching of tenant data is its own
+     risk/complexity decision. theme-color matches the slate-900 sidebar
+     chrome; icons are stdlib-generated (scripts/make_pwa_icons.py). {% endcomment %}
+  <link rel="manifest" href="{% static 'manifest.webmanifest' %}">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-title" content="Manager Tool">
+  <link rel="icon" type="image/png" sizes="192x192" href="{% static 'icons/icon-192.png' %}">
+  <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
+
   {% comment %} htmx 2.0.4, vendored — byte-identical to the unpkg build
      previously pinned by SRI hash sha384-HGfzt... {% endcomment %}
   <script src="{% static 'js/htmx.min.js' %}"></script>

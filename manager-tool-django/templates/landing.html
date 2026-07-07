@@ -14,6 +14,14 @@
   {% comment %} Compiled Tailwind (roadmap PR 2) — tokens live in
      tailwind.config.js; see base.html for the rebuild command. {% endcomment %}
   <link rel="stylesheet" href="{% static 'css/tw.css' %}">
+
+  {% comment %} PWA (roadmap PR 7) — same install surface as base.html so
+     Add-to-Home-Screen works from the signed-out landing page too. {% endcomment %}
+  <link rel="manifest" href="{% static 'manifest.webmanifest' %}">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-title" content="Manager Tool">
+  <link rel="icon" type="image/png" sizes="192x192" href="{% static 'icons/icon-192.png' %}">
+  <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
   <main class="flex-1 flex items-center justify-center px-6 py-12">

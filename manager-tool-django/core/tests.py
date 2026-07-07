@@ -6858,3 +6858,73 @@ class TestInboxEmailPoll:
         assert r2.status_code == 302
         assert get_config("inbox_imap_password", m.id) == "first-secret", \
             "blank submission must keep the existing password"
+
+
+class TestPwaManifest:
+    """Roadmap PR 7: installable PWA — manifest + icons + head links.
+    No service worker in v1 (deliberate). The PNG checks parse magic
+    bytes + IHDR with the stdlib so no image library is needed."""
+
+    @staticmethod
+    def _static(rel):
+        from django.conf import settings
+        return settings.BASE_DIR / "static" / rel
+
+    def test_manifest_is_valid_and_standalone(self):
+        import json
+        manifest = json.loads(
+            self._static("manifest.webmanifest").read_text(encoding="utf-8")
+        )
+        assert manifest["display"] == "standalone"
+        assert manifest["start_url"] == "/"
+        assert manifest["name"] == "Manager Tool"
+        sizes = {i["sizes"] for i in manifest["icons"]}
+        assert sizes == {"192x192", "512x512"}
+        for icon in manifest["icons"]:
+            assert icon["type"] == "image/png"
+            assert "maskable" in icon["purpose"]
+
+    def test_icons_exist_and_dimensions_match(self):
+        import struct
+        expected = {
+            "icons/icon-192.png": 192,
+            "icons/icon-512.png": 512,
+            "icons/apple-touch-icon.png": 180,
+        }
+        for rel, size in expected.items():
+            data = self._static(rel).read_bytes()
+            assert data[:8] == b"\x89PNG\r\n\x1a\n", f"{rel}: not a PNG"
+            # IHDR is always the first chunk: length(4) type(4) W(4) H(4)
+            w, h = struct.unpack(">II", data[16:24])
+            assert (w, h) == (size, size), f"{rel}: {w}x{h} != {size}"
+
+    def test_manifest_icon_srcs_point_at_real_files(self):
+        import json
+        manifest = json.loads(
+            self._static("manifest.webmanifest").read_text(encoding="utf-8")
+        )
+        for icon in manifest["icons"]:
+            rel = icon["src"].removeprefix("/static/")
+            assert self._static(rel).exists(), f"{icon['src']} missing"
+
+    @pytest.mark.django_db
+    def test_app_shell_head_carries_install_surface(self, client):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username="pwa_mgr", display_name="P", password_hash="h",
+            email="pwa_mgr@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username=m.email, email=m.email, password="testpw",
+        )
+        client.force_login(u)
+        body = client.get("/dashboard/").content.decode()
+        assert 'rel="manifest"' in body
+        assert 'name="theme-color" content="#0f172a"' in body
+        assert 'rel="apple-touch-icon"' in body
+
+    @pytest.mark.django_db
+    def test_landing_head_carries_install_surface(self, client):
+        body = client.get("/").content.decode()
+        assert 'rel="manifest"' in body
+        assert 'rel="apple-touch-icon"' in body
