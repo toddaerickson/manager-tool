@@ -283,6 +283,18 @@ def _exercise_orm() -> None:
         prep_brief__isnull=False,
     ).exists(), "m2 sees m1's prep brief — TenantManager regression"
 
+    # Roadmap PR 10: actual_duration_minutes (migration 0014) round-trip
+    # on real PG — proves the ALTER TABLE applied (SQLite suite can't).
+    _step("actual_duration_minutes (PR 10) round-trip on real PG")
+    session.actual_duration_minutes = 25
+    session.save(update_fields=["actual_duration_minutes"])
+    reread = OneOnOneSession.objects.for_manager(m1.id).get(pk=session.pk)
+    assert reread.actual_duration_minutes == 25
+    session.actual_duration_minutes = None  # cleared = not recorded
+    session.save(update_fields=["actual_duration_minutes"])
+    reread = OneOnOneSession.objects.for_manager(m1.id).get(pk=session.pk)
+    assert reread.actual_duration_minutes is None
+
     _exercise_recurring_events_no_orphan(m1)
     _exercise_dashboard_naive_timestamp(m1)
 

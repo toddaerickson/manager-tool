@@ -84,14 +84,48 @@ EVENT_TYPE_LABELS = {
     "other": "Meeting",
 }
 
+# App recurrence rule -> RFC 5545 FREQ clause (roadmap PR 10). Keys
+# must stay in lockstep with core.services.events.RECURRENCE_COUNTS —
+# CI-guarded by test_rrule_freq_keys_track_recurrence_counts, so a new
+# rule added to the materializer can't silently lose its RRULE mapping.
+_RRULE_FREQ = {
+    "weekly": "FREQ=WEEKLY",
+    "monthly": "FREQ=MONTHLY",
+    "quarterly": "FREQ=MONTHLY;INTERVAL=3",
+}
+
+
+def rrule_for_rule(rule, count):
+    """RFC 5545 RRULE value for an app recurrence rule, or None when
+    the rule is unknown OR the series has fewer than 2 occurrences —
+    both degrade to a single-occurrence invite.
+
+    `count` is the ACTUAL series size (parent + materialized children
+    in the DB), not RECURRENCE_COUNTS: an until_date-capped series must
+    not over-invite dates that were never materialized, and an orphaned
+    child (parent deleted via SET_NULL, recurrence_rule still set) has
+    no children so it degrades to a single invite by construction
+    (review findings). The Event rows stay the source of truth.
+
+    Documented caveat: RFC 5545 FREQ=MONTHLY on day 29-31 SKIPS months
+    without that day, while the app's materializer clamps to month-end
+    (add_months_anchored)."""
+    freq = _RRULE_FREQ.get(rule)
+    if freq is None or count < 2:
+        return None
+    return f"{freq};COUNT={int(count)}"
+
 
 def generate_ics(event, organizer_name=None, organizer_email=None,
-                 attendee_name=None, attendee_email=None):
+                 attendee_name=None, attendee_email=None, rrule=None):
     """Generate an RFC 5545 iCalendar string for a single event.
 
     `event` can be an Event model instance or a dict with keys:
     scheduled_date, scheduled_time, duration_minutes, title,
     event_type, location, agenda, notes.
+
+    `rrule`, when set (e.g. "FREQ=WEEKLY;COUNT=12"), emits one
+    recurring VEVENT instead of a single occurrence.
     """
     uid = f"{uuid.uuid4()}@manager-tool"
 
@@ -134,6 +168,10 @@ def generate_ics(event, organizer_name=None, organizer_email=None,
         f"UID:{uid}", f"DTSTAMP:{dtstamp}",
         f"DTSTART:{dtstart}", f"DTEND:{dtend}", f"SUMMARY:{summary}",
     ]
+    if rrule:
+        # rrule is server-built (rrule_for_rule), never user text, so no
+        # escaping — but strip control chars as defense in depth.
+        lines.append(f"RRULE:{_strip_control_chars(rrule)}")
     if location:
         lines.append(f"LOCATION:{location}")
     if description:
@@ -168,8 +206,11 @@ def generate_ics(event, organizer_name=None, organizer_email=None,
 
 
 def send_calendar_invite(event, recipient_email, recipient_name=None,
-                         manager_id=None):
+                         manager_id=None, rrule=None):
     """Send an RFC 5545 calendar invite for an event via SMTP.
+
+    `rrule`, when set, sends ONE recurring invite (series parents —
+    roadmap PR 10) instead of a single occurrence.
 
     Returns (success: bool, message: str).
     """
@@ -189,6 +230,7 @@ def send_calendar_invite(event, recipient_email, recipient_name=None,
         organizer_email=smtp_cfg["email"],
         attendee_name=recipient_name,
         attendee_email=recipient_email,
+        rrule=rrule,
     )
 
     msg = MIMEMultipart("mixed")
@@ -210,6 +252,8 @@ def send_calendar_invite(event, recipient_email, recipient_name=None,
     duration = event.get("duration_minutes", 30) if isinstance(event, dict) else event.duration_minutes
     body += f"Date: {scheduled_date}\nTime: {scheduled_time}\n"
     body += f"Duration: {duration or 30} minutes\n"
+    if rrule:
+        body += f"Recurring: {rrule}\n"
     location = event.get("location", "") if isinstance(event, dict) else (event.location or "")
     if location:
         body += f"Location: {location}\n"

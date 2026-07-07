@@ -37,22 +37,43 @@
 
     {# ── Main column: 10/10/10 recorder ── #}
     <div class="lg:col-span-2 space-y-4">
-      <div class="bg-white border border-slate-200 rounded-md p-6 space-y-5">
+      {% comment %}id is the autosave contract: every hx-include points
+      at this container, so a new autosaved field only needs to live
+      inside it — no per-input selector lists to keep in sync (review
+      finding: the old 5x copy-pasted lists).{% endcomment %}
+      <div id="meeting-autosave-fields" class="bg-white border border-slate-200 rounded-md p-6 space-y-5">
 
-        {# Tags — autosaved on blur. Normalized server-side (lowercase, trim, dedupe). #}
-        <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1" for="meeting-tags-input">Tags</label>
-          <p class="text-xs text-slate-500 mb-1">Comma-separated (e.g. <code>career, project-x</code>). Click a tag on the list page to filter.</p>
-          <input id="meeting-tags-input" type="text" name="tags"
-                 value="{{ session.tags|default_if_none:'' }}"
-                 hx-post="{% url 'meetings-autosave' session.id %}"
-                 hx-trigger="blur changed, keyup[key=='Enter'] changed"
-                 hx-target="#save-indicator"
-                 hx-swap="innerHTML"
-                 hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event']"
-                 hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                 class="block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
-                 placeholder="Add comma-separated tags…">
+        {# Tags + actual duration — autosaved on blur. Tags normalized server-side (lowercase, trim, dedupe). #}
+        <div class="flex flex-col sm:flex-row gap-3">
+          <div class="flex-1 min-w-0">
+            <label class="block text-sm font-medium text-slate-700 mb-1" for="meeting-tags-input">Tags</label>
+            <p class="text-xs text-slate-500 mb-1">Comma-separated (e.g. <code>career, project-x</code>). Click a tag on the list page to filter.</p>
+            <input id="meeting-tags-input" type="text" name="tags"
+                   value="{{ session.tags|default_if_none:'' }}"
+                   hx-post="{% url 'meetings-autosave' session.id %}"
+                   hx-trigger="blur changed, keyup[key=='Enter'] changed"
+                   hx-target="#save-indicator"
+                   hx-swap="innerHTML"
+                   hx-include="#meeting-autosave-fields"
+                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                   class="block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
+                   placeholder="Add comma-separated tags…">
+          </div>
+          <div class="w-full sm:w-36 sm:shrink-0">
+            <label class="block text-sm font-medium text-slate-700 mb-1" for="meeting-duration-input">Actual duration</label>
+            <p class="text-xs text-slate-500 mb-1">Minutes it ran.</p>
+            <input id="meeting-duration-input" type="number" name="actual_duration_minutes"
+                   min="0" max="1440" step="5" inputmode="numeric"
+                   value="{{ session.actual_duration_minutes|default_if_none:'' }}"
+                   hx-post="{% url 'meetings-autosave' session.id %}"
+                   hx-trigger="blur changed, keyup[key=='Enter'] changed"
+                   hx-target="#save-indicator"
+                   hx-swap="innerHTML"
+                   hx-include="#meeting-autosave-fields"
+                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                   class="block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm tabular-nums"
+                   placeholder="30">
+          </div>
         </div>
 
         {# Their Agenda #}
@@ -64,7 +85,7 @@
                     hx-trigger="keyup changed delay:2s"
                     hx-target="#save-indicator"
                     hx-swap="innerHTML"
-                    hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event']"
+                    hx-include="#meeting-autosave-fields"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                     rows="6"
                     class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
@@ -109,7 +130,7 @@
                     hx-trigger="keyup changed delay:2s"
                     hx-target="#save-indicator"
                     hx-swap="innerHTML"
-                    hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event']"
+                    hx-include="#meeting-autosave-fields"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                     rows="6"
                     class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"
@@ -130,7 +151,7 @@
                     hx-trigger="keyup changed delay:2s"
                     hx-target="#save-indicator"
                     hx-swap="innerHTML"
-                    hx-include="[name='direct_notes'],[name='manager_notes'],[name='followup_notes'],[name='tags'],[name='event']"
+                    hx-include="#meeting-autosave-fields"
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                     rows="6"
                     class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm"

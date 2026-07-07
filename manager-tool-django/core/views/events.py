@@ -1,5 +1,6 @@
 """Views: events."""
 
+import logging
 from datetime import date, timedelta, timezone as _dt_tz
 
 from django.contrib.auth.decorators import login_required
@@ -17,6 +18,8 @@ from core.services.audit import log_mutation
 from core.services.events import create_recurring_events
 from core.services.journal import journal_streak as _journal_streak
 from core.views._common import _require_manager
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # Phase 5.2a — Events (one-off; recurring comes in 5.2b)
@@ -290,13 +293,43 @@ def events_send_invite(request, event_id: int):
             "ev": ev,
             "invite_error": "No email address for this team member.",
         })
-    from core.services.calendar import send_calendar_invite
+    from core.services.calendar import rrule_for_rule, send_calendar_invite
+    # Series parent (recurrence_rule set, no parent of its own) → ONE
+    # recurring RRULE invite covering the ACTUAL series (roadmap PR 10;
+    # COUNT = parent + children in the DB, so an until_date-capped
+    # series never over-invites). An orphaned child — parent deleted,
+    # SET_NULL left recurrence_rule behind — has no children, so
+    # rrule_for_rule's count<2 guard degrades it to a single invite
+    # (review finding). Children and one-offs keep single invites.
+    rrule = None
+    child_ids = []
+    if ev.recurrence_rule and ev.parent_event_id is None:
+        child_ids = list(
+            Event.objects.for_manager(manager.id)
+            .filter(parent_event=ev)
+            .values_list("id", flat=True)
+        )
+        rrule = rrule_for_rule(ev.recurrence_rule, 1 + len(child_ids))
+        if rrule is None and child_ids:
+            logger.warning(
+                "Event %s has children but recurrence_rule %r has no "
+                "RRULE mapping — sending a single-occurrence invite",
+                ev.id, ev.recurrence_rule,
+            )
     success, message = send_calendar_invite(
         ev, ev.team_member.email, ev.team_member.name,
-        manager_id=manager.id,
+        manager_id=manager.id, rrule=rrule,
     )
     if success:
         Event.objects.filter(pk=ev.id).update(calendar_invite_sent=1)
+        if rrule and child_ids:
+            # The parent's RRULE invite already covers every child date;
+            # stamp the children so their pages show the sent state
+            # instead of a button that would double-book the recipient
+            # (review finding).
+            Event.objects.for_manager(manager.id).filter(
+                id__in=child_ids,
+            ).update(calendar_invite_sent=1)
         ev.refresh_from_db()
         log_mutation(manager.id, "create", "CalendarInvite", ev.id,
                      f"Sent invite to {ev.team_member.email} for '{ev.title}'")
