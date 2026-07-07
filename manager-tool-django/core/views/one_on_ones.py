@@ -114,6 +114,24 @@ def one_on_ones_list(request):
 
 
 @login_required
+@require_http_methods(["GET"])
+def one_on_ones_new(request):
+    """Dedicated 'start a new 1:1' page.
+
+    Renders the same form the Meetings page folds out, on its own route
+    so the sidebar can link straight to it. The form POSTs to
+    meetings-add, which creates the draft session and redirects into the
+    10/10/10 recorder — identical to the in-page 'Start new meeting'.
+    """
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    form = OneOnOneSessionForm(manager_id=manager.id)
+    form.initial["session_date"] = date.today()
+    return render(request, "meetings_new.html", {"form": form})
+
+
+@login_required
 @require_http_methods(["POST"])
 def one_on_ones_add(request):
     manager, err = _require_manager(request)

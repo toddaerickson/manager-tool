@@ -3823,6 +3823,43 @@ class TestOneOnOneSessions:
         assert resp.status_code == 302
         assert "/accounts/login/" in resp.url or "/accounts/google/login/" in resp.url
 
+    def test_new_meeting_page_200(self, client):
+        self._setup(client)
+        resp = client.get("/meetings/new/")
+        assert resp.status_code == 200
+        # Renders the shared meeting form (its submit button).
+        assert b"Start meeting" in resp.content
+
+    def test_new_meeting_page_requires_login(self, client):
+        resp = client.get("/meetings/new/")
+        assert resp.status_code == 302
+        assert "/accounts/login/" in resp.url or "/accounts/google/login/" in resp.url
+
+    def test_new_meeting_page_is_get_only(self, client):
+        self._setup(client)
+        # The dedicated page is GET-only; the form POSTs to meetings-add.
+        assert client.post("/meetings/new/").status_code == 405
+
+    def test_new_meeting_page_scopes_members_to_manager(self, client):
+        _, _ = self._setup(client)  # Todd + Alice
+        m2 = Manager.objects.create(
+            username="other_new", display_name="Other",
+            password_hash="x", email="other_new@example.com",
+        )
+        TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        body = client.get("/meetings/new/").content.decode()
+        assert "Alice" in body       # this manager's member is selectable
+        assert "Bob" not in body     # another manager's member is not
+
+    def test_new_meeting_page_defaults_date_to_today(self, client):
+        from datetime import date as _date
+        self._setup(client)
+        body = client.get("/meetings/new/").content.decode()
+        # Parity with the in-page 'Start new meeting' fold-out, which
+        # pre-fills today (one_on_ones_list). The <input type="date">
+        # renders value="YYYY-MM-DD".
+        assert _date.today().isoformat() in body
+
     def test_search_filters_by_notes_text(self, client):
         """?q= filters drafts/completed by direct/manager/followup notes."""
         m, tm = self._setup(client)

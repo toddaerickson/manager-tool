@@ -77,6 +77,7 @@ from core.views.one_on_ones import (  # noqa: F401
     one_on_ones_delete,
     one_on_ones_detail,
     one_on_ones_list,
+    one_on_ones_new,
 )
 from core.views.notes import (  # noqa: F401
     notes_add,
