@@ -260,6 +260,13 @@ class OneOnOneSession(models.Model):
         default="draft",
         choices=[("draft", "Draft"), ("completed", "Completed")],
     )
+    # Pre-1:1 AI prep brief (roadmap PR 8). prep_brief_requested_at is
+    # the poll timeout anchor: the HTMX pending partial flips to an
+    # explicit "failed — retry" state ~60s after it, so a dead
+    # generation thread (worker restart mid-call is EXPECTED under
+    # gthread) can never leave an eternal "Generating…" spinner.
+    prep_brief = models.TextField(blank=True, null=True)
+    prep_brief_requested_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
     updated_at = models.DateTimeField(blank=True, null=True)
 

@@ -85,6 +85,7 @@
             {% endif %}
           </summary>
           <p class="text-xs text-slate-500 mt-1 mb-1">Your 10 minutes — what you need to cover.</p>
+          {% include "_partials/prep_brief.html" with state=prep_brief_state %}
           {% if not session.manager_notes and prep_count %}
             {# Prep mode: one-click pull of this direct's open items into the box. #}
             {{ prep_agenda|json_script:"prep-agenda-data" }}

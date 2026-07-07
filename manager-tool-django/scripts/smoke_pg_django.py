@@ -266,6 +266,23 @@ def _exercise_orm() -> None:
         one_on_one_session=session,
     ).count() == 1
 
+    # Roadmap PR 8: prep_brief columns (migration 0013) round-trip on
+    # real PG — the SQLite suite can't prove the ALTER TABLE applied.
+    _step("prep_brief columns (PR 8) round-trip + isolation on real PG")
+    from django.utils import timezone as _tz
+    session.prep_brief = "smoke prep brief"
+    session.prep_brief_requested_at = _tz.now()
+    session.save(update_fields=["prep_brief", "prep_brief_requested_at"])
+    reread = OneOnOneSession.objects.for_manager(m1.id).get(pk=session.pk)
+    assert reread.prep_brief == "smoke prep brief"
+    assert reread.prep_brief_requested_at is not None
+    assert reread.prep_brief_requested_at.tzinfo is not None, \
+        "prep_brief_requested_at came back NAIVE on PG — the view's " \
+        "timezone.now() subtraction would raise (dashboard bug class)"
+    assert not OneOnOneSession.objects.for_manager(m2.id).filter(
+        prep_brief__isnull=False,
+    ).exists(), "m2 sees m1's prep brief — TenantManager regression"
+
     _exercise_recurring_events_no_orphan(m1)
     _exercise_dashboard_naive_timestamp(m1)
 
