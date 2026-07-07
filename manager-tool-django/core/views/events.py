@@ -290,10 +290,16 @@ def events_send_invite(request, event_id: int):
             "ev": ev,
             "invite_error": "No email address for this team member.",
         })
-    from core.services.calendar import send_calendar_invite
+    from core.services.calendar import rrule_for_rule, send_calendar_invite
+    # Series parent (recurrence_rule set, no parent of its own) → ONE
+    # recurring RRULE invite (roadmap PR 10). Children and one-offs
+    # keep the single-occurrence invite.
+    rrule = None
+    if ev.recurrence_rule and ev.parent_event_id is None:
+        rrule = rrule_for_rule(ev.recurrence_rule)
     success, message = send_calendar_invite(
         ev, ev.team_member.email, ev.team_member.name,
-        manager_id=manager.id,
+        manager_id=manager.id, rrule=rrule,
     )
     if success:
         Event.objects.filter(pk=ev.id).update(calendar_invite_sent=1)

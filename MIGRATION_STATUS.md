@@ -98,7 +98,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - **`ship-pr` skill** (PR #98) — codifies the PR workflow (branch, gate, body template, fetch-checks-once) so future sessions don't re-derive it.
 
 **Remaining v2 gaps:**
-- **Meeting duration tracking**: actual duration vs scheduled (planned as part of the personal-tool roadmap's calendar PR).
+- (Meeting duration tracking shipped in roadmap PR 10 — nullable `actual_duration_minutes` on OneOnOneSession, autosaved from the meeting page; RRULE series invites shipped in the same PR.)
 - (Meeting tags shipped in PR #120; global search shipped in PR #127.)
 
 ## Phase 8 — Decommission checklist

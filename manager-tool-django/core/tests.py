@@ -7532,3 +7532,222 @@ class TestQuarterlyReview:
         assert "Quarterly Review Draft" in body
         assert 'name="quarter"' in body
         assert 'id="quarterly-review-result"' in body
+
+
+@pytest.mark.django_db
+class TestRruleInvites:
+    """Roadmap PR 10: a recurring-series PARENT sends ONE invite with an
+    RFC 5545 RRULE (counts sourced from RECURRENCE_COUNTS); children and
+    one-off events keep the single-occurrence invite."""
+
+    def _login(self, client, slug):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username=f"rr_{slug}", display_name="M",
+            password_hash="x", email=f"rr_{slug}@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username=m.email, email=m.email, password="x",
+        )
+        client.force_login(u)
+        tm = TeamMember.objects.create(
+            name="Direct", manager_id=m.id, email="direct@example.com",
+        )
+        return m, tm
+
+    def _event(self, m, tm, **kw):
+        defaults = dict(
+            manager_id=m.id, title="1:1", event_type="one_on_one",
+            team_member=tm, scheduled_date="2026-07-06",
+            scheduled_time="10:00", status="scheduled",
+            calendar_invite_sent=0,
+        )
+        defaults.update(kw)
+        return Event.objects.create(**defaults)
+
+    # ---- rrule_for_rule unit tests ----
+
+    def test_rrule_strings_track_recurrence_counts(self):
+        from core.services.calendar import rrule_for_rule
+        from core.services.events import RECURRENCE_COUNTS
+        assert rrule_for_rule("weekly") == \
+            f"FREQ=WEEKLY;COUNT={RECURRENCE_COUNTS['weekly']}"
+        assert rrule_for_rule("monthly") == \
+            f"FREQ=MONTHLY;COUNT={RECURRENCE_COUNTS['monthly']}"
+        assert rrule_for_rule("quarterly") == \
+            f"FREQ=MONTHLY;INTERVAL=3;COUNT={RECURRENCE_COUNTS['quarterly']}"
+
+    def test_rrule_unknown_rule_is_none(self):
+        from core.services.calendar import rrule_for_rule
+        assert rrule_for_rule("daily") is None
+        assert rrule_for_rule("") is None
+        assert rrule_for_rule(None) is None
+
+    # ---- generate_ics ----
+
+    def test_ics_includes_rrule_line_when_given(self):
+        from core.services.calendar import generate_ics
+        ics = generate_ics({
+            "scheduled_date": "2026-07-06", "scheduled_time": "10:00",
+            "duration_minutes": 30, "title": "Weekly 1:1",
+            "event_type": "one_on_one",
+        }, rrule="FREQ=WEEKLY;COUNT=12")
+        assert "RRULE:FREQ=WEEKLY;COUNT=12\r\n" in ics
+        assert ics.count("BEGIN:VEVENT") == 1, \
+            "recurring invite must still be ONE VEVENT"
+
+    def test_ics_has_no_rrule_by_default(self):
+        from core.services.calendar import generate_ics
+        ics = generate_ics({
+            "scheduled_date": "2026-07-06", "scheduled_time": "10:00",
+            "duration_minutes": 30, "title": "One-off",
+            "event_type": "one_on_one",
+        })
+        assert "RRULE" not in ics
+
+    # ---- view: series detection ----
+
+    def test_series_parent_sends_rrule_invite(self, client):
+        from unittest.mock import patch
+        m, tm = self._login(client, "parent")
+        parent = self._event(m, tm, recurrence_rule="weekly")
+        with patch("core.services.calendar.send_calendar_invite",
+                   return_value=(True, "sent")) as mock_send:
+            client.post(f"/events/{parent.id}/invite/")
+        assert mock_send.call_count == 1
+        assert mock_send.call_args.kwargs["rrule"] == "FREQ=WEEKLY;COUNT=12"
+
+    def test_child_event_sends_single_invite(self, client):
+        from unittest.mock import patch
+        m, tm = self._login(client, "child")
+        parent = self._event(m, tm, recurrence_rule="weekly")
+        child = self._event(
+            m, tm, recurrence_rule="weekly", parent_event=parent,
+            scheduled_date="2026-07-13",
+        )
+        with patch("core.services.calendar.send_calendar_invite",
+                   return_value=(True, "sent")) as mock_send:
+            client.post(f"/events/{child.id}/invite/")
+        assert mock_send.call_args.kwargs["rrule"] is None, \
+            "children must NOT get an RRULE (double-booking with the parent)"
+
+    def test_non_recurring_event_sends_single_invite(self, client):
+        from unittest.mock import patch
+        m, tm = self._login(client, "oneoff")
+        ev = self._event(m, tm)
+        with patch("core.services.calendar.send_calendar_invite",
+                   return_value=(True, "sent")) as mock_send:
+            client.post(f"/events/{ev.id}/invite/")
+        assert mock_send.call_args.kwargs["rrule"] is None
+
+    def test_quarterly_parent_maps_to_monthly_interval_3(self, client):
+        from unittest.mock import patch
+        m, tm = self._login(client, "quarterly")
+        parent = self._event(m, tm, recurrence_rule="quarterly")
+        with patch("core.services.calendar.send_calendar_invite",
+                   return_value=(True, "sent")) as mock_send:
+            client.post(f"/events/{parent.id}/invite/")
+        assert mock_send.call_args.kwargs["rrule"] == \
+            "FREQ=MONTHLY;INTERVAL=3;COUNT=8"
+
+
+@pytest.mark.django_db
+class TestActualDuration:
+    """Roadmap PR 10: nullable actual_duration_minutes on
+    OneOnOneSession, autosaved from the meeting detail page. Garbage
+    must never silently null a stored value, and the autosave must keep
+    the PR 8 update_fields discipline (no prep_brief clobber)."""
+
+    def _setup(self, client, slug):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username=f"dur_{slug}", display_name="M",
+            password_hash="x", email=f"dur_{slug}@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username=m.email, email=m.email, password="x",
+        )
+        client.force_login(u)
+        tm = TeamMember.objects.create(name="Direct", manager_id=m.id)
+        s = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-07-06",
+            status="draft",
+        )
+        return m, tm, s
+
+    def _autosave(self, client, s, duration):
+        return client.post(f"/meetings/{s.id}/autosave/", {
+            "direct_notes": "", "manager_notes": "", "followup_notes": "",
+            "actual_duration_minutes": duration,
+        })
+
+    def test_autosave_sets_duration(self, client):
+        _m, _tm, s = self._setup(client, "set")
+        resp = self._autosave(client, s, "25")
+        assert resp.status_code == 200
+        s.refresh_from_db()
+        assert s.actual_duration_minutes == 25
+
+    def test_autosave_empty_clears_duration(self, client):
+        _m, _tm, s = self._setup(client, "clear")
+        OneOnOneSession.objects.filter(pk=s.id).update(
+            actual_duration_minutes=30,
+        )
+        self._autosave(client, s, "")
+        s.refresh_from_db()
+        assert s.actual_duration_minutes is None
+
+    def test_autosave_garbage_keeps_stored_value(self, client):
+        _m, _tm, s = self._setup(client, "garbage")
+        OneOnOneSession.objects.filter(pk=s.id).update(
+            actual_duration_minutes=30,
+        )
+        self._autosave(client, s, "not-a-number")
+        s.refresh_from_db()
+        assert s.actual_duration_minutes == 30, \
+            "garbage input must never silently null a recorded duration"
+
+    def test_autosave_clamps_to_sane_bounds(self, client):
+        _m, _tm, s = self._setup(client, "clamp")
+        self._autosave(client, s, "99999")
+        s.refresh_from_db()
+        assert s.actual_duration_minutes == 1440
+        self._autosave(client, s, "-5")
+        s.refresh_from_db()
+        assert s.actual_duration_minutes == 0
+
+    def test_autosave_without_field_leaves_duration_alone(self, client):
+        """Requests that don't carry the field (older cached pages mid-
+        deploy) must not touch the stored value."""
+        _m, _tm, s = self._setup(client, "absent")
+        OneOnOneSession.objects.filter(pk=s.id).update(
+            actual_duration_minutes=45,
+        )
+        client.post(f"/meetings/{s.id}/autosave/", {
+            "direct_notes": "note", "manager_notes": "",
+            "followup_notes": "",
+        })
+        s.refresh_from_db()
+        assert s.actual_duration_minutes == 45
+
+    def test_duration_autosave_does_not_clobber_fresh_brief(self, client):
+        """PR 8 regression guard extended to the new field: the autosave
+        that writes duration must not write back a stale prep_brief."""
+        _m, _tm, s = self._setup(client, "clobber")
+        OneOnOneSession.objects.filter(pk=s.id).update(
+            prep_brief="fresh brief from thread",
+        )
+        self._autosave(client, s, "40")
+        s.refresh_from_db()
+        assert s.actual_duration_minutes == 40
+        assert s.prep_brief == "fresh brief from thread"
+
+    def test_detail_page_renders_duration_input(self, client):
+        _m, _tm, s = self._setup(client, "page")
+        OneOnOneSession.objects.filter(pk=s.id).update(
+            actual_duration_minutes=25,
+        )
+        body = client.get(f"/meetings/{s.id}/").content.decode()
+        assert 'name="actual_duration_minutes"' in body
+        assert 'value="25"' in body
+        assert "Actual duration" in body
