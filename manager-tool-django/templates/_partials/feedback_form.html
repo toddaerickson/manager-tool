@@ -1,3 +1,5 @@
+{% if draft_note %}<p class="mb-2 text-xs text-accent-800 bg-accent-50 border border-accent-200 rounded px-2 py-1.5">{{ draft_note }}</p>{% endif %}
+{% if draft_error %}<p class="mb-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">{{ draft_error }}</p>{% endif %}
 <form method="post" action="{% url 'feedback-add' %}" class="space-y-3">
   {% csrf_token %}
 

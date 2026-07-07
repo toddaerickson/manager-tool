@@ -1,0 +1,43 @@
+{% comment %}Quarterly review draft result (roadmap PR 9). Swapped into
+#quarterly-review-result on career_dev.html. Three shapes: validation
+error, explicit not-enough-data, or the draft. The draft renders
+autoescaped with whitespace-pre-line (the prep-brief precedent — no
+escape-bypass filters on model output). Saving reuses convos_add
+unchanged; the AI itself never writes to the DB.{% endcomment %}
+{% if review_error %}
+  <p class="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">{{ review_error }}</p>
+{% elif review.sparse %}
+  <p class="mt-2 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded px-2 py-1.5">
+    Not enough data for {{ member.name }} in {{ quarter }}: no goals tagged
+    &ldquo;{{ quarter }}&rdquo; and no feedback, completed 1:1s, career
+    conversations, or delegations inside its dates. Record some first, or
+    pick another quarter.
+  </p>
+{% else %}
+  <div class="mt-2 border border-accent-200 bg-accent-50 rounded px-3 py-2">
+    <div class="flex items-center justify-between gap-2 mb-1">
+      <span class="text-xs font-semibold uppercase tracking-wider text-accent-800">{{ member.name }} &mdash; {{ quarter }}</span>
+      <button type="button"
+              onclick="navigator.clipboard.writeText(document.getElementById('qr-text').innerText); this.textContent='Copied';"
+              class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-accent-100 shrink-0">Copy</button>
+    </div>
+    {% if review.note %}<p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mb-1">{{ review.note }}</p>{% endif %}
+    <div id="qr-text" class="text-sm text-slate-700 whitespace-pre-line">{{ review.text }}</div>
+    <form hx-post="{% url 'convos-add' %}"
+          hx-target="#career-dev-content"
+          hx-swap="outerHTML"
+          hx-disabled-elt="find button[type='submit']"
+          hx-on::after-request="if(event.detail.successful) this.outerHTML='<p class=&quot;mt-2 text-xs text-slate-500 text-right&quot;>Saved to career conversations below.</p>'"
+          class="mt-2 flex justify-end">
+      {% csrf_token %}
+      <input type="hidden" name="team_member" value="{{ member.id }}">
+      <input type="hidden" name="conversation_date" value="{{ today_iso }}">
+      <input type="hidden" name="topic" value="{{ quarter }} review draft">
+      <textarea name="notes" hidden>{{ review.text }}</textarea>
+      <button type="submit"
+              class="inline-flex items-center min-h-11 sm:min-h-8 px-2.5 rounded text-xs font-medium text-accent-700 border border-accent-200 bg-white hover:bg-accent-100">
+        Save as career conversation
+      </button>
+    </form>
+  </div>
+{% endif %}

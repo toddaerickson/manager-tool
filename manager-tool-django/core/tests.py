@@ -7093,3 +7093,405 @@ class TestPrepBrief:
             pk=s.id, prep_brief_requested_at=new_stamp,
         ).update(prep_brief="current result")
         assert updated == 1
+
+
+@pytest.mark.django_db
+class TestDraftSBI:
+    """Roadmap PR 9: SBI drafting assist. The endpoint turns rough notes
+    into editable S/B/I form initials — the AI must NEVER write to the
+    DB, and every degraded path (no key, API error, unparseable output)
+    must land the notes in Behavior with a visible caveat."""
+
+    def _setup(self, client, slug):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username=f"sbi_{slug}", display_name=slug.title(),
+            password_hash="h", email=f"sbi_{slug}@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username=m.email, email=m.email, password="testpw",
+        )
+        client.force_login(u)
+        tm = TeamMember.objects.create(name="Sarah", manager_id=m.id)
+        return m, tm
+
+    def _mock_ai(self, mocker, text):
+        fake = mocker.Mock()
+        fake.messages.create.return_value = mocker.Mock(
+            content=[mocker.Mock(text=text)],
+        )
+        mocker.patch("coaching.services._get_client", return_value=fake)
+        return fake
+
+    def test_draft_populates_three_fields(self, client, mocker):
+        _m, tm = self._setup(client, "happy")
+        fake = self._mock_ai(
+            mocker,
+            "SITUATION: At Monday standup.\n"
+            "BEHAVIOR: Interrupted the designer twice.\n"
+            "IMPACT: The team lost the thread.",
+        )
+        resp = client.post("/feedback/draft-sbi/", {
+            "notes": "sarah kept interrupting in standup",
+            "team_member": tm.id, "feedback_type": "constructive",
+        })
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "At Monday standup." in body
+        assert "Interrupted the designer twice." in body
+        assert "The team lost the thread." in body
+        # member + type picks survive the swap
+        assert f'value="{tm.id}" selected' in body
+        assert 'value="constructive" selected' in body
+        # notes went through the injection-wrapping path with the name
+        prompt = fake.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "<user_input>" in prompt and "Sarah" in prompt
+
+    def test_empty_notes_is_422(self, client):
+        self._setup(client, "empty")
+        resp = client.post("/feedback/draft-sbi/", {"notes": "   "})
+        assert resp.status_code == 422
+        assert "rough notes" in resp.content.decode()
+
+    def test_no_api_key_falls_back_to_behavior(self, client, mocker):
+        self._setup(client, "nokey")
+        mocker.patch("coaching.services._get_client", return_value=None)
+        resp = client.post("/feedback/draft-sbi/", {
+            "notes": "raw unstructured note",
+        })
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "raw unstructured note" in body
+        assert "no API key" in body
+
+    def test_unparseable_output_dumps_to_behavior(self, client, mocker):
+        self._setup(client, "prose")
+        self._mock_ai(mocker, "Some feedback prose with no labels at all.")
+        body = client.post("/feedback/draft-sbi/", {
+            "notes": "whatever",
+        }).content.decode()
+        assert "Some feedback prose with no labels at all." in body
+        assert "placed in Behavior" in body
+
+    def test_api_error_degrades_with_visible_note(self, client, mocker):
+        self._setup(client, "apierr")
+        fake = mocker.Mock()
+        fake.messages.create.side_effect = RuntimeError("boom")
+        mocker.patch("coaching.services._get_client", return_value=fake)
+        resp = client.post("/feedback/draft-sbi/", {
+            "notes": "note that must survive",
+        })
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "note that must survive" in body
+        assert "API error" in body
+
+    def test_draft_never_writes_feedback_row(self, client, mocker):
+        _m, tm = self._setup(client, "nodb")
+        self._mock_ai(mocker, "SITUATION: x\nBEHAVIOR: y\nIMPACT: z")
+        client.post("/feedback/draft-sbi/", {
+            "notes": "n", "team_member": tm.id,
+        })
+        assert Feedback.objects.filter(manager_id=_m.id).count() == 0
+
+    def test_cross_tenant_member_id_is_dropped(self, client, mocker):
+        self._setup(client, "victim2")
+        intruder_m = Manager.objects.create(
+            username="sbi_intruder", display_name="I",
+            password_hash="h", email="sbi_intruder@example.com",
+        )
+        other_tm = TeamMember.objects.create(
+            name="OtherTenantMember", manager_id=intruder_m.id,
+        )
+        fake = self._mock_ai(mocker, "SITUATION: x\nBEHAVIOR: y\nIMPACT: z")
+        body = client.post("/feedback/draft-sbi/", {
+            "notes": "n", "team_member": other_tm.id,
+        }).content.decode()
+        assert "OtherTenantMember" not in body
+        prompt = fake.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "OtherTenantMember" not in prompt
+
+    def test_feedback_page_has_assist_block(self, client):
+        self._setup(client, "page")
+        body = client.get("/feedback/").content.decode()
+        assert "Draft S/B/I" in body
+        assert 'id="sbi-notes"' in body
+        assert 'id="feedback-form-wrap"' in body
+
+    # ---- parser unit tests ----
+
+    def test_parse_bold_and_case_insensitive_headers(self):
+        from coaching.services import parse_sbi_sections
+        parsed, ok = parse_sbi_sections(
+            "**Situation:** at the review\nbehavior: spoke over Jim\nIMPACT: morale dip",
+        )
+        assert ok
+        assert parsed["situation"] == "at the review"
+        assert parsed["behavior"] == "spoke over Jim"
+        assert parsed["impact"] == "morale dip"
+
+    def test_parse_multiline_sections(self):
+        from coaching.services import parse_sbi_sections
+        parsed, ok = parse_sbi_sections(
+            "SITUATION: line one\nline two\nBEHAVIOR: b\nIMPACT: i",
+        )
+        assert ok
+        assert parsed["situation"] == "line one\nline two"
+
+    def test_parse_no_headers_falls_to_behavior(self):
+        from coaching.services import parse_sbi_sections
+        parsed, ok = parse_sbi_sections("just prose")
+        assert not ok
+        assert parsed["behavior"] == "just prose"
+        assert parsed["situation"] == "" and parsed["impact"] == ""
+
+
+@pytest.mark.django_db
+class TestQuarterlyReview:
+    """Roadmap PR 9: quarterly review draft grounded in the member's
+    recorded quarter. Sparse member must yield an explicit
+    'not enough data' message; generation never writes to the DB;
+    saving is the explicit convos_add round-trip."""
+
+    QUARTER = "Q3 2026"
+
+    def _setup(self, client, slug):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username=f"qr_{slug}", display_name=slug.title(),
+            password_hash="h", email=f"qr_{slug}@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username=m.email, email=m.email, password="testpw",
+        )
+        client.force_login(u)
+        tm = TeamMember.objects.create(name="Devon", manager_id=m.id)
+        return m, tm
+
+    def _seed_quarter(self, m, tm):
+        from datetime import datetime
+
+        from django.utils import timezone as djtz
+        in_q = djtz.make_aware(datetime(2026, 7, 5, 12, 0))
+        Goal.objects.create(
+            team_member=tm, manager_id=m.id, quarter=self.QUARTER,
+            description="Ship the pricing migration", status="active",
+        )
+        Feedback.objects.create(
+            team_member=tm, manager_id=m.id, feedback_type="positive",
+            behavior="Unblocked the data team", impact="Saved the sprint",
+            created_at=in_q,
+        )
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-07-02",
+            status="completed", manager_notes="Discussed scope creep",
+        )
+        CareerConversation.objects.create(
+            team_member=tm, manager_id=m.id, conversation_date="2026-07-03",
+            topic="Tech lead track", created_at=in_q,
+        )
+        Delegation.objects.create(
+            team_member=tm, manager_id=m.id, task="Own the vendor eval",
+            status="active", created_at=in_q,
+        )
+
+    def _mock_ai(self, mocker, text):
+        fake = mocker.Mock()
+        fake.messages.create.return_value = mocker.Mock(
+            content=[mocker.Mock(text=text)],
+        )
+        mocker.patch("coaching.services._get_client", return_value=fake)
+        return fake
+
+    # ---- quarter_bounds unit tests ----
+
+    def test_quarter_bounds_all_quarters(self):
+        from coaching.services import quarter_bounds
+        assert quarter_bounds("Q1 2026") == ("2026-01-01", "2026-03-31")
+        assert quarter_bounds("Q2 2026") == ("2026-04-01", "2026-06-30")
+        assert quarter_bounds("Q3 2026") == ("2026-07-01", "2026-09-30")
+        assert quarter_bounds("Q4 2026") == ("2026-10-01", "2026-12-31")
+
+    def test_quarter_bounds_rejects_garbage(self):
+        from coaching.services import quarter_bounds
+        for bad in ("", "Q5 2026", "2026-Q3", "third quarter", None):
+            assert quarter_bounds(bad) is None
+
+    # ---- gather grounding ----
+
+    def test_gather_includes_only_quarter_data(self, client):
+        from datetime import datetime
+
+        from django.utils import timezone as djtz
+
+        from coaching.services import _gather_quarter_data
+        m, tm = self._setup(client, "gather")
+        self._seed_quarter(m, tm)
+        # Out-of-quarter noise: wrong goal quarter, Q2 feedback,
+        # Q2 session, Q4 convo.
+        Goal.objects.create(
+            team_member=tm, manager_id=m.id, quarter="Q2 2026",
+            description="Old quarter goal", status="met",
+        )
+        Feedback.objects.create(
+            team_member=tm, manager_id=m.id, feedback_type="constructive",
+            behavior="Stale feedback",
+            created_at=djtz.make_aware(datetime(2026, 6, 30, 23, 0)),
+        )
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-06-30",
+            status="completed", manager_notes="Last quarter session",
+        )
+        CareerConversation.objects.create(
+            team_member=tm, manager_id=m.id,
+            conversation_date="2026-10-01", topic="Next quarter convo",
+        )
+        data = _gather_quarter_data(tm, m.id, self.QUARTER)
+        flat = "\n".join(
+            data["goals"] + data["feedback"] + data["sessions"]
+            + data["convos"] + data["delegations"],
+        )
+        assert "Ship the pricing migration" in flat
+        assert "Unblocked the data team" in flat
+        assert "Discussed scope creep" in flat
+        assert "Tech lead track" in flat
+        assert "Own the vendor eval" in flat
+        assert "Old quarter goal" not in flat
+        assert "Stale feedback" not in flat
+        assert "Last quarter session" not in flat
+        assert "Next quarter convo" not in flat
+
+    def test_gather_excludes_other_tenants_rows(self, client):
+        """Even a corrupted row pointing another manager's feedback at
+        MY member must not leak into my gather (for_manager guard)."""
+        from datetime import datetime
+
+        from django.utils import timezone as djtz
+
+        from coaching.services import _gather_quarter_data
+        m, tm = self._setup(client, "iso")
+        other = Manager.objects.create(
+            username="qr_other", display_name="O",
+            password_hash="h", email="qr_other@example.com",
+        )
+        Feedback.objects.create(
+            team_member=tm, manager_id=other.id, feedback_type="positive",
+            behavior="LEAKED CROSS TENANT",
+            created_at=djtz.make_aware(datetime(2026, 7, 5, 12, 0)),
+        )
+        data = _gather_quarter_data(tm, m.id, self.QUARTER)
+        assert not any("LEAKED" in f for f in data["feedback"])
+
+    # ---- endpoint behavior ----
+
+    def test_endpoint_renders_draft_and_save_form(self, client, mocker):
+        m, tm = self._setup(client, "happy")
+        self._seed_quarter(m, tm)
+        fake = self._mock_ai(mocker, "**Summary**\nSolid quarter for Devon.")
+        resp = client.post("/career/quarterly-review/", {
+            "team_member": tm.id, "quarter": self.QUARTER,
+        })
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Solid quarter for Devon." in body
+        assert "Save as career conversation" in body
+        assert f'value="{self.QUARTER} review draft"' in body
+        # grounded prompt: quarter metadata outside tags, data inside
+        prompt = fake.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert f"QUARTER: {self.QUARTER}" in prompt
+        assert "<user_input>" in prompt
+        assert "Ship the pricing migration" in prompt
+
+    def test_sparse_member_gets_explicit_message(self, client):
+        _m, tm = self._setup(client, "sparse")
+        resp = client.post("/career/quarterly-review/", {
+            "team_member": tm.id, "quarter": self.QUARTER,
+        })
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Not enough data" in body
+        assert "Save as career conversation" not in body
+
+    def test_no_api_key_fallback_lists_raw_record(self, client, mocker):
+        m, tm = self._setup(client, "nokey")
+        self._seed_quarter(m, tm)
+        mocker.patch("coaching.services._get_client", return_value=None)
+        body = client.post("/career/quarterly-review/", {
+            "team_member": tm.id, "quarter": self.QUARTER,
+        }).content.decode()
+        assert "AI draft unavailable" in body
+        assert "Ship the pricing migration" in body
+
+    def test_api_error_falls_back_with_note(self, client, mocker):
+        m, tm = self._setup(client, "apierr")
+        self._seed_quarter(m, tm)
+        fake = mocker.Mock()
+        fake.messages.create.side_effect = RuntimeError("boom")
+        mocker.patch("coaching.services._get_client", return_value=fake)
+        body = client.post("/career/quarterly-review/", {
+            "team_member": tm.id, "quarter": self.QUARTER,
+        }).content.decode()
+        assert "API error" in body
+        assert "Ship the pricing migration" in body
+
+    def test_invalid_quarter_is_422(self, client):
+        _m, tm = self._setup(client, "badq")
+        resp = client.post("/career/quarterly-review/", {
+            "team_member": tm.id, "quarter": "2026-Q3",
+        })
+        assert resp.status_code == 422
+        assert "Q3 2026" in resp.content.decode()
+
+    def test_missing_member_is_422(self, client):
+        self._setup(client, "nomem")
+        resp = client.post("/career/quarterly-review/", {
+            "quarter": self.QUARTER,
+        })
+        assert resp.status_code == 422
+        assert "team member" in resp.content.decode()
+
+    def test_cross_tenant_member_404s(self, client):
+        self._setup(client, "victim")
+        other = Manager.objects.create(
+            username="qr_intruder", display_name="I",
+            password_hash="h", email="qr_intruder@example.com",
+        )
+        other_tm = TeamMember.objects.create(
+            name="NotYours", manager_id=other.id,
+        )
+        resp = client.post("/career/quarterly-review/", {
+            "team_member": other_tm.id, "quarter": self.QUARTER,
+        })
+        assert resp.status_code == 404
+
+    def test_generate_never_writes_db(self, client, mocker):
+        m, tm = self._setup(client, "nodb")
+        self._seed_quarter(m, tm)
+        self._mock_ai(mocker, "**Summary**\nFine.")
+        before = CareerConversation.objects.filter(manager_id=m.id).count()
+        client.post("/career/quarterly-review/", {
+            "team_member": tm.id, "quarter": self.QUARTER,
+        })
+        after = CareerConversation.objects.filter(manager_id=m.id).count()
+        assert after == before
+
+    def test_save_roundtrip_creates_convo(self, client):
+        """The save form's exact field contract against convos_add."""
+        m, tm = self._setup(client, "save")
+        resp = client.post("/career/convos/add/", {
+            "team_member": tm.id, "conversation_date": "2026-07-06",
+            "topic": f"{self.QUARTER} review draft",
+            "notes": "**Summary**\nSolid quarter.",
+        })
+        assert resp.status_code == 200
+        convo = CareerConversation.objects.for_manager(m.id).get(
+            topic=f"{self.QUARTER} review draft",
+        )
+        assert "Solid quarter." in convo.notes
+
+    def test_career_page_has_review_panel(self, client):
+        self._setup(client, "page")
+        body = client.get("/career/").content.decode()
+        assert "Quarterly Review Draft" in body
+        assert 'name="quarter"' in body
+        assert 'id="quarterly-review-result"' in body

@@ -47,6 +47,7 @@ from core.views.goals import (  # noqa: F401
 )
 from core.views.career import (  # noqa: F401
     career_dev,
+    career_quarterly_review,
     convos_add,
     milestones_add,
     milestones_complete,
@@ -86,6 +87,7 @@ from core.views.notes import (  # noqa: F401
 from core.views.feedback import (  # noqa: F401
     feedback_add,
     feedback_delete,
+    feedback_draft_sbi,
     feedback_list,
 )
 from core.views.settings_views import (  # noqa: F401

@@ -9,3 +9,18 @@
     @apply font-display tracking-tight;
   }
 }
+
+/* htmx request indicators (PR 9). htmx injects equivalent defaults at
+ * runtime, but owning them here keeps every class token the templates
+ * use covered by the compiled sheet (TestCompiledCssCoverage).
+ * Deliberately OUTSIDE @layer: .htmx-request is only ever added by
+ * htmx's JS, never appears in templates, so layered rules keyed on it
+ * would be tree-shaken out of the build. */
+.htmx-indicator {
+  opacity: 0;
+  transition: opacity 200ms ease-in;
+}
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  opacity: 1;
+}
