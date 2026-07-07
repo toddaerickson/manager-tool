@@ -70,6 +70,8 @@ from core.views.decisions import (  # noqa: F401
 from core.views.one_on_ones import (  # noqa: F401
     one_on_ones_add,
     one_on_ones_add_action,
+    one_on_ones_prep_brief,
+    one_on_ones_prep_brief_generate,
     one_on_ones_autosave,
     one_on_ones_complete,
     one_on_ones_delete,

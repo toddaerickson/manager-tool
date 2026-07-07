@@ -353,3 +353,95 @@ class TestGenerateWeeklyPlan:
             ),
         )
         assert generate_weekly_plan(m.id) is None
+
+
+@pytest.mark.django_db
+class TestGeneratePrepBrief:
+    """Roadmap PR 8: the brief gathers only this member's since-last-1:1
+    data, caps every list, and degrades to a deterministic fallback
+    when no API key is configured."""
+
+    def _seed(self):
+        from core.models import Feedback, Goal, OneOnOneSession, RunningNote
+        m = Manager.objects.create(
+            username="brief_mgr", display_name="B",
+            password_hash="h", email="brief_mgr@example.com",
+        )
+        tm = TeamMember.objects.create(name="Sarah", manager_id=m.id)
+        prev = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-06-20",
+            status="completed", followup_notes="carry-over: promo case",
+        )
+        cur = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-07-06",
+            status="draft",
+        )
+        RunningNote.objects.create(
+            manager_id=m.id, team_member=tm, note_date="2026-07-01",
+            content="Shipped the vendor migration",
+        )
+        RunningNote.objects.create(  # BEFORE the last completed 1:1
+            manager_id=m.id, team_member=tm, note_date="2026-06-01",
+            content="ancient note that must not appear",
+        )
+        Feedback.objects.create(
+            manager_id=m.id, team_member=tm, feedback_type="positive",
+            behavior="Handled the escalation calmly",
+        )
+        Goal.objects.create(
+            manager_id=m.id, team_member=tm, description="Lead the Q3 audit",
+            status="in_progress", quarter="2026-Q3",
+        )
+        return m, tm, prev, cur
+
+    def test_no_client_returns_deterministic_fallback(self, monkeypatch):
+        import coaching.services as svc
+        m, _tm, _prev, cur = self._seed()
+        monkeypatch.setattr(svc, "_get_client", lambda mid: None)
+        brief = svc.generate_prep_brief(cur.id, m.id)
+        assert brief is not None
+        assert "Since last time" in brief
+        assert "vendor migration" in brief
+        assert "ancient note" not in brief, \
+            "notes predating the last completed 1:1 must be excluded"
+        assert "carry-over: promo case" in brief
+        assert "AI brief unavailable" in brief
+
+    def test_client_path_sends_guarded_prompt(self, monkeypatch):
+        import coaching.services as svc
+        m, _tm, _prev, cur = self._seed()
+        captured = {}
+
+        class _Msg:
+            content = [type("T", (), {"text": "AI BRIEF"})()]
+
+        class _Client:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    captured.update(kw)
+                    return _Msg()
+
+        monkeypatch.setattr(svc, "_get_client", lambda mid: _Client())
+        brief = svc.generate_prep_brief(cur.id, m.id)
+        assert brief == "AI BRIEF"
+        user_msg = captured["messages"][0]["content"]
+        assert "<user_input>" in user_msg and "</user_input>" in user_msg
+        assert "vendor migration" in user_msg
+        assert "ancient note" not in user_msg
+        assert "LAST COMPLETED 1:1: 2026-06-20" in user_msg
+        assert captured["system"].startswith(svc.COACHING_CONTEXT)
+
+    def test_missing_session_returns_none(self):
+        m, _tm, _prev, _cur = self._seed()
+        from coaching.services import generate_prep_brief
+        assert generate_prep_brief(999999, m.id) is None
+
+    def test_cross_tenant_session_returns_none(self):
+        from coaching.services import generate_prep_brief
+        m, _tm, _prev, cur = self._seed()
+        other = Manager.objects.create(
+            username="brief_other", display_name="O",
+            password_hash="h", email="brief_other@example.com",
+        )
+        assert generate_prep_brief(cur.id, other.id) is None

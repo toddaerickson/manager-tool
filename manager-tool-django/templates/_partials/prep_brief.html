@@ -1,0 +1,49 @@
+{% comment %}Pre-1:1 AI prep brief (roadmap PR 8). One partial, four
+states from _prep_brief_state(); the whole div swaps via hx-target so
+the state machine lives server-side. Only the pending branch carries an
+hx-trigger, so polling stops by construction on ready/failed/idle —
+and the pending branch flips to failed after 60s server-side, so a dead
+generation thread can never leave an eternal spinner.{% endcomment %}
+<div id="prep-brief">
+  {% if state == "ready" %}
+    <div class="mb-2 border border-accent-200 bg-accent-50 rounded px-3 py-2">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-xs font-semibold uppercase tracking-wider text-accent-800">Prep brief</span>
+        <button type="button"
+                hx-post="{% url 'meetings-prep-brief-generate' session.id %}"
+                hx-target="#prep-brief" hx-swap="outerHTML"
+                hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-accent-100">
+          Regenerate
+        </button>
+      </div>
+      <div class="text-sm text-slate-700 whitespace-pre-line">{{ session.prep_brief }}</div>
+    </div>
+  {% elif state == "pending" %}
+    <div hx-get="{% url 'meetings-prep-brief' session.id %}"
+         hx-trigger="every 2s"
+         hx-target="#prep-brief" hx-swap="outerHTML"
+         class="mb-2 text-xs text-slate-500 italic px-1 py-1.5">
+      Generating prep brief&hellip;
+    </div>
+  {% elif state == "failed" %}
+    <div class="mb-2 border border-red-200 bg-red-50 rounded px-3 py-2 flex items-center justify-between gap-2">
+      <span class="text-xs text-red-700">Prep brief generation failed or timed out.</span>
+      <button type="button"
+              hx-post="{% url 'meetings-prep-brief-generate' session.id %}"
+              hx-target="#prep-brief" hx-swap="outerHTML"
+              hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+              class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-red-700 hover:bg-red-100 shrink-0">
+        Retry
+      </button>
+    </div>
+  {% else %}
+    <button type="button"
+            hx-post="{% url 'meetings-prep-brief-generate' session.id %}"
+            hx-target="#prep-brief" hx-swap="outerHTML"
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            class="mb-2 inline-flex items-center gap-1.5 min-h-11 sm:min-h-8 text-xs font-medium text-accent-700 border border-accent-200 bg-accent-50 rounded px-2.5 hover:bg-accent-100">
+      Generate AI prep brief — what changed since your last 1:1
+    </button>
+  {% endif %}
+</div>

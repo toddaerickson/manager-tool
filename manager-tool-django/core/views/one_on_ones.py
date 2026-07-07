@@ -200,6 +200,7 @@ def one_on_ones_detail(request, session_id: int):
         "action_form": action_form,
         "prep_agenda": prep_agenda,
         "prep_count": len(prep_lines),
+        "prep_brief_state": _prep_brief_state(session),
         **context,
     })
 
@@ -326,3 +327,95 @@ def one_on_ones_add_action(request, session_id: int):
         "action_items": action_items,
         "action_form": action_form,
     })
+
+
+# ---------------------------------------------------------------------------
+# Pre-1:1 AI prep brief (roadmap PR 8)
+# ---------------------------------------------------------------------------
+
+# Poll timeout: after this many seconds without a result, the pending
+# partial flips to an explicit "failed — retry" state. A worker restart
+# mid-generation is EXPECTED under gthread (deploys every merge), so a
+# dead thread must surface as a retry, never an eternal spinner.
+PREP_BRIEF_TIMEOUT_SECONDS = 60
+
+
+def _prep_brief_state(session):
+    """ready | pending | failed | idle — single source of truth for
+    which branch of the prep_brief partial renders."""
+    if session.prep_brief:
+        return "ready"
+    if not session.prep_brief_requested_at:
+        return "idle"
+    age = (timezone.now() - session.prep_brief_requested_at).total_seconds()
+    return "pending" if age < PREP_BRIEF_TIMEOUT_SECONDS else "failed"
+
+
+def _render_prep_brief(request, session, status=200):
+    return render(request, "_partials/prep_brief.html", {
+        "session": session,
+        "state": _prep_brief_state(session),
+    }, status=status)
+
+
+@login_required
+def one_on_ones_prep_brief(request, session_id: int):
+    """HTMX poll endpoint. The pending branch re-polls every 2s; the
+    ready/failed/idle branches carry no hx-trigger, so polling stops
+    by construction (same idiom as journal_coaching)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    session = get_object_or_404(
+        OneOnOneSession.objects.for_manager(manager.id), pk=session_id,
+    )
+    return _render_prep_brief(request, session)
+
+
+@login_required
+@require_http_methods(["POST"])
+def one_on_ones_prep_brief_generate(request, session_id: int):
+    """Kick off brief generation in a background thread (the API call
+    takes ~10s; the request returns immediately with the pending
+    partial). COACHING_ENABLED=False under settings_test — the daemon
+    thread would leak writes past the test transaction, same rationale
+    as the journal coaching spawn."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    session = get_object_or_404(
+        OneOnOneSession.objects.for_manager(manager.id), pk=session_id,
+    )
+
+    session.prep_brief = None
+    session.prep_brief_requested_at = timezone.now()
+    session.save(update_fields=["prep_brief", "prep_brief_requested_at"])
+
+    from django.conf import settings
+    if getattr(settings, "COACHING_ENABLED", True):
+        import threading
+
+        def _generate(session_id, manager_id):
+            try:
+                from coaching.services import generate_prep_brief
+                brief = generate_prep_brief(session_id, manager_id)
+                if brief:
+                    OneOnOneSession.objects.filter(pk=session_id).update(
+                        prep_brief=brief,
+                    )
+                    log_mutation(manager_id, "update", "OneOnOneSession",
+                                 session_id, "AI prep brief generated",
+                                 actor="system")
+            except Exception:
+                # Logged and DROPPED on purpose: prep_brief stays NULL,
+                # so the poll's 60s timeout renders the failed/retry
+                # state — the visible error surface for this path.
+                logger.exception(
+                    "Prep brief generation failed for session %d", session_id,
+                )
+
+        threading.Thread(
+            target=_generate, args=(session.id, manager.id), daemon=True,
+        ).start()
+
+    return _render_prep_brief(request, session)

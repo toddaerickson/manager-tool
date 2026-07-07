@@ -6928,3 +6928,109 @@ class TestPwaManifest:
         body = client.get("/").content.decode()
         assert 'rel="manifest"' in body
         assert 'rel="apple-touch-icon"' in body
+
+
+@pytest.mark.django_db
+class TestPrepBrief:
+    """Roadmap PR 8: pre-1:1 AI prep brief. The poll's state machine is
+    the safety property under test — a dead generation thread must
+    surface as an explicit failed/retry state after 60s, never an
+    eternal "Generating…" spinner. COACHING_ENABLED=False in tests, so
+    the generate endpoint never spawns the real thread."""
+
+    def _setup(self, client, slug):
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username=f"prep_{slug}", display_name=slug.title(),
+            password_hash="h", email=f"prep_{slug}@example.com",
+        )
+        u = get_user_model().objects.create_user(
+            username=m.email, email=m.email, password="testpw",
+        )
+        client.force_login(u)
+        tm = TeamMember.objects.create(name="Sarah", manager_id=m.id)
+        s = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-07-06",
+            status="draft",
+        )
+        return m, tm, s
+
+    def test_idle_state_shows_generate_button(self, client):
+        _m, _tm, s = self._setup(client, "idle")
+        body = client.get(f"/meetings/{s.id}/prep-brief/").content.decode()
+        assert "Generate AI prep brief" in body
+        assert "every 2s" not in body, "idle must not poll"
+
+    def test_generate_sets_requested_at_and_returns_pending(self, client):
+        m, _tm, s = self._setup(client, "gen")
+        body = client.post(
+            f"/meetings/{s.id}/prep-brief/generate/",
+        ).content.decode()
+        assert "Generating prep brief" in body
+        assert "every 2s" in body, "pending must poll"
+        s.refresh_from_db()
+        assert s.prep_brief_requested_at is not None
+        assert s.prep_brief is None
+
+    def test_poll_within_timeout_stays_pending(self, client):
+        from django.utils import timezone
+        _m, _tm, s = self._setup(client, "pend")
+        s.prep_brief_requested_at = timezone.now()
+        s.save(update_fields=["prep_brief_requested_at"])
+        body = client.get(f"/meetings/{s.id}/prep-brief/").content.decode()
+        assert "Generating prep brief" in body and "every 2s" in body
+
+    def test_poll_after_timeout_is_terminal_failed_state(self, client):
+        """THE review-mandated property: a dead thread (worker restart
+        mid-generation) flips to failed/retry — polling STOPS."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+        _m, _tm, s = self._setup(client, "dead")
+        s.prep_brief_requested_at = timezone.now() - timedelta(seconds=61)
+        s.save(update_fields=["prep_brief_requested_at"])
+        body = client.get(f"/meetings/{s.id}/prep-brief/").content.decode()
+        assert "failed or timed out" in body
+        assert "Retry" in body
+        assert "every 2s" not in body, "failed state must NOT keep polling"
+
+    def test_poll_with_brief_renders_ready_and_stops(self, client):
+        from django.utils import timezone
+        _m, _tm, s = self._setup(client, "ready")
+        s.prep_brief = "**Since last time**\n- shipped the migration"
+        s.prep_brief_requested_at = timezone.now()
+        s.save(update_fields=["prep_brief", "prep_brief_requested_at"])
+        body = client.get(f"/meetings/{s.id}/prep-brief/").content.decode()
+        assert "shipped the migration" in body
+        assert "Regenerate" in body
+        assert "every 2s" not in body, "ready state must NOT keep polling"
+
+    def test_regenerate_clears_stale_brief(self, client):
+        _m, _tm, s = self._setup(client, "regen")
+        s.prep_brief = "old brief"
+        s.save(update_fields=["prep_brief"])
+        client.post(f"/meetings/{s.id}/prep-brief/generate/")
+        s.refresh_from_db()
+        assert s.prep_brief is None, "regenerate must clear the old brief"
+
+    def test_cross_tenant_session_404s(self, client):
+        from django.contrib.auth import get_user_model
+        _m, _tm, s = self._setup(client, "victim")
+        other = Manager.objects.create(
+            username="prep_intruder", display_name="I",
+            password_hash="h", email="prep_intruder@example.com",
+        )
+        u2 = get_user_model().objects.create_user(
+            username=other.email, email=other.email, password="testpw",
+        )
+        client.force_login(u2)
+        assert client.get(f"/meetings/{s.id}/prep-brief/").status_code == 404
+        assert client.post(
+            f"/meetings/{s.id}/prep-brief/generate/",
+        ).status_code == 404
+
+    def test_detail_page_includes_brief_section(self, client):
+        _m, _tm, s = self._setup(client, "detail")
+        body = client.get(f"/meetings/{s.id}/").content.decode()
+        assert 'id="prep-brief"' in body
+        assert "Generate AI prep brief" in body
