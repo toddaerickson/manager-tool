@@ -7034,3 +7034,62 @@ class TestPrepBrief:
         body = client.get(f"/meetings/{s.id}/").content.decode()
         assert 'id="prep-brief"' in body
         assert "Generate AI prep brief" in body
+
+    # ---- review-round regression tests (PR #139 code review) ----
+
+    def test_autosave_does_not_clobber_fresh_brief(self, client):
+        """The review's data-loss race: autosave fetched the row before
+        the background thread wrote the brief, then a full-row save()
+        wrote the stale None back. update_fields on autosave makes the
+        clobber impossible even with a stale instance."""
+        _m, _tm, s = self._setup(client, "clobber")
+        # Simulate the interleaving: the autosave request would have
+        # fetched `s` already; the thread then commits a brief.
+        OneOnOneSession.objects.filter(pk=s.id).update(
+            prep_brief="fresh brief from thread",
+        )
+        resp = client.post(f"/meetings/{s.id}/autosave/", {
+            "direct_notes": "their agenda item",
+            "manager_notes": "", "followup_notes": "",
+        })
+        assert resp.status_code == 200
+        s.refresh_from_db()
+        assert s.direct_notes == "their agenda item"
+        assert s.prep_brief == "fresh brief from thread", \
+            "autosave must never write back a stale prep_brief"
+
+    def test_complete_does_not_clobber_fresh_brief(self, client):
+        _m, _tm, s = self._setup(client, "compclob")
+        OneOnOneSession.objects.filter(pk=s.id).update(
+            prep_brief="fresh brief from thread",
+        )
+        client.post(f"/meetings/{s.id}/complete/")
+        s.refresh_from_db()
+        assert s.status == "completed"
+        assert s.prep_brief == "fresh brief from thread"
+
+    def test_stale_thread_write_is_discarded_by_stamp_guard(self, client):
+        """Pin the CAS contract: a thread carrying an OLD requested_at
+        stamp must not overwrite the row after a re-stamp (Regenerate).
+        Exercises the exact guarded queryset the thread runs, including
+        the datetime-equality round-trip on the DB."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+        _m, _tm, s = self._setup(client, "stale")
+        old_stamp = timezone.now() - timedelta(seconds=30)
+        new_stamp = timezone.now()
+        OneOnOneSession.objects.filter(pk=s.id).update(
+            prep_brief_requested_at=new_stamp,
+        )
+        updated = OneOnOneSession.objects.filter(
+            pk=s.id, prep_brief_requested_at=old_stamp,
+        ).update(prep_brief="STALE RESULT")
+        assert updated == 0
+        s.refresh_from_db()
+        assert s.prep_brief is None
+        # ...and the CURRENT stamp's write lands.
+        updated = OneOnOneSession.objects.filter(
+            pk=s.id, prep_brief_requested_at=new_stamp,
+        ).update(prep_brief="current result")
+        assert updated == 1

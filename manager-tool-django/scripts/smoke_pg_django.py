@@ -276,6 +276,9 @@ def _exercise_orm() -> None:
     reread = OneOnOneSession.objects.for_manager(m1.id).get(pk=session.pk)
     assert reread.prep_brief == "smoke prep brief"
     assert reread.prep_brief_requested_at is not None
+    assert reread.prep_brief_requested_at.tzinfo is not None, \
+        "prep_brief_requested_at came back NAIVE on PG — the view's " \
+        "timezone.now() subtraction would raise (dashboard bug class)"
     assert not OneOnOneSession.objects.for_manager(m2.id).filter(
         prep_brief__isnull=False,
     ).exists(), "m2 sees m1's prep brief — TenantManager regression"

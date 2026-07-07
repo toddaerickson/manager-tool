@@ -1047,7 +1047,13 @@ def _gather_prep_changes(session, manager_id):
     member = session.team_member
     prev = (
         OneOnOneSession.objects.for_manager(manager_id)
-        .filter(team_member=member, status="completed")
+        # session_date__lt bounds the baseline to sessions BEFORE the
+        # one being prepped — with recurring 1:1s several drafts exist
+        # at once, and completing a later-dated one out of order must
+        # not become the "since" cutoff for an earlier draft (review
+        # finding). TEXT-date lexicographic compare is chronological.
+        .filter(team_member=member, status="completed",
+                session_date__lt=session.session_date)
         .exclude(pk=session.pk)
         .order_by("-session_date")
         .first()
@@ -1073,7 +1079,19 @@ def _gather_prep_changes(session, manager_id):
         team_member=member,
     )
     if since:
-        fb_qs = fb_qs.filter(created_at__date__gt=since)
+        # created_at is a TIMESTAMP column: build a Python-side AWARE
+        # cutoff instead of a `__date__gt` lookup — that lookup's
+        # AT TIME ZONE cast buckets UTC-stored values into the wrong
+        # local day near midnight on PG while SQLite tests stay green
+        # (the PR #106 bug class; see events.py's recap cutoff).
+        # "Since the last 1:1" == strictly after that calendar day,
+        # i.e. >= local midnight of the following day — mirrors the
+        # note_date__gt semantics above.
+        from datetime import datetime, time as dt_time
+        cutoff = timezone.make_aware(datetime.combine(
+            date.fromisoformat(since) + timedelta(days=1), dt_time.min,
+        ))
+        fb_qs = fb_qs.filter(created_at__gte=cutoff)
     feedback = [
         f"{f.feedback_type}: {_cap(f.behavior or f.situation)}"
         for f in fb_qs.order_by("-created_at")[:_PREP_MAX_ITEMS]

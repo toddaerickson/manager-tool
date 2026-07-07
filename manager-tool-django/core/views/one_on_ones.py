@@ -244,7 +244,15 @@ def one_on_ones_autosave(request, session_id: int):
 
     if changed:
         session.updated_at = timezone.now()
-        session.save()
+        # Explicit update_fields: a full-row save() would write back the
+        # STALE prep_brief this request fetched at start, silently
+        # erasing a brief the background thread committed mid-request
+        # (PR 8 review finding — autosave fires every 2s while the ~10s
+        # generation runs).
+        session.save(update_fields=[
+            "direct_notes", "manager_notes", "followup_notes",
+            "tags", "event", "updated_at",
+        ])
 
     now_str = timezone.localtime().strftime("%I:%M %p").lstrip("0")
     return render(request, "_partials/meeting_save_indicator.html", {
@@ -269,7 +277,9 @@ def one_on_ones_complete(request, session_id: int):
     else:
         session.status = "completed"
     session.updated_at = timezone.now()
-    session.save()
+    # update_fields for the same reason as autosave: never write back a
+    # stale prep_brief fetched before a background generation finished.
+    session.save(update_fields=["status", "updated_at"])
     log_mutation(manager.id, "update", "OneOnOneSession", session.id,
                  f"Status: {old_status} → {session.status}")
     return redirect("meetings-detail", session_id=session.id)
@@ -387,25 +397,47 @@ def one_on_ones_prep_brief_generate(request, session_id: int):
         OneOnOneSession.objects.for_manager(manager.id), pk=session_id,
     )
 
+    stamp = timezone.now()
     session.prep_brief = None
-    session.prep_brief_requested_at = timezone.now()
+    session.prep_brief_requested_at = stamp
     session.save(update_fields=["prep_brief", "prep_brief_requested_at"])
 
     from django.conf import settings
     if getattr(settings, "COACHING_ENABLED", True):
         import threading
 
-        def _generate(session_id, manager_id):
+        def _generate(session_id, manager_id, stamp):
             try:
                 from coaching.services import generate_prep_brief
                 brief = generate_prep_brief(session_id, manager_id)
                 if brief:
-                    OneOnOneSession.objects.filter(pk=session_id).update(
-                        prep_brief=brief,
+                    # CAS-style guard (the #128 double-tap doctrine): the
+                    # write lands only if requested_at still carries THIS
+                    # request's stamp. A Regenerate/Retry click re-stamps
+                    # the row, so a slower, earlier thread's late result
+                    # is discarded instead of overwriting the newer brief
+                    # with stale content.
+                    updated = OneOnOneSession.objects.filter(
+                        pk=session_id, prep_brief_requested_at=stamp,
+                    ).update(prep_brief=brief)
+                    if updated:
+                        log_mutation(manager_id, "update", "OneOnOneSession",
+                                     session_id, "AI prep brief generated",
+                                     actor="system")
+                    else:
+                        logger.info(
+                            "Stale prep-brief result discarded for session "
+                            "%d (regenerated meanwhile)", session_id,
+                        )
+                else:
+                    # Falsy-but-no-exception (empty AI response): the 60s
+                    # timeout will surface failed/retry — log so the
+                    # cause is findable (review finding: parity with the
+                    # exception path).
+                    logger.warning(
+                        "Prep brief generation returned empty for "
+                        "session %d", session_id,
                     )
-                    log_mutation(manager_id, "update", "OneOnOneSession",
-                                 session_id, "AI prep brief generated",
-                                 actor="system")
             except Exception:
                 # Logged and DROPPED on purpose: prep_brief stays NULL,
                 # so the poll's 60s timeout renders the failed/retry
@@ -415,7 +447,8 @@ def one_on_ones_prep_brief_generate(request, session_id: int):
                 )
 
         threading.Thread(
-            target=_generate, args=(session.id, manager.id), daemon=True,
+            target=_generate, args=(session.id, manager.id, stamp),
+            daemon=True,
         ).start()
 
     return _render_prep_brief(request, session)

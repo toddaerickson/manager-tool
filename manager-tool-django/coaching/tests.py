@@ -445,3 +445,55 @@ class TestGeneratePrepBrief:
             password_hash="h", email="brief_other@example.com",
         )
         assert generate_prep_brief(cur.id, other.id) is None
+
+    # ---- review-round regression tests (PR #139 code review) ----
+
+    def test_feedback_since_cutoff_included_and_old_excluded(self):
+        """The PR #106 bug class: feedback filtering must use an aware
+        datetime cutoff, not __date__gt. Seed one feedback AFTER the
+        last 1:1 day (must appear) and one ON it (must not), with real
+        created_at values — the original seed left created_at NULL,
+        which silently skipped the whole Feedback branch."""
+        from datetime import datetime, time as dt_time
+
+        import coaching.services as svc
+        from core.models import Feedback
+        from django.utils import timezone as tz
+        m, tm, _prev, cur = self._seed()
+        Feedback.objects.filter(manager_id=m.id).delete()
+        # last completed 1:1 is 2026-06-20 (from _seed)
+        after = tz.make_aware(datetime.combine(
+            datetime(2026, 7, 1).date(), dt_time(10, 0)))
+        on_day = tz.make_aware(datetime.combine(
+            datetime(2026, 6, 20).date(), dt_time(23, 50)))
+        Feedback.objects.create(
+            manager_id=m.id, team_member=tm, feedback_type="positive",
+            behavior="Nailed the audit walkthrough", created_at=after,
+        )
+        Feedback.objects.create(
+            manager_id=m.id, team_member=tm, feedback_type="constructive",
+            behavior="Pre-1:1 feedback that must not appear",
+            created_at=on_day,
+        )
+        from core.models import OneOnOneSession
+        session = OneOnOneSession.objects.for_manager(m.id).get(pk=cur.id)
+        changes = svc._gather_prep_changes(session, m.id)
+        joined = " | ".join(changes["feedback"])
+        assert "Nailed the audit walkthrough" in joined
+        assert "must not appear" not in joined
+
+    def test_prev_session_baseline_ignores_later_completed_sessions(self):
+        """Out-of-order completion: a LATER-dated completed 1:1 must not
+        become the 'since' baseline for an earlier draft (it would
+        suppress all real history)."""
+        import coaching.services as svc
+        from core.models import OneOnOneSession
+        m, tm, _prev, cur = self._seed()  # cur is 2026-07-06 draft
+        OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-07-20",
+            status="completed",
+        )
+        session = OneOnOneSession.objects.for_manager(m.id).get(pk=cur.id)
+        changes = svc._gather_prep_changes(session, m.id)
+        assert changes["prev_date"] == "2026-06-20", \
+            "baseline must be the last completed 1:1 BEFORE this session"
