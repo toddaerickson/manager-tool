@@ -127,6 +127,7 @@ def one_on_ones_new(request):
     if err:
         return err
     form = OneOnOneSessionForm(manager_id=manager.id)
+    form.initial["session_date"] = date.today()
     return render(request, "meetings_new.html", {"form": form})
 
 

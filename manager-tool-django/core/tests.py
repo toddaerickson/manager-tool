@@ -3851,6 +3851,15 @@ class TestOneOnOneSessions:
         assert "Alice" in body       # this manager's member is selectable
         assert "Bob" not in body     # another manager's member is not
 
+    def test_new_meeting_page_defaults_date_to_today(self, client):
+        from datetime import date as _date
+        self._setup(client)
+        body = client.get("/meetings/new/").content.decode()
+        # Parity with the in-page 'Start new meeting' fold-out, which
+        # pre-fills today (one_on_ones_list). The <input type="date">
+        # renders value="YYYY-MM-DD".
+        assert _date.today().isoformat() in body
+
     def test_search_filters_by_notes_text(self, client):
         """?q= filters drafts/completed by direct/manager/followup notes."""
         m, tm = self._setup(client)

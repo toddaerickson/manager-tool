@@ -97,7 +97,7 @@ The sidebar is organized into Manager → Directs → Reference. Settings/Log Ou
 
 ```
 MANAGER:    Dashboard · Upcoming · Manager Journal · Schedule Event · To Do · Decisions
-DIRECTS:    Meetings · 1:1 Notes · Delegations · Feedback · Goals · Career Dev
+DIRECTS:    New 1:1 · Meetings · 1:1 Notes · Delegations · Feedback · Goals · Career Dev
 REFERENCE:  Analytics · History · Resources · Team · ── · Settings · Log Out
 ```
 
