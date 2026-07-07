@@ -212,6 +212,15 @@ STORAGES = {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
+# stdlib mimetypes doesn't know .webmanifest; without this the PWA
+# manifest (roadmap PR 7) is served application/octet-stream and some
+# browsers refuse to install.
+WHITENOISE_MIMETYPES = {".webmanifest": "application/manifest+json"}
+# The manifest's icon srcs are UNhashed /static/icons/... paths (a
+# static JSON file can't run {% static %}). They only resolve because
+# WHITENOISE_KEEP_ONLY_HASHED_FILES defaults to False, keeping the
+# original-name files in collectstatic output. Do not flip that setting
+# on — it would silently 404 every PWA icon.
 
 
 # --- Security headers (AUDIT L12 parity from .streamlit/config.toml) ---
