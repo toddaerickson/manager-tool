@@ -254,6 +254,9 @@ class ActionItem(models.Model):
     # NULL = live row. Same pattern as TeamMember.deleted_at (indexed:
     # the undo-window and purge queries filter on it every page load).
     deleted_at = models.DateTimeField(blank=True, null=True, db_index=True)
+    # Priority star — starred rows sort first on the To Do list and
+    # dashboard next-actions. A flag, not a level, by design.
+    starred = models.BooleanField(default=False)
 
     objects = ActionItemManager()
 

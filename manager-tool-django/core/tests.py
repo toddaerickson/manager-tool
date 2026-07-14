@@ -2231,6 +2231,111 @@ class TestTodosDelegate:
 
 
 @pytest.mark.django_db
+class TestTodosStar:
+    """POST /todos/<id>/star/ — priority star toggle."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from core.models import ActionItem
+        m = Manager.objects.create(
+            username="todd_t8", display_name="Todd",
+            password_hash="x", email="todd_t8@example.com",
+        )
+        self._login_as(client, "todd_t8@example.com")
+        ai = ActionItem.objects.create(
+            description="Starrable", manager_id=m.id, status="pending",
+        )
+        return m, ai
+
+    def test_toggle_on_and_off(self, client):
+        m, ai = self._setup(client)
+        assert client.post(f"/todos/{ai.id}/star/").status_code == 200
+        ai.refresh_from_db()
+        assert ai.starred is True
+        client.post(f"/todos/{ai.id}/star/")
+        ai.refresh_from_db()
+        assert ai.starred is False
+
+    def test_starred_rows_sort_first(self, client):
+        from core.models import ActionItem
+        m, ai = self._setup(client)  # undated, unstarred
+        ActionItem.objects.create(
+            description="EarlyDue", manager_id=m.id, status="pending",
+            due_date="2099-01-01",
+        )
+        ActionItem.objects.create(
+            description="LateButStarred", manager_id=m.id, status="pending",
+            due_date="2099-12-31", starred=True,
+        )
+        body = client.get("/todos/").content.decode()
+        assert body.index("LateButStarred") < body.index("EarlyDue") < body.index("Starrable")
+
+    def test_star_cross_tenant_returns_404(self, client):
+        from core.models import ActionItem
+        self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_t8", display_name="Other",
+            password_hash="x", email="other_t8@example.com",
+        )
+        other = ActionItem.objects.create(
+            description="other", manager_id=m2.id, status="pending",
+        )
+        resp = client.post(f"/todos/{other.id}/star/")
+        assert resp.status_code == 404
+        other.refresh_from_db()
+        assert other.starred is False
+
+    def test_star_completed_or_deleted_returns_404(self, client):
+        from django.utils import timezone
+        from core.models import ActionItem
+        m, ai = self._setup(client)
+        done = ActionItem.objects.create(
+            description="done", manager_id=m.id, status="completed",
+        )
+        gone = ActionItem.objects.create(
+            description="gone", manager_id=m.id, status="pending",
+            deleted_at=timezone.now(),
+        )
+        assert client.post(f"/todos/{done.id}/star/").status_code == 404
+        assert client.post(f"/todos/{gone.id}/star/").status_code == 404
+
+    def test_star_keeps_delegated_flag(self, client):
+        from core.models import Delegation, TeamMember
+        m, ai = self._setup(client)
+        tm = TeamMember.objects.create(name="Sam", manager_id=m.id)
+        Delegation.objects.create(
+            manager_id=m.id, team_member=tm, task="StarFlagDeleg",
+            status="active",
+        )
+        body = client.post(f"/todos/{ai.id}/star/?delegated=1").content.decode()
+        assert "StarFlagDeleg" in body  # merged view preserved in rebuild
+
+    def test_starred_overdue_first_on_dashboard(self, client):
+        from datetime import date, timedelta
+        from core.models import ActionItem
+        m, ai = self._setup(client)
+        past = (date.today() - timedelta(days=2)).isoformat()
+        ActionItem.objects.create(
+            description="PlainOverdue", manager_id=m.id,
+            status="pending", due_date=past,
+        )
+        ActionItem.objects.create(
+            description="StarOverdue", manager_id=m.id,
+            status="pending", due_date=past, starred=True,
+        )
+        body = client.get("/dashboard/panels/overview/").content.decode()
+        assert body.index("StarOverdue") < body.index("PlainOverdue")
+        assert "★" in body
+
+
+@pytest.mark.django_db
 class TestTodosShowDelegated:
     """?delegated=1 merges active Delegations into the pending table."""
 
