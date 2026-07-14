@@ -54,9 +54,6 @@
                   shadow-lg md:shadow-none">
       <div class="px-3 py-3 border-b border-slate-200">
         <div class="font-display text-xl font-semibold tracking-tight whitespace-nowrap">Manager Tool</div>
-        {% if request.manager %}
-          <div class="text-xs text-slate-500 mt-1 truncate">{{ request.manager.display_name }}</div>
-        {% endif %}
       </div>
 
       {% comment %} Global search (roadmap PR 3) — compact sidebar widget;
