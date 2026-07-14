@@ -14,11 +14,11 @@
     <tbody class="divide-y divide-slate-100 text-sm">
       {% for t in completed %}
       <tr id="todo-completed-row-{{ t.id }}" class="hover:bg-slate-50">
-        <td class="px-3 py-1.5 text-slate-700 line-through">{{ t.description }}</td>
-        <td class="px-3 py-1.5 text-xs text-slate-500 tabular-nums">
+        <td class="px-3 py-[3px] text-slate-700 line-through">{{ t.description }}</td>
+        <td class="px-3 py-[3px] text-xs text-slate-500 tabular-nums">
           {% if t.completed_at %}{{ t.completed_at|date:"m/d/y H:i" }}{% else %}—{% endif %}
         </td>
-        <td class="px-3 py-1.5 text-right">
+        <td class="px-3 py-[3px] text-right">
           <button type="button"
                   hx-post="{% url 'todos-uncomplete' t.id %}{% if show_delegated %}?delegated=1{% endif %}"
                   hx-target="#todo-completed"

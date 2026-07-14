@@ -90,61 +90,61 @@
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Manager</div>
           <a href="{% url 'dashboard' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'dashboard' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Dashboard</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'dashboard' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Dashboard</a>
           <a href="{% url 'inbox' %}"
-             class="flex items-center px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'inbox' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Inbox
+             class="flex items-center px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'inbox' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Inbox
             <span id="inbox-badge" hx-get="{% url 'inbox-badge' %}" hx-trigger="load" hx-swap="outerHTML" class="hidden"></span>
           </a>
           <a href="{% url 'events-upcoming' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-upcoming' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Upcoming</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'events-upcoming' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Upcoming</a>
           <a href="{% url 'journal' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'journal' or request.resolver_match.url_name == 'journal-edit' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Manager Journal</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'journal' or request.resolver_match.url_name == 'journal-edit' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Manager Journal</a>
           <a href="{% url 'events-schedule' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'events-schedule' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Schedule Event</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'events-schedule' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Schedule Event</a>
           <a href="{% url 'todos' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'todos' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">To Do</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'todos' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">To Do</a>
           <a href="{% url 'delegations' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'delegations' or request.resolver_match.url_name == 'delegations-edit' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Delegations</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'delegations' or request.resolver_match.url_name == 'delegations-edit' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Delegations</a>
           <a href="{% url 'decisions' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'decisions' or request.resolver_match.url_name == 'decisions-edit' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Decisions</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'decisions' or request.resolver_match.url_name == 'decisions-edit' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Decisions</a>
         </div>
 
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Directs</div>
           <a href="{% url 'meetings-new' %}"
              title="Start a new 1:1 meeting (10/10/10 recorder)"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'meetings-new' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">New 1:1</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'meetings-new' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">New 1:1</a>
           <a href="{% url 'meetings' %}"
              title="Structured 1:1 session records (10/10/10 recorder)"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'meetings' or request.resolver_match.url_name == 'meetings-detail' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Meetings</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'meetings' or request.resolver_match.url_name == 'meetings-detail' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Meetings</a>
           <a href="{% url 'notes' %}"
              title="Async between-meeting jots — for structured sessions, use Meetings"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'notes' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Notes</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'notes' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Notes</a>
           <a href="{% url 'feedback' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'feedback' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Feedback</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'feedback' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Feedback</a>
           <a href="{% url 'goals' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'goals' or request.resolver_match.url_name == 'goals-edit' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Goals</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'goals' or request.resolver_match.url_name == 'goals-edit' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Goals</a>
           <a href="{% url 'career-dev' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'career-dev' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Career Dev</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'career-dev' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Career Dev</a>
         </div>
 
         <div>
           <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Reference</div>
           <a href="{% url 'analytics' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'analytics' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Analytics</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'analytics' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Analytics</a>
           <a href="{% url 'history' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'history' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">History</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'history' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">History</a>
           <a href="{% url 'audit-log' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'audit-log' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Audit Log</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'audit-log' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Audit Log</a>
           <a href="{% url 'resources' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'resources' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Resources</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'resources' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Resources</a>
           <a href="{% url 'team' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'team' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Team</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'team' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Team</a>
           <hr class="border-slate-200 my-2">
           <a href="{% url 'settings' %}"
-             class="block px-2 py-1.5 rounded {% if request.resolver_match.url_name == 'settings' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Settings</a>
+             class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'settings' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Settings</a>
           {% if request.user.is_authenticated %}
-            <a href="{% url 'account_logout' %}" class="block px-2 py-1.5 rounded hover:bg-slate-100">Log Out</a>
+            <a href="{% url 'account_logout' %}" class="block px-2 py-1.5 md:py-0.5 rounded hover:bg-slate-100">Log Out</a>
           {% endif %}
         </div>
       </nav>
