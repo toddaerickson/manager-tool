@@ -295,8 +295,96 @@ def _exercise_orm() -> None:
     reread = OneOnOneSession.objects.for_manager(m1.id).get(pk=session.pk)
     assert reread.actual_duration_minutes is None
 
+    _exercise_todo_soft_delete_and_delegate(m1, m2)
     _exercise_recurring_events_no_orphan(m1)
     _exercise_dashboard_naive_timestamp(m1)
+
+
+def _exercise_todo_soft_delete_and_delegate(m1, m2) -> None:
+    """To Do overhaul: deleted_at (migration 0015) round-trip, the
+    soft-delete/undo query shapes, and the delegate-promotion
+    transaction — all on real PG.
+
+    1. deleted_at round-trips and active_for_manager /
+       recently_deleted_for_manager filter correctly (proves the ALTER
+       TABLE applied; SQLite suite can't).
+    2. The purge query shape (deleted_at__lt=cutoff DELETE) runs on PG.
+    3. Delegate promotion (create Delegation + delete ActionItem) is
+       atomic — forced-failure no-orphan assertion, mirroring the
+       recurring-events guard.
+    4. Bidirectional isolation for the new query paths.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from core.models import ActionItem, ActionItemManager, Delegation, TeamMember
+
+    _step("ActionItem.deleted_at (To Do overhaul) round-trip on real PG")
+    todo = ActionItem.objects.create(
+        manager_id=m1.id, description="smoke soft-delete", status="pending",
+    )
+    assert ActionItem.objects.active_for_manager(m1.id).filter(pk=todo.pk).exists()
+    todo.deleted_at = timezone.now()
+    todo.save(update_fields=["deleted_at"])
+    reread = ActionItem.objects.for_manager(m1.id).get(pk=todo.pk)
+    assert reread.deleted_at is not None, "deleted_at did not round-trip on PG"
+    assert not ActionItem.objects.active_for_manager(m1.id).filter(pk=todo.pk).exists(), \
+        "soft-deleted to-do still visible via active_for_manager"
+    assert ActionItem.objects.recently_deleted_for_manager(m1.id).filter(pk=todo.pk).exists(), \
+        "fresh soft-delete missing from recently_deleted_for_manager"
+    assert not ActionItem.objects.recently_deleted_for_manager(m2.id).filter(pk=todo.pk).exists(), \
+        "m2 sees m1's deleted to-do — TenantManager regression"
+
+    _step("expired soft-deletes drop out of the undo window + purge shape")
+    todo.deleted_at = timezone.now() - timedelta(days=ActionItemManager.UNDO_WINDOW_DAYS, hours=1)
+    todo.save(update_fields=["deleted_at"])
+    assert not ActionItem.objects.recently_deleted_for_manager(m1.id).filter(pk=todo.pk).exists(), \
+        "expired soft-delete still inside the undo window"
+    cutoff = timezone.now() - timedelta(days=ActionItemManager.UNDO_WINDOW_DAYS)
+    ActionItem.objects.for_manager(m1.id).filter(deleted_at__lt=cutoff).delete()
+    assert not ActionItem.objects.for_manager(m1.id).filter(pk=todo.pk).exists(), \
+        "purge DELETE did not remove the expired row on PG"
+
+    _step("delegate promotion is atomic (forced-failure no-orphan)")
+    from django.db import transaction
+
+    member = TeamMember.objects.active_for_manager(m1.id).first()
+    assert member is not None, "smoke seed should have created a team member"
+    promo = ActionItem.objects.create(
+        manager_id=m1.id, description="smoke promote", status="pending",
+        due_date="2026-09-01",
+    )
+    deleg_before = Delegation.objects.for_manager(m1.id).count()
+    try:
+        with transaction.atomic():
+            Delegation.objects.create(
+                manager_id=m1.id, team_member=member, task=promo.description,
+                autonomy_level="guided", check_in_date=promo.due_date,
+                status="active", notes="Promoted from To Do",
+                created_at=timezone.now(),
+            )
+            raise RuntimeError("smoke: forced failure before todo delete")
+    except RuntimeError:
+        pass
+    assert Delegation.objects.for_manager(m1.id).count() == deleg_before, \
+        "NO-ORPHAN FAIL: Delegation row survived the rolled-back promotion"
+    assert ActionItem.objects.active_for_manager(m1.id).filter(pk=promo.pk).exists(), \
+        "to-do vanished despite rolled-back promotion"
+
+    _step("delegate promotion happy path on real PG")
+    with transaction.atomic():
+        d = Delegation.objects.create(
+            manager_id=m1.id, team_member=member, task=promo.description,
+            autonomy_level="guided", check_in_date=promo.due_date,
+            status="active", notes="Promoted from To Do",
+            created_at=timezone.now(),
+        )
+        promo.delete()
+    assert d.check_in_date == "2026-09-01"
+    assert not ActionItem.objects.for_manager(m1.id).filter(pk=promo.pk).exists()
+    assert not Delegation.objects.for_manager(m2.id).filter(pk=d.pk).exists(), \
+        "m2 sees m1's promoted delegation — TenantManager regression"
 
 
 def _exercise_dashboard_naive_timestamp(manager) -> None:

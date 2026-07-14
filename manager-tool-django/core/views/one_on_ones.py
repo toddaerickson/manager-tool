@@ -189,7 +189,7 @@ def one_on_ones_detail(request, session_id: int):
             )
 
     context = get_member_context(manager.id, session.team_member)
-    action_items = ActionItem.objects.for_manager(manager.id).filter(
+    action_items = ActionItem.objects.active_for_manager(manager.id).filter(
         one_on_one_session=session,
     ).order_by("-created_at")
     action_form = MeetingActionItemForm()
@@ -355,7 +355,7 @@ def one_on_ones_add_action(request, session_id: int):
         log_mutation(manager.id, "create", "ActionItem", item.id,
                      f"Action from meeting: {item.description[:60]}")
 
-    action_items = ActionItem.objects.for_manager(manager.id).filter(
+    action_items = ActionItem.objects.active_for_manager(manager.id).filter(
         one_on_one_session=session,
     ).order_by("-created_at")
     action_form = MeetingActionItemForm()

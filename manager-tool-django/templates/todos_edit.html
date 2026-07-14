@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Edit To-Do — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Edit To-Do</h1>
+    <p class="text-sm text-slate-500 mt-1">{{ todo.description|truncatewords:12 }}</p>
+  </header>
+
+  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
+    <form method="post" class="space-y-3">
+      {% csrf_token %}
+
+      <div>
+        <label for="{{ form.description.id_for_label }}" class="block text-sm font-medium text-slate-700">Description *</label>
+        {{ form.description }}
+        {% if form.description.errors %}<p class="text-xs text-red-600 mt-1">{{ form.description.errors.0 }}</p>{% endif %}
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label for="{{ form.due_date.id_for_label }}" class="block text-sm font-medium text-slate-700">Due date</label>
+          {{ form.due_date }}
+          {% if form.due_date.errors %}<p class="text-xs text-red-600 mt-1">{{ form.due_date.errors.0 }}</p>{% endif %}
+        </div>
+        <div>
+          <label for="{{ form.due_time.id_for_label }}" class="block text-sm font-medium text-slate-700">Due time</label>
+          {{ form.due_time }}
+        </div>
+      </div>
+
+      <div>
+        <label for="{{ form.event.id_for_label }}" class="block text-sm font-medium text-slate-700">Related event (optional)</label>
+        {{ form.event }}
+      </div>
+
+      <p class="text-xs text-slate-500 pt-1">
+        Created {% if todo.created_at %}{{ todo.created_at|date:"m/d/y H:i" }}{% else %}—{% endif %}
+        · Status {{ todo.status|default:"pending" }}
+        {% if todo.completed_at %} · Completed {{ todo.completed_at|date:"m/d/y H:i" }}{% endif %}
+      </p>
+
+      <div class="flex items-center justify-between pt-2">
+        <a href="{% url 'todos' %}{% if show_delegated %}?delegated=1{% endif %}" class="text-sm text-slate-600 hover:text-slate-900 underline">Back to To Do</a>
+        <button type="submit" class="bg-accent-700 text-white text-sm px-4 py-2 rounded hover:bg-accent-800">Save changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -75,7 +75,7 @@ def analytics(request):
             })
 
     # Action item stats
-    all_actions = ActionItem.objects.for_manager(mid)
+    all_actions = ActionItem.objects.active_for_manager(mid)
     action_total = all_actions.count()
     action_completed = all_actions.filter(status="completed").count()
     action_pending = all_actions.filter(status="pending").count()

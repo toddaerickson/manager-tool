@@ -1,0 +1,41 @@
+{% comment %}
+Inline delegate picker — returned by GET todos-delegate and inserted
+directly after the to-do's row (hx-swap="afterend"). Confirming posts
+back to the same URL and rebuilds #todo-list; Cancel just removes the
+injected row client-side.
+{% endcomment %}
+<tr id="delegate-picker-{{ t.id }}" class="bg-accent-50">
+  <td colspan="3" class="px-3 py-2">
+    {% if members %}
+    <form hx-post="{% url 'todos-delegate' t.id %}{% if show_delegated %}?delegated=1{% endif %}"
+          hx-target="#todo-list"
+          hx-swap="innerHTML"
+          hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+          class="flex flex-wrap items-center gap-2">
+      <label for="delegate-member-{{ t.id }}" class="text-sm text-slate-700">
+        Delegate <span class="font-medium">“{{ t.description|truncatechars:60 }}”</span> to
+      </label>
+      <select id="delegate-member-{{ t.id }}" name="team_member_id" required
+              class="border border-slate-300 rounded px-2 py-1 bg-white text-base sm:text-sm min-h-11 sm:min-h-8">
+        {% for m in members %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
+      </select>
+      <button type="submit"
+              class="inline-flex items-center justify-center bg-accent-700 text-white text-xs font-medium px-3 rounded hover:bg-accent-800 min-h-11 sm:min-h-8">
+        Delegate
+      </button>
+      <button type="button" onclick="this.closest('tr').remove()"
+              class="inline-flex items-center justify-center text-xs font-medium text-slate-500 hover:text-slate-700 px-2 min-h-11 sm:min-h-8">
+        Cancel
+      </button>
+    </form>
+    {% else %}
+    <div class="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+      No active team members — add one under <a href="{% url 'team' %}" class="underline">Team</a> first.
+      <button type="button" onclick="this.closest('tr').remove()"
+              class="inline-flex items-center justify-center text-xs font-medium text-slate-500 hover:text-slate-700 px-2 min-h-11 sm:min-h-8">
+        Dismiss
+      </button>
+    </div>
+    {% endif %}
+  </td>
+</tr>

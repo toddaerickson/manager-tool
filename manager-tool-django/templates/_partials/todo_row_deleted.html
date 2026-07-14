@@ -1,0 +1,9 @@
+{% comment %}
+Returned by todos-delete on success.
+- HTMX target is the row; outerHTML swap with no top-level content
+  removes it from the pending list
+- OOB swap refreshes the Recently deleted section
+{% endcomment %}
+<div id="todo-deleted" hx-swap-oob="true">
+  {% include "_partials/todo_deleted_list.html" %}
+</div>

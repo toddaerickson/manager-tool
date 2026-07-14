@@ -119,7 +119,7 @@ def get_member_context(manager_id, team_member):
         "active_goals": Goal.objects.for_manager(manager_id).filter(
             team_member=team_member,
         ).exclude(status__in=["met", "not_met"]),
-        "open_actions": ActionItem.objects.for_manager(manager_id).filter(
+        "open_actions": ActionItem.objects.active_for_manager(manager_id).filter(
             one_on_one_session__team_member=team_member,
             status__in=["pending", "in_progress"],
         ),

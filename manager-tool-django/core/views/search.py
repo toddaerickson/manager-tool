@@ -190,7 +190,7 @@ def _build_groups(mid, q):
     } for d in delegations]})
 
     todos = hits(
-        ActionItem.objects.for_manager(mid).filter(
+        ActionItem.objects.active_for_manager(mid).filter(
             Q(description__icontains=q) | Q(assignee__icontains=q)
         )
     )
