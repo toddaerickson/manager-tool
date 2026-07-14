@@ -82,13 +82,13 @@
         <div id="quick-add-toast"></div>
       </form>
 
-      <nav class="flex-1 overflow-y-auto px-2 py-4 space-y-2 text-sm">
+      <nav class="flex-1 overflow-y-auto px-2 py-4 space-y-2 text-[13px] text-slate-900/90">
         {% comment %}
         Sidebar IA mirrors CLAUDE.md. Only Dashboard is implemented in
         Phase 4; others are visible placeholders for Phase 5 builds.
         {% endcomment %}
         <div>
-          <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Manager</div>
+          <div class="px-2 text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Manager</div>
           <a href="{% url 'dashboard' %}"
              class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'dashboard' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Dashboard</a>
           <a href="{% url 'inbox' %}"
@@ -110,7 +110,7 @@
         </div>
 
         <div>
-          <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Directs</div>
+          <div class="px-2 text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Directs</div>
           <a href="{% url 'meetings-new' %}"
              title="Start a new 1:1 meeting (10/10/10 recorder)"
              class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'meetings-new' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">New 1:1</a>
@@ -129,7 +129,7 @@
         </div>
 
         <div>
-          <div class="px-2 text-xs uppercase tracking-wider text-slate-500 mb-1">Reference</div>
+          <div class="px-2 text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Reference</div>
           <a href="{% url 'analytics' %}"
              class="block px-2 py-1.5 md:py-0.5 rounded {% if request.resolver_match.url_name == 'analytics' %}bg-accent-700 text-white{% else %}hover:bg-slate-100{% endif %}">Analytics</a>
           <a href="{% url 'history' %}"
