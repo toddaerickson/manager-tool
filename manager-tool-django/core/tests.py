@@ -223,10 +223,11 @@ class TestDashboardView:
         resp = client.get("/dashboard/")
         assert resp.status_code == 200
         body = resp.content.decode()
-        # Phase 4: shell renders before HTMX panel loads. Sidebar shows
-        # the manager's display name; overview panel placeholder is
-        # present (the panel itself is fetched separately).
-        assert "Todd" in body
+        # Phase 4: shell renders before HTMX panel loads. The sidebar
+        # brand block deliberately does NOT show the manager's name
+        # (removed per operator, 2026-07-14); overview panel placeholder
+        # is present (the panel itself is fetched separately).
+        assert "Todd" not in body
         assert "overview-panel" in body
         assert "/dashboard/panels/overview/" in body
 
