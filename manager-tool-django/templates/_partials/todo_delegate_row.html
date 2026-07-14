@@ -5,7 +5,7 @@ back to the same URL and rebuilds #todo-list; Cancel just removes the
 injected row client-side.
 {% endcomment %}
 <tr id="delegate-picker-{{ t.id }}" class="bg-accent-50">
-  <td colspan="3" class="px-3 py-2">
+  <td colspan="4" class="px-3 py-2">
     {% if members %}
     <form hx-post="{% url 'todos-delegate' t.id %}{% if show_delegated %}?delegated=1{% endif %}"
           hx-target="#todo-list"

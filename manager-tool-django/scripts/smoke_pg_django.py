@@ -346,6 +346,30 @@ def _exercise_todo_soft_delete_and_delegate(m1, m2) -> None:
     assert not ActionItem.objects.for_manager(m1.id).filter(pk=todo.pk).exists(), \
         "purge DELETE did not remove the expired row on PG"
 
+    _step("starred flag (star PR) round-trip + ordering on real PG")
+    star = ActionItem.objects.create(
+        manager_id=m1.id, description="smoke starred", status="pending",
+        starred=True,
+    )
+    reread = ActionItem.objects.active_for_manager(m1.id).get(pk=star.pk)
+    assert reread.starred is True, "starred did not round-trip on PG"
+    ordered = list(
+        ActionItem.objects.active_for_manager(m1.id)
+        .filter(status="pending")
+        .order_by("-starred", "id")
+        .values_list("starred", flat=True)
+    )
+    assert ordered and ordered[0] is True, \
+        "boolean DESC ordering did not put starred first on PG"
+    # Same atomic NOT-toggle UPDATE the todos_star view runs.
+    from django.db.models import BooleanField, ExpressionWrapper, Q
+    ActionItem.objects.active_for_manager(m1.id).filter(pk=star.pk).update(
+        starred=ExpressionWrapper(~Q(starred=True), output_field=BooleanField()),
+    )
+    assert ActionItem.objects.for_manager(m1.id).get(pk=star.pk).starred is False, \
+        "NOT-toggle UPDATE expression did not flip starred on PG"
+    star.delete()
+
     _step("delegate promotion is atomic (forced-failure no-orphan)")
     from django.db import transaction
 

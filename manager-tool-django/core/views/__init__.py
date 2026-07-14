@@ -34,6 +34,7 @@ from core.views.todos import (  # noqa: F401
     todos_edit,
     todos_list,
     todos_restore,
+    todos_star,
     todos_uncomplete,
 )
 from core.views.journal import (  # noqa: F401

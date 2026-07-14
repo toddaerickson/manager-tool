@@ -368,12 +368,12 @@ def dashboard_overview(request):
     overdue_todos = (
         ActionItem.objects.active_for_manager(mid)
         .filter(status="pending", due_date__isnull=False, due_date__lt=today_iso)
-        .order_by("due_date")[:5]
+        .order_by("-starred", "due_date")[:5]
     )
     for t in overdue_todos:
         actions.append({
             "urgency": 1, "icon": "!",
-            "text": f"Overdue: {t.description[:50]}",
+            "text": f"{'★ ' if t.starred else ''}Overdue: {t.description[:50]}",
             "detail": f"Due {t.due_date}",
             "url": "/todos/",
         })

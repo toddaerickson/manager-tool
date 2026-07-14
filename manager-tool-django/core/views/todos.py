@@ -54,6 +54,7 @@ def _pending_rows(manager_id: int, show_delegated: bool) -> list:
         rows.append({
             "kind": "todo",
             "id": t.id,
+            "starred": t.starred,
             "description": t.description,
             "due_date": t.due_date,
             "due_time": t.due_time,
@@ -71,6 +72,7 @@ def _pending_rows(manager_id: int, show_delegated: bool) -> list:
             rows.append({
                 "kind": "delegation",
                 "id": d.id,
+                "starred": False,
                 "description": d.task,
                 "due_date": d.check_in_date,
                 "due_time": None,
@@ -79,6 +81,7 @@ def _pending_rows(manager_id: int, show_delegated: bool) -> list:
                 "edit_url": reverse("delegations-edit", args=[d.id]),
             })
     rows.sort(key=lambda r: (
+        not r["starred"],
         r["due_date"] is None, r["due_date"] or "",
         r["due_time"] is None, r["due_time"] or "",
         r["id"],
@@ -202,6 +205,30 @@ def todos_uncomplete(request, todo_id: int):
         **_list_context(manager.id, _show_delegated(request)),
         "completed": _completed(manager.id),
     })
+
+
+@login_required
+@require_http_methods(["POST"])
+def todos_star(request, todo_id: int):
+    """HTMX: toggle the priority star. Returns the rebuilt pending
+    list because starring changes sort order (starred rows first).
+    Single atomic UPDATE (NOT starred) like the sibling toggle views —
+    no read-modify-write window."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    from django.db.models import BooleanField, ExpressionWrapper, Q
+    updated = (
+        ActionItem.objects.active_for_manager(manager.id)
+        .filter(pk=todo_id, status="pending")
+        .update(starred=ExpressionWrapper(
+            ~Q(starred=True), output_field=BooleanField(),
+        ))
+    )
+    if updated == 0:
+        return HttpResponse(status=404)
+    return render(request, "_partials/todo_list.html",
+                  _list_context(manager.id, _show_delegated(request)))
 
 
 @login_required
