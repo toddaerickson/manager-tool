@@ -57,14 +57,14 @@ def generate_weekly_digest(manager_id):
 
     # Overdue action items
     overdue = (
-        ActionItem.objects.for_manager(manager_id)
+        ActionItem.objects.active_for_manager(manager_id)
         .filter(status="pending", due_date__lt=today_iso)
         .order_by("due_date")[:10]
     )
 
     # Pending action items
     pending = (
-        ActionItem.objects.for_manager(manager_id)
+        ActionItem.objects.active_for_manager(manager_id)
         .filter(status="pending")
         .order_by("due_date")[:10]
     )

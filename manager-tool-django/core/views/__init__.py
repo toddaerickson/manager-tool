@@ -29,8 +29,11 @@ from core.views.events import (  # noqa: F401
 from core.views.todos import (  # noqa: F401
     todos_add,
     todos_complete,
+    todos_delegate,
     todos_delete,
+    todos_edit,
     todos_list,
+    todos_restore,
     todos_uncomplete,
 )
 from core.views.journal import (  # noqa: F401

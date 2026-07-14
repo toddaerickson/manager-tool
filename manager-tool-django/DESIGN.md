@@ -10,7 +10,7 @@ A deliberate visual identity for Manager Tool. The point is to NOT look like gen
 
 ## Color
 
-- **Neutral base:** slate (`bg-slate-50` page, `text-slate-900`, `bg-slate-900` sidebar).
+- **Neutral base:** slate (`bg-slate-50` page, `text-slate-900`, `bg-white` sidebar with a `border-r border-slate-200` — the sidebar matches the main canvas rather than inverting it).
 - **One accent:** teal, exposed as the `accent-*` scale (`accent-700` = #0f766e). Use it for primary actions, the active nav state, and primary links. One accent, used consistently, not a rainbow.
 - **Semantic status only:** red / amber / emerald for error / warning / success and the team-health traffic lights. These carry meaning; never use them decoratively.
 

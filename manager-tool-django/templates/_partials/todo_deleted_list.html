@@ -1,27 +1,32 @@
-{% if completed %}
+{% comment %}
+Recently deleted section — soft-deleted to-dos inside the 1-day undo
+window. Restore clears deleted_at; expired rows are hard-deleted on the
+next To Do page load (opportunistic purge in views.todos.todos_list).
+{% endcomment %}
+{% if deleted %}
 <details class="bg-white border border-slate-200 rounded-md overflow-x-auto">
   <summary class="px-3 py-2 cursor-pointer select-none text-sm font-medium text-slate-600">
-    Recently completed ({{ completed|length }})
+    Recently deleted ({{ deleted|length }})
   </summary>
   <table class="min-w-full">
     <thead class="text-left text-xs uppercase tracking-wider text-slate-500 border-b border-slate-200">
       <tr>
         <th class="px-3 py-1.5 font-medium">Description</th>
-        <th class="px-3 py-1.5 font-medium">Completed</th>
+        <th class="px-3 py-1.5 font-medium">Deleted</th>
         <th class="px-3 py-1.5 font-medium"></th>
       </tr>
     </thead>
     <tbody class="divide-y divide-slate-100 text-sm">
-      {% for t in completed %}
-      <tr id="todo-completed-row-{{ t.id }}" class="hover:bg-slate-50">
-        <td class="px-3 py-1.5 text-slate-700 line-through">{{ t.description }}</td>
-        <td class="px-3 py-1.5 text-xs text-slate-500 tabular-nums">
-          {% if t.completed_at %}{{ t.completed_at|date:"m/d/y H:i" }}{% else %}—{% endif %}
+      {% for t in deleted %}
+      <tr id="todo-deleted-row-{{ t.id }}" class="hover:bg-slate-50">
+        <td class="px-3 py-1.5 text-slate-500 break-words">{{ t.description }}</td>
+        <td class="px-3 py-1.5 text-xs text-slate-500 tabular-nums whitespace-nowrap">
+          {{ t.deleted_at|date:"m/d/y H:i" }}
         </td>
         <td class="px-3 py-1.5 text-right">
           <button type="button"
-                  hx-post="{% url 'todos-uncomplete' t.id %}{% if show_delegated %}?delegated=1{% endif %}"
-                  hx-target="#todo-completed"
+                  hx-post="{% url 'todos-restore' t.id %}{% if show_delegated %}?delegated=1{% endif %}"
+                  hx-target="#todo-deleted"
                   hx-swap="innerHTML"
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                   class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">
@@ -32,5 +37,8 @@
       {% endfor %}
     </tbody>
   </table>
+  <p class="px-3 py-1.5 text-xs text-slate-400 border-t border-slate-100">
+    Deleted to-dos stay here for 1 day, then are removed permanently.
+  </p>
 </details>
 {% endif %}

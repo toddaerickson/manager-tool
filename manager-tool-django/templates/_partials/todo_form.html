@@ -6,7 +6,7 @@ Phase 5.3.1: assignee removed (this is the manager's own list);
 due_time dropdown added next to due_date.
 {% endcomment %}
 <form id="todo-form"
-      hx-post="{% url 'todos-add' %}"
+      hx-post="{% url 'todos-add' %}{% if show_delegated %}?delegated=1{% endif %}"
       hx-target="#todo-form-wrap"
       hx-swap="innerHTML"
       class="space-y-3">

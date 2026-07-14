@@ -1719,7 +1719,9 @@ class TestTodosList:
         assert "Recently completed" in body
         assert "DoneOne" in body
 
-    def test_overdue_marker(self, client):
+    def test_overdue_is_red_bold_without_text_marker(self, client):
+        """Overdue dates render red + bold, not with an '(overdue)'
+        suffix (To Do overhaul)."""
         from datetime import timedelta, date
         from core.models import ActionItem
         m = self._setup(client)
@@ -1730,7 +1732,39 @@ class TestTodosList:
         )
         body = client.get("/todos/").content.decode()
         assert "LateThing" in body
-        assert "overdue" in body.lower()
+        assert "(overdue)" not in body
+        assert "text-red-600 font-bold" in body
+
+    def test_header_title_checkbox_and_date(self, client):
+        """Title line: 'To Do — Manager', Show Delegated? checkbox, and
+        today's date as MM/DD/YY. The old caption is gone."""
+        from datetime import date
+        self._setup(client)
+        body = client.get("/todos/").content.decode()
+        assert "To Do — Manager" in body
+        assert "Show Delegated?" in body
+        assert date.today().strftime("%m/%d/%y") in body
+        assert "work you're holding" not in body
+
+    def test_due_date_renders_mmddyy(self, client):
+        from core.models import ActionItem
+        m = self._setup(client)
+        ActionItem.objects.create(
+            description="DatedThing", manager_id=m.id,
+            status="pending", due_date="2099-06-01",
+        )
+        body = client.get("/todos/").content.decode()
+        assert "06/01/99" in body
+        assert "2099-06-01" not in body
+
+    def test_rows_link_to_edit_page(self, client):
+        from core.models import ActionItem
+        m = self._setup(client)
+        ai = ActionItem.objects.create(
+            description="ClickMe", manager_id=m.id, status="pending",
+        )
+        body = client.get("/todos/").content.decode()
+        assert f"/todos/{ai.id}/edit/" in body
 
 
 @pytest.mark.django_db
@@ -1894,7 +1928,8 @@ class TestTodosCompleteUncomplete:
 
 @pytest.mark.django_db
 class TestTodosDelete:
-    """DELETE /todos/<id>/delete/ — hard delete."""
+    """DELETE /todos/<id>/delete/ — soft delete with a 1-day undo
+    window (To Do overhaul)."""
 
     def _login_as(self, client, email):
         from django.contrib.auth import get_user_model
@@ -1904,25 +1939,51 @@ class TestTodosDelete:
         client.force_login(u)
         return u
 
-    def test_delete_removes_row(self, client):
-        from core.models import ActionItem
+    def _setup(self, client):
         m = Manager.objects.create(
             username="todd_t4", display_name="Todd",
             password_hash="x", email="todd_t4@example.com",
         )
         self._login_as(client, "todd_t4@example.com")
-        ai = ActionItem.objects.create(description="X", manager_id=m.id)
+        return m
+
+    def test_delete_soft_deletes_row(self, client):
+        from core.models import ActionItem
+        m = self._setup(client)
+        ai = ActionItem.objects.create(
+            description="X", manager_id=m.id, status="pending",
+        )
         resp = client.delete(f"/todos/{ai.id}/delete/")
         assert resp.status_code == 200
-        assert not ActionItem.objects.filter(pk=ai.id).exists()
+        ai.refresh_from_db()  # row survives, stamped
+        assert ai.deleted_at is not None
+
+    def test_deleted_row_leaves_pending_appears_in_recently_deleted(self, client):
+        from core.models import ActionItem
+        m = self._setup(client)
+        ai = ActionItem.objects.create(
+            description="GoneSoon", manager_id=m.id, status="pending",
+        )
+        client.delete(f"/todos/{ai.id}/delete/")
+        body = client.get("/todos/").content.decode()
+        assert "Recently deleted" in body
+        assert f"/todos/{ai.id}/restore/" in body
+        # Not in the pending table anymore
+        assert f'id="todo-row-{ai.id}"' not in body
+
+    def test_delete_already_deleted_returns_404(self, client):
+        from django.utils import timezone
+        from core.models import ActionItem
+        m = self._setup(client)
+        ai = ActionItem.objects.create(
+            description="X", manager_id=m.id, status="pending",
+            deleted_at=timezone.now(),
+        )
+        assert client.delete(f"/todos/{ai.id}/delete/").status_code == 404
 
     def test_delete_cross_tenant_returns_404(self, client):
         from core.models import ActionItem
-        Manager.objects.create(
-            username="todd_t4b", display_name="Todd",
-            password_hash="x", email="todd_t4b@example.com",
-        )
-        self._login_as(client, "todd_t4b@example.com")
+        self._setup(client)
         m2 = Manager.objects.create(
             username="other_t4", display_name="Other",
             password_hash="x", email="other_t4@example.com",
@@ -1930,7 +1991,358 @@ class TestTodosDelete:
         other = ActionItem.objects.create(description="other", manager_id=m2.id)
         resp = client.delete(f"/todos/{other.id}/delete/")
         assert resp.status_code == 404
-        assert ActionItem.objects.filter(pk=other.id).exists()
+        other.refresh_from_db()
+        assert other.deleted_at is None
+
+    def test_restore_within_window(self, client):
+        from django.utils import timezone
+        from core.models import ActionItem
+        m = self._setup(client)
+        ai = ActionItem.objects.create(
+            description="ComeBack", manager_id=m.id, status="pending",
+            deleted_at=timezone.now(),
+        )
+        resp = client.post(f"/todos/{ai.id}/restore/")
+        assert resp.status_code == 200
+        ai.refresh_from_db()
+        assert ai.deleted_at is None
+        body = client.get("/todos/").content.decode()
+        assert "ComeBack" in body
+
+    def test_restore_after_window_returns_404(self, client):
+        from datetime import timedelta
+        from django.utils import timezone
+        from core.models import ActionItem
+        m = self._setup(client)
+        ai = ActionItem.objects.create(
+            description="TooLate", manager_id=m.id, status="pending",
+            deleted_at=timezone.now() - timedelta(days=2),
+        )
+        assert client.post(f"/todos/{ai.id}/restore/").status_code == 404
+
+    def test_restore_cross_tenant_returns_404(self, client):
+        from django.utils import timezone
+        from core.models import ActionItem
+        self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_t4r", display_name="Other",
+            password_hash="x", email="other_t4r@example.com",
+        )
+        other = ActionItem.objects.create(
+            description="other", manager_id=m2.id, status="pending",
+            deleted_at=timezone.now(),
+        )
+        assert client.post(f"/todos/{other.id}/restore/").status_code == 404
+
+    def test_expired_rows_purged_on_page_load(self, client):
+        from datetime import timedelta
+        from django.utils import timezone
+        from core.models import ActionItem
+        m = self._setup(client)
+        expired = ActionItem.objects.create(
+            description="Expired", manager_id=m.id, status="pending",
+            deleted_at=timezone.now() - timedelta(days=2),
+        )
+        fresh = ActionItem.objects.create(
+            description="Fresh", manager_id=m.id, status="pending",
+            deleted_at=timezone.now() - timedelta(hours=1),
+        )
+        client.get("/todos/")
+        assert not ActionItem.objects.filter(pk=expired.id).exists()
+        assert ActionItem.objects.filter(pk=fresh.id).exists()
+
+    def test_deleted_excluded_from_completed_and_dashboard(self, client):
+        """Soft-deleted rows must vanish everywhere: completed section,
+        dashboard next-actions, and search."""
+        from datetime import date, timedelta
+        from django.utils import timezone
+        from core.models import ActionItem
+        m = self._setup(client)
+        past = (date.today() - timedelta(days=3)).isoformat()
+        ActionItem.objects.create(
+            description="ZombieOverdue", manager_id=m.id, status="pending",
+            due_date=past, deleted_at=timezone.now(),
+        )
+        zombie_done = ActionItem.objects.create(
+            description="ZombieDone", manager_id=m.id, status="completed",
+            completed_at=timezone.now(), deleted_at=timezone.now(),
+        )
+        body = client.get("/todos/").content.decode()
+        # Gone from Recently completed (it shows under Recently deleted)
+        assert f'id="todo-completed-row-{zombie_done.id}"' not in body
+        assert f"/todos/{zombie_done.id}/restore/" in body
+        assert "ZombieOverdue" not in client.get("/dashboard/panels/overview/").content.decode()
+        assert "ZombieOverdue" not in client.get("/search/?q=Zombie").content.decode()
+
+
+@pytest.mark.django_db
+class TestTodosEdit:
+    """GET/POST /todos/<id>/edit/ — full-entry page behind row click."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from core.models import ActionItem
+        m = Manager.objects.create(
+            username="todd_t5", display_name="Todd",
+            password_hash="x", email="todd_t5@example.com",
+        )
+        self._login_as(client, "todd_t5@example.com")
+        ai = ActionItem.objects.create(
+            description="Edit me", manager_id=m.id, status="pending",
+            due_date="2099-01-15",
+        )
+        return m, ai
+
+    def test_get_renders_full_entry(self, client):
+        m, ai = self._setup(client)
+        body = client.get(f"/todos/{ai.id}/edit/").content.decode()
+        assert "Edit me" in body
+        assert 'name="description"' in body
+
+    def test_post_updates_and_redirects(self, client):
+        m, ai = self._setup(client)
+        resp = client.post(f"/todos/{ai.id}/edit/", {
+            "description": "Edited text",
+            "due_date": "2099-02-20",
+            "due_time": "",
+        })
+        assert resp.status_code == 302
+        assert resp["Location"] == "/todos/"
+        ai.refresh_from_db()
+        assert ai.description == "Edited text"
+        assert ai.due_date == "2099-02-20"
+
+    def test_cross_tenant_returns_404(self, client):
+        from core.models import ActionItem
+        self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_t5", display_name="Other",
+            password_hash="x", email="other_t5@example.com",
+        )
+        other = ActionItem.objects.create(
+            description="other", manager_id=m2.id, status="pending",
+        )
+        assert client.get(f"/todos/{other.id}/edit/").status_code == 404
+
+    def test_soft_deleted_returns_404(self, client):
+        from django.utils import timezone
+        m, ai = self._setup(client)
+        ai.deleted_at = timezone.now()
+        ai.save()
+        assert client.get(f"/todos/{ai.id}/edit/").status_code == 404
+
+
+@pytest.mark.django_db
+class TestTodosDelegate:
+    """GET/POST /todos/<id>/delegate/ — promote a to-do to a Delegation."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from core.models import ActionItem, TeamMember
+        m = Manager.objects.create(
+            username="todd_t6", display_name="Todd",
+            password_hash="x", email="todd_t6@example.com",
+        )
+        self._login_as(client, "todd_t6@example.com")
+        tm = TeamMember.objects.create(name="Pat Direct", manager_id=m.id)
+        ai = ActionItem.objects.create(
+            description="Hand this off", manager_id=m.id, status="pending",
+            due_date="2099-03-01",
+        )
+        return m, tm, ai
+
+    def test_get_returns_member_picker(self, client):
+        m, tm, ai = self._setup(client)
+        body = client.get(f"/todos/{ai.id}/delegate/").content.decode()
+        assert f'id="delegate-picker-{ai.id}"' in body
+        assert "Pat Direct" in body
+
+    def test_post_creates_delegation_and_removes_todo(self, client):
+        from core.models import ActionItem, Delegation
+        m, tm, ai = self._setup(client)
+        resp = client.post(f"/todos/{ai.id}/delegate/", {
+            "team_member_id": tm.id,
+        })
+        assert resp.status_code == 200
+        d = Delegation.objects.for_manager(m.id).get()
+        assert d.task == "Hand this off"
+        assert d.team_member_id == tm.id
+        assert d.check_in_date == "2099-03-01"  # due date carries over
+        assert d.status == "active"
+        assert not ActionItem.objects.filter(pk=ai.id).exists()
+
+    def test_post_with_other_managers_member_returns_404(self, client):
+        """Cannot delegate to another manager's team member — and the
+        to-do must survive the failed attempt."""
+        from core.models import ActionItem, Delegation, TeamMember
+        m, tm, ai = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_t6", display_name="Other",
+            password_hash="x", email="other_t6@example.com",
+        )
+        foreign = TeamMember.objects.create(name="Foreign", manager_id=m2.id)
+        resp = client.post(f"/todos/{ai.id}/delegate/", {
+            "team_member_id": foreign.id,
+        })
+        assert resp.status_code == 404
+        assert ActionItem.objects.filter(pk=ai.id).exists()
+        assert Delegation.objects.count() == 0
+
+    def test_post_with_garbage_member_id_returns_400(self, client):
+        from core.models import ActionItem
+        m, tm, ai = self._setup(client)
+        resp = client.post(f"/todos/{ai.id}/delegate/", {
+            "team_member_id": "not-a-number",
+        })
+        assert resp.status_code == 400
+        assert ActionItem.objects.filter(pk=ai.id).exists()
+
+    def test_delegate_cross_tenant_todo_returns_404(self, client):
+        from core.models import ActionItem
+        self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_t6b", display_name="Other",
+            password_hash="x", email="other_t6b@example.com",
+        )
+        other = ActionItem.objects.create(
+            description="other", manager_id=m2.id, status="pending",
+        )
+        assert client.get(f"/todos/{other.id}/delegate/").status_code == 404
+
+    def test_completed_todo_cannot_be_delegated(self, client):
+        m, tm, ai = self._setup(client)
+        ai.status = "completed"
+        ai.save()
+        assert client.get(f"/todos/{ai.id}/delegate/").status_code == 404
+
+
+@pytest.mark.django_db
+class TestTodosShowDelegated:
+    """?delegated=1 merges active Delegations into the pending table."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from core.models import Delegation, TeamMember
+        m = Manager.objects.create(
+            username="todd_t7", display_name="Todd",
+            password_hash="x", email="todd_t7@example.com",
+        )
+        self._login_as(client, "todd_t7@example.com")
+        tm = TeamMember.objects.create(name="Sam Direct", manager_id=m.id)
+        Delegation.objects.create(
+            manager_id=m.id, team_member=tm, task="Delegated work",
+            status="active", check_in_date="2099-04-01",
+        )
+        Delegation.objects.create(
+            manager_id=m.id, team_member=tm, task="Finished delegation",
+            status="completed",
+        )
+        return m, tm
+
+    def test_hidden_by_default(self, client):
+        self._setup(client)
+        body = client.get("/todos/").content.decode()
+        assert "Delegated work" not in body
+
+    def test_shown_with_flag_active_only(self, client):
+        self._setup(client)
+        body = client.get("/todos/?delegated=1").content.decode()
+        assert "Delegated work" in body
+        assert "Sam Direct" in body
+        assert "Finished delegation" not in body  # non-active excluded
+
+    def test_flag_isolates_tenants(self, client):
+        from core.models import Delegation, TeamMember
+        self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_t7", display_name="Other",
+            password_hash="x", email="other_t7@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Foreign", manager_id=m2.id)
+        Delegation.objects.create(
+            manager_id=m2.id, team_member=tm2, task="Foreign delegated work",
+            status="active",
+        )
+        body = client.get("/todos/?delegated=1").content.decode()
+        assert "Foreign delegated work" not in body
+
+    def test_uncomplete_with_flag_keeps_delegations_in_oob_list(self, client):
+        """Review fix: the uncomplete button threads ?delegated=1, so
+        the OOB #todo-list rebuild keeps the merged delegation rows."""
+        from django.utils import timezone
+        from core.models import ActionItem
+        m, tm = self._setup(client)
+        done = ActionItem.objects.create(
+            description="FinishedTodo", manager_id=m.id,
+            status="completed", completed_at=timezone.now(),
+        )
+        body = client.post(f"/todos/{done.id}/uncomplete/?delegated=1").content.decode()
+        assert "Delegated work" in body  # merged view preserved
+        page = client.get("/todos/?delegated=1").content.decode()
+        assert f"/todos/{done.id}/complete/?delegated=1" in page  # buttons carry flag
+
+    def test_edit_save_redirect_preserves_flag(self, client):
+        from core.models import ActionItem
+        m, tm = self._setup(client)
+        ai = ActionItem.objects.create(
+            description="EditFlag", manager_id=m.id, status="pending",
+        )
+        resp = client.post(f"/todos/{ai.id}/edit/?delegated=1", {
+            "description": "EditFlag2", "due_date": "", "due_time": "",
+        })
+        assert resp.status_code == 302
+        assert resp["Location"] == "/todos/?delegated=1"
+
+    def test_purge_writes_system_audit_entry(self, client):
+        from datetime import timedelta
+        from django.utils import timezone
+        from core.models import ActionItem, AuditLog
+        m, tm = self._setup(client)
+        expired = ActionItem.objects.create(
+            description="PurgeMe", manager_id=m.id, status="pending",
+            deleted_at=timezone.now() - timedelta(days=2),
+        )
+        client.get("/todos/")
+        assert not ActionItem.objects.filter(pk=expired.id).exists()
+        entry = AuditLog.objects.for_manager(m.id).filter(
+            entity_type="ActionItem", entity_id=expired.id, action="delete",
+        ).first()
+        assert entry is not None and entry.actor_type == "system"
+
+    def test_checkbox_reflects_state(self, client):
+        import re
+        self._setup(client)
+
+        def is_checked(body):
+            m = re.search(r"<input[^>]*type=\"checkbox\"[^>]*>", body)
+            assert m, "Show Delegated? checkbox missing"
+            # \schecked\s matches the bare attribute but not the
+            # `this.checked` in the onchange handler.
+            return bool(re.search(r"\schecked\s", m.group(0)))
+
+        assert not is_checked(client.get("/todos/").content.decode())
+        assert is_checked(client.get("/todos/?delegated=1").content.decode())
 
 
 # ============================================================
@@ -3511,6 +3923,21 @@ class TestDigestService:
         assert "Weekly Digest" in subject
         assert "Digest Manager" in html
         assert "Overdue" in html
+
+    def test_digest_excludes_soft_deleted_todos(self):
+        """Review fix (To Do overhaul): soft-deleted to-dos must not be
+        emailed as overdue/pending work."""
+        from django.utils import timezone
+        from core.services.digest import generate_weekly_digest
+        m = self._seed()
+        ActionItem.objects.create(
+            manager_id=m.id, description="ZombieDigestTask",
+            due_date="2020-01-01", status="pending",
+            deleted_at=timezone.now(),
+        )
+        _, html = generate_weekly_digest(m.id)
+        assert "ZombieDigestTask" not in html
+        assert "Overdue task" in html  # the live one still shows
 
     def test_generate_weekly_digest_empty_manager(self):
         from core.services.digest import generate_weekly_digest
@@ -6957,7 +7384,8 @@ class TestPwaManifest:
         client.force_login(u)
         body = client.get("/dashboard/").content.decode()
         assert 'rel="manifest"' in body
-        assert 'name="theme-color" content="#0f172a"' in body
+        # Light chrome — the sidebar/page are white (To Do overhaul PR)
+        assert 'name="theme-color" content="#ffffff"' in body
         assert 'rel="apple-touch-icon"' in body
 
     @pytest.mark.django_db

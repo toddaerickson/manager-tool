@@ -810,7 +810,7 @@ def _weekly_plan_user_message(manager_id):
             )
 
     overdue_actions = (
-        ActionItem.objects.for_manager(manager_id)
+        ActionItem.objects.active_for_manager(manager_id)
         .filter(status="pending", due_date__lt=today_iso)
         .order_by("due_date")[:10]
     )
@@ -1106,7 +1106,7 @@ def _gather_prep_changes(session, manager_id):
 
     actions = [
         f"{_cap(a.description)[:120]} ({a.status})"
-        for a in ActionItem.objects.for_manager(manager_id)
+        for a in ActionItem.objects.active_for_manager(manager_id)
         .filter(one_on_one_session__team_member=member,
                 status__in=["pending", "in_progress"])
         .order_by("-created_at")[:_PREP_MAX_ITEMS]

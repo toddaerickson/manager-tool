@@ -1,17 +1,22 @@
 {% extends "base.html" %}
+{% load mt_extras %}
 
 {% block title %}To Do — Manager Tool{% endblock %}
 
 {% block content %}
 <div class="max-w-3xl">
-  <header class="mb-6">
-    <h1 class="text-2xl font-semibold">To Do</h1>
-    <p class="text-sm text-slate-500 mt-1">
-      Your task list — work you're holding. (Work entrusted to a direct lives in Delegations.)
-    </p>
+  <header class="mb-6 flex flex-wrap items-center gap-x-4 gap-y-1">
+    <h1 class="text-2xl font-semibold">To Do — Manager</h1>
+    <label class="inline-flex items-center gap-1.5 min-h-11 sm:min-h-0 text-sm text-slate-600 select-none cursor-pointer">
+      <input type="checkbox" class="h-4 w-4 accent-accent-700"
+             {% if show_delegated %}checked{% endif %}
+             onchange="location.href='{% url 'todos' %}' + (this.checked ? '?delegated=1' : '')">
+      Show Delegated?
+    </label>
+    <span class="ml-auto text-sm text-slate-500 tabular-nums">{{ today_iso|mmddyy }}</span>
   </header>
 
-  <details class="mb-6 bg-white border border-slate-200 rounded-md" {% if not pending %}open{% endif %}>
+  <details class="mb-6 bg-white border border-slate-200 rounded-md" {% if not rows %}open{% endif %}>
     <summary class="px-3 py-2 cursor-pointer select-none font-medium">Add to-do</summary>
     <div id="todo-form-wrap" class="px-3 pb-3">
       {% include "_partials/todo_form.html" %}
@@ -24,6 +29,10 @@
 
   <div id="todo-completed" class="mt-8">
     {% include "_partials/todo_completed_list.html" %}
+  </div>
+
+  <div id="todo-deleted" class="mt-4">
+    {% include "_partials/todo_deleted_list.html" %}
   </div>
 </div>
 {% endblock %}

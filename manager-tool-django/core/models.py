@@ -109,14 +109,15 @@ class Config(models.Model):
 # ============================================================
 
 
-class TeamMemberManager(TenantManager):
+class SoftDeleteTenantManager(TenantManager):
     """Adds soft-delete-aware queries on top of TenantManager.
 
     `for_manager(X)` keeps its original semantic (returns ALL rows for
     the manager, including soft-deleted) so existing callers and
     cross-tenant tests don't change shape. Use `active_for_manager(X)`
     in views/services that should never see deleted rows; use
-    `recently_deleted_for_manager(X)` for the 30-day undo UI.
+    `recently_deleted_for_manager(X)` for the undo UI. Subclasses set
+    UNDO_WINDOW_DAYS to their retention window.
     """
 
     UNDO_WINDOW_DAYS = 30
@@ -133,6 +134,21 @@ class TeamMemberManager(TenantManager):
             .filter(deleted_at__isnull=False, deleted_at__gte=cutoff)
             .order_by("-deleted_at")
         )
+
+
+class TeamMemberManager(SoftDeleteTenantManager):
+    """Members keep a 30-day undo window (hard-deleted by the
+    purge_deleted_team_members cron)."""
+
+    UNDO_WINDOW_DAYS = 30
+
+
+class ActionItemManager(SoftDeleteTenantManager):
+    """To-dos keep a 1-day undo window ("Recently deleted" on the To Do
+    page). Expired rows are hard-deleted opportunistically on To Do
+    page load — no cron needed at this scale."""
+
+    UNDO_WINDOW_DAYS = 1
 
 
 class TeamMember(models.Model):
@@ -234,8 +250,12 @@ class ActionItem(models.Model):
     status = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(blank=True, null=True)
     completed_at = models.DateTimeField(blank=True, null=True)
+    # Soft delete — "Recently deleted" undo window on the To Do page.
+    # NULL = live row. Same pattern as TeamMember.deleted_at (indexed:
+    # the undo-window and purge queries filter on it every page load).
+    deleted_at = models.DateTimeField(blank=True, null=True, db_index=True)
 
-    objects = TenantManager()
+    objects = ActionItemManager()
 
     class Meta:
         db_table = "action_items"

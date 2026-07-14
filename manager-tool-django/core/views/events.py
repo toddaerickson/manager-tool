@@ -366,7 +366,7 @@ def dashboard_overview(request):
 
     # Overdue to-dos
     overdue_todos = (
-        ActionItem.objects.for_manager(mid)
+        ActionItem.objects.active_for_manager(mid)
         .filter(status="pending", due_date__isnull=False, due_date__lt=today_iso)
         .order_by("due_date")[:5]
     )
