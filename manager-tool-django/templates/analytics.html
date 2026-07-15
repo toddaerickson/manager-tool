@@ -41,10 +41,10 @@
         <tbody class="divide-y divide-slate-100 text-sm">
           {% for m in meeting_cadence %}
           <tr class="hover:bg-slate-50">
-            <td class="px-3 py-1.5">{{ m.name }}</td>
-            <td class="px-3 py-1.5 text-slate-600">{{ m.last_date|default:"Never" }}</td>
-            <td class="px-3 py-1.5 text-right tabular-nums">{{ m.days_ago|default:"—" }}</td>
-            <td class="px-3 py-1.5">
+            <td class="px-3 py-[3px]">{{ m.name }}</td>
+            <td class="px-3 py-[3px] text-slate-600">{{ m.last_date|default:"Never" }}</td>
+            <td class="px-3 py-[3px] text-right tabular-nums">{{ m.days_ago|default:"—" }}</td>
+            <td class="px-3 py-[3px]">
               {% if m.days_ago is None %}
                 <span class="text-red-600 font-medium">Never met</span>
               {% elif m.days_ago > 14 %}
@@ -75,10 +75,10 @@
         <tbody class="divide-y divide-slate-100 text-sm">
           {% for f in feedback_ratios %}
           <tr class="hover:bg-slate-50">
-            <td class="px-3 py-1.5">{{ f.name }}</td>
-            <td class="px-3 py-1.5 text-green-700 text-right tabular-nums">{{ f.positive }}</td>
-            <td class="px-3 py-1.5 text-amber-700 text-right tabular-nums">{{ f.constructive }}</td>
-            <td class="px-3 py-1.5">
+            <td class="px-3 py-[3px]">{{ f.name }}</td>
+            <td class="px-3 py-[3px] text-green-700 text-right tabular-nums">{{ f.positive }}</td>
+            <td class="px-3 py-[3px] text-amber-700 text-right tabular-nums">{{ f.constructive }}</td>
+            <td class="px-3 py-[3px]">
               {% if f.ratio_pct >= 80 %}
                 <span class="text-green-600">{{ f.ratio_pct }}%</span>
               {% elif f.ratio_pct >= 60 %}

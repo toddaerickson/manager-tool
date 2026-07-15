@@ -31,14 +31,14 @@ updates without a full reload (D4 consistency fix).
       <tbody class="divide-y divide-slate-100 text-sm">
         {% for s in skills %}
         <tr id="skill-row-{{ s.id }}" class="hover:bg-slate-50">
-          <td class="px-3 py-1.5">{{ s.team_member.name }}</td>
-          <td class="px-3 py-1.5">{{ s.skill_name }}{% if s.notes %}<br><span class="text-xs text-slate-500">{{ s.notes|truncatewords:10 }}</span>{% endif %}</td>
-          <td class="px-3 py-1.5 text-slate-600">{{ s.proficiency|default:"—" }}</td>
-          <td class="px-3 py-1.5 text-xs text-slate-500">
+          <td class="px-3 py-[3px]">{{ s.team_member.name }}</td>
+          <td class="px-3 py-[3px]">{{ s.skill_name }}{% if s.notes %}<br><span class="text-xs text-slate-500">{{ s.notes|truncatewords:10 }}</span>{% endif %}</td>
+          <td class="px-3 py-[3px] text-slate-600">{{ s.proficiency|default:"—" }}</td>
+          <td class="px-3 py-[3px] text-xs text-slate-500">
             {% if s.is_strength %}<span class="bg-green-100 text-green-800 px-1.5 py-0.5 rounded">Strength</span>{% endif %}
             {% if s.is_growth_area %}<span class="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Growth</span>{% endif %}
           </td>
-          <td class="px-3 py-1.5 text-right">
+          <td class="px-3 py-[3px] text-right">
             <button type="button"
                     hx-delete="{% url 'skills-delete' s.id %}"
                     hx-target="#career-dev-content"
@@ -71,7 +71,7 @@ updates without a full reload (D4 consistency fix).
     {% if plans %}
     <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
       {% for p in plans %}
-      <div class="px-3 py-2.5 hover:bg-slate-50">
+      <div class="px-3 py-1.5 hover:bg-slate-50">
         <div class="flex items-center justify-between mb-1">
           <div>
             <span class="text-sm font-medium">{{ p.title }}</span>
@@ -171,7 +171,7 @@ updates without a full reload (D4 consistency fix).
     {% if convos %}
     <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
       {% for c in convos %}
-      <div class="px-3 py-2.5 hover:bg-slate-50">
+      <div class="px-3 py-1.5 hover:bg-slate-50">
         <div class="flex items-center justify-between mb-1">
           <span class="text-sm font-medium">{{ c.team_member.name }}</span>
           <span class="text-xs text-slate-500 tabular-nums">{{ c.conversation_date }}</span>

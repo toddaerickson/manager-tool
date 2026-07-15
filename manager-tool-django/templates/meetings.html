@@ -88,7 +88,7 @@
     <div class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">In progress</div>
     <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
       {% for s in drafts %}
-      <div id="meeting-row-{{ s.id }}" class="px-3 py-2.5 hover:bg-slate-50">
+      <div id="meeting-row-{{ s.id }}" class="px-3 py-1.5 hover:bg-slate-50">
         <div class="flex items-center justify-between mb-1">
           <div class="text-sm">
             <span class="font-medium">{{ s.team_member.name }}</span>
@@ -129,7 +129,7 @@
     {% if drafts %}<div class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2 mt-4">Completed</div>{% endif %}
     <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
       {% for s in completed %}
-      <div id="meeting-row-{{ s.id }}" class="px-3 py-2.5 hover:bg-slate-50">
+      <div id="meeting-row-{{ s.id }}" class="px-3 py-1.5 hover:bg-slate-50">
         <div class="flex items-center justify-between mb-1">
           <div class="text-sm">
             <span class="font-medium">{{ s.team_member.name }}</span>

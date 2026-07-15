@@ -38,7 +38,7 @@
   {% if results %}
   <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
     {% for w in results %}
-    <div class="px-3 py-2.5 hover:bg-slate-50">
+    <div class="px-3 py-1.5 hover:bg-slate-50">
       <div class="flex items-start justify-between gap-2">
         <p class="text-sm text-slate-800">{{ w.text }}</p>
         <span class="text-xs text-slate-400 shrink-0">#{{ w.number }}</span>
@@ -57,7 +57,7 @@
   <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
     {% for sec, count in sections.items %}
     <a href="?section={{ sec|urlencode }}"
-       class="block px-3 py-2.5 text-sm hover:bg-slate-50">
+       class="block px-3 py-1.5 text-sm hover:bg-slate-50">
       {{ sec }} <span class="text-xs text-slate-400 ml-1">({{ count }})</span>
     </a>
     {% endfor %}

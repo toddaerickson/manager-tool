@@ -13,11 +13,11 @@
   <tbody class="divide-y divide-slate-100 text-sm">
     {% for m in members %}
     <tr id="member-row-{{ m.id }}" class="hover:bg-slate-50">
-      <td class="px-3 py-1.5 font-medium">{{ m.name }}</td>
-      <td class="px-3 py-1.5 text-slate-600">{{ m.email|default:"—" }}</td>
-      <td class="px-3 py-1.5 text-slate-600">{{ m.role|default:"—" }}</td>
-      <td class="px-3 py-1.5 text-slate-600 tabular-nums">{{ m.start_date|default:"—" }}</td>
-      <td class="px-3 py-1.5 text-right">
+      <td class="px-3 py-[3px] font-medium">{{ m.name }}</td>
+      <td class="px-3 py-[3px] text-slate-600">{{ m.email|default:"—" }}</td>
+      <td class="px-3 py-[3px] text-slate-600">{{ m.role|default:"—" }}</td>
+      <td class="px-3 py-[3px] text-slate-600 tabular-nums">{{ m.start_date|default:"—" }}</td>
+      <td class="px-3 py-[3px] text-right">
         <button type="button"
                 hx-delete="{% url 'team-delete' m.id %}"
                 hx-target="#member-row-{{ m.id }}"
