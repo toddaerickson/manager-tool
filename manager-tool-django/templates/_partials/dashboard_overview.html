@@ -41,23 +41,23 @@ and a single uppercase section-header style. Numbers use tabular-nums
       <tbody class="divide-y divide-slate-100 text-sm">
         {% for m in team_health %}
         <tr class="hover:bg-slate-50">
-          <td class="px-3 py-1.5 font-medium">
+          <td class="px-3 py-[3px] font-medium">
             <a href="{% url 'notes' %}?member={{ m.id }}" class="text-slate-800 hover:underline">{{ m.name }}</a>
           </td>
-          <td class="px-3 py-1.5 text-slate-600 whitespace-nowrap">
+          <td class="px-3 py-[3px] text-slate-600 whitespace-nowrap">
             <span class="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle
               {% if m.meeting_status == 'red' %}bg-red-500{% elif m.meeting_status == 'yellow' %}bg-amber-400{% else %}bg-emerald-500{% endif %}"></span>
             {% if m.meeting_days != None %}{{ m.meeting_days }}d{% else %}Never{% endif %}
           </td>
-          <td class="px-3 py-1.5 text-slate-600 whitespace-nowrap">
+          <td class="px-3 py-[3px] text-slate-600 whitespace-nowrap">
             <span class="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle
               {% if m.fb_status == 'red' %}bg-red-500{% elif m.fb_status == 'yellow' %}bg-amber-400{% else %}bg-emerald-500{% endif %}"></span>
             {% if m.fb_days != None %}{{ m.fb_days }}d{% else %}Never{% endif %}
           </td>
-          <td class="px-3 py-1.5 text-right tabular-nums">
+          <td class="px-3 py-[3px] text-right tabular-nums">
             <a href="{% url 'goals' %}?member={{ m.id }}" class="hover:underline">{{ m.goals }}</a>
           </td>
-          <td class="px-3 py-1.5 text-right tabular-nums">
+          <td class="px-3 py-[3px] text-right tabular-nums">
             <a href="{% url 'delegations' %}?member={{ m.id }}" class="hover:underline">{{ m.delegations }}</a>
           </td>
         </tr>

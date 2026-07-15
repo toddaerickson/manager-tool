@@ -51,17 +51,17 @@
       <tbody class="divide-y divide-slate-100 text-sm">
         {% for r in rows %}
         <tr class="hover:bg-slate-50">
-          <td class="px-3 py-1.5 text-slate-500 whitespace-nowrap tabular-nums">{{ r.created_at|date:"Y-m-d H:i" }}</td>
-          <td class="px-3 py-1.5">
+          <td class="px-3 py-[3px] text-slate-500 whitespace-nowrap tabular-nums">{{ r.created_at|date:"Y-m-d H:i" }}</td>
+          <td class="px-3 py-[3px]">
             {% if r.actor_type == "system" %}
               <span class="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">System</span>
             {% else %}
               <span class="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">User</span>
             {% endif %}
           </td>
-          <td class="px-3 py-1.5 text-slate-700">{{ r.action }}</td>
-          <td class="px-3 py-1.5 text-slate-700">{{ r.entity_type }} <span class="text-xs text-slate-400 tabular-nums">#{{ r.entity_id }}</span></td>
-          <td class="px-3 py-1.5 text-slate-700">{{ r.summary }}</td>
+          <td class="px-3 py-[3px] text-slate-700">{{ r.action }}</td>
+          <td class="px-3 py-[3px] text-slate-700">{{ r.entity_type }} <span class="text-xs text-slate-400 tabular-nums">#{{ r.entity_id }}</span></td>
+          <td class="px-3 py-[3px] text-slate-700">{{ r.summary }}</td>
         </tr>
         {% endfor %}
       </tbody>

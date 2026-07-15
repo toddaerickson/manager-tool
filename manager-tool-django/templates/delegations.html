@@ -42,16 +42,16 @@
       <tbody class="divide-y divide-slate-100 text-sm">
         {% for d in active %}
         <tr id="delegation-row-{{ d.id }}" class="hover:bg-slate-50">
-          <td class="px-3 py-1.5 break-words">
+          <td class="px-3 py-[3px] break-words">
             {{ d.task }}
             {% if d.outcome_expected %}<p class="text-xs text-slate-500 mt-0.5" title="{{ d.outcome_expected }}">{{ d.outcome_expected|truncatewords:15 }}</p>{% endif %}
           </td>
-          <td class="px-3 py-1.5">{% if d.team_member %}{{ d.team_member.name }}{% else %}—{% endif %}</td>
-          <td class="px-3 py-1.5 tabular-nums {% if d.check_in_date and d.check_in_date < today_iso %}text-red-600 font-medium{% else %}text-slate-600{% endif %}">
+          <td class="px-3 py-[3px]">{% if d.team_member %}{{ d.team_member.name }}{% else %}—{% endif %}</td>
+          <td class="px-3 py-[3px] tabular-nums {% if d.check_in_date and d.check_in_date < today_iso %}text-red-600 font-medium{% else %}text-slate-600{% endif %}">
             {% if d.check_in_date %}{{ d.check_in_date }}{% if d.check_in_date < today_iso %} <span class="text-xs">(overdue)</span>{% endif %}{% else %}—{% endif %}
           </td>
-          <td class="px-3 py-1.5 text-slate-600">{{ d.autonomy_level|default:"—" }}</td>
-          <td class="px-3 py-1.5 text-right">
+          <td class="px-3 py-[3px] text-slate-600">{{ d.autonomy_level|default:"—" }}</td>
+          <td class="px-3 py-[3px] text-right">
             <div class="flex items-center justify-end gap-1">
               <a href="{% url 'delegations-edit' d.id %}" class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Edit</a>
               <button type="button"
@@ -89,9 +89,9 @@
         <tbody class="divide-y divide-slate-100 text-sm">
           {% for d in completed %}
           <tr>
-            <td class="px-3 py-1.5 text-slate-500">{{ d.task }}</td>
-            <td class="px-3 py-1.5 text-slate-500">{% if d.team_member %}{{ d.team_member.name }}{% else %}—{% endif %}</td>
-            <td class="px-3 py-1.5">
+            <td class="px-3 py-[3px] text-slate-500">{{ d.task }}</td>
+            <td class="px-3 py-[3px] text-slate-500">{% if d.team_member %}{{ d.team_member.name }}{% else %}—{% endif %}</td>
+            <td class="px-3 py-[3px]">
               <span class="text-xs px-1.5 py-0.5 rounded {% if d.status == 'completed' %}bg-emerald-100 text-emerald-700{% elif d.status == 'stalled' %}bg-amber-100 text-amber-700{% else %}bg-slate-100 text-slate-600{% endif %}">
                 {% for k, v in status_labels.items %}{% if k == d.status %}{{ v }}{% endif %}{% endfor %}
               </span>
