@@ -2,7 +2,7 @@
 
 Snapshot of where the Streamlit → Django migration stands. Update this doc when phase boundaries move; re-merge to main so it stays the source of truth for "where are we right now."
 
-**Last updated:** 2026-07-06
+**Last updated:** 2026-07-16
 **Live Django app:** https://manager-tool-django.onrender.com
 **Plan:** `MIGRATION_PLAN.md` · **Gates:** `PHASE_GATES.md` · **Open design questions:** `manager-tool-django/ARCHITECTURE_DEFICITS.md` · **Design system:** `manager-tool-django/DESIGN.md`
 
@@ -11,7 +11,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 ## TL;DR
 
 - **Phases 0–7 done.** Django is the sole production app (cutover 2026-05-10). All pages ported, coaching wired, crons running.
-- **Phase 8 (decommission) mostly done.** Streamlit is archived to `legacy/`, the legacy CLI is deleted, the Streamlit CI jobs are gone, and migration `0006` (drops `sessions`+`login_attempts`) is merged. Remaining: verify `0006` applied to prod, then delete the Neon dev branch.
+- **Phase 8 (decommission) DONE — the migration is complete.** Streamlit is archived to `legacy/`, the legacy CLI is deleted, the Streamlit CI jobs are gone, `0006` is directly verified on prod (0 leftover tables), and the Neon `dev-django` branch + the last `preview/pr-*` orphan were deleted 2026-07-16. Only the `production` (default) Neon branch remains.
 - **Streamlit is RETIRED**, not just frozen — code lives in `legacy/` as a 30-day rollback option only; it is not deployed.
 - **Render auto-deploys main.** `render.yaml` drives it; the build step runs `manage.py migrate`, so merges to `main` apply pending migrations automatically.
 - **Verify a deploy** with `GET /health/` → `{status, git_sha}` (the live commit SHA).
@@ -28,7 +28,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 | 5 — Page port | done | All sub-pages + dashboard + feedback + analytics/history/resources |
 | 6 — Background jobs | done | Calendar + coaching + digest cron + purge cron |
 | 7 — Cutover | **done** | Production live on Django as of 2026-05-10 |
-| 8 — Decommission | **mostly done** | Streamlit archived to `legacy/` (PR #93); `gui.py`/`manager_tool.py` deleted; Streamlit CI jobs removed; `0006` drops `sessions`+`login_attempts` (merged — verify it applied to prod); Neon dev branch deletion pending |
+| 8 — Decommission | **done** | Streamlit archived to `legacy/` (PR #93); `gui.py`/`manager_tool.py` deleted; Streamlit CI jobs removed; `0006` directly verified on prod; Neon `dev-django` + `preview/pr-131-django` branches deleted 2026-07-16 |
 
 ## Phase 7 — Cutover checklist
 
@@ -108,9 +108,9 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - [x] Streamlit CI jobs (`tests-sqlite`, `smoke-pg`) removed; Django jobs remain
 - [x] `sessions` + `login_attempts` models removed; `core/migrations/0006` drops the tables (`SeparateDatabaseAndState`, idempotent `DROP ... IF EXISTS`)
 - [x] README points contributors at the Django app
-- [x] **Verify `0006` applied to prod.** Confirmed 2026-05-26 by transitive proof: prod `/health` reports SHA `c78b708`, which has PR #110 (migration `0010_migrate_praise_notes_to_feedback`) in its ancestry. Django migrate is monotonic, so `0010` applied ⟹ `0001`–`0009` (including `0006`) applied. Direct `\dt sessions` / `\dt login_attempts` check still recommended next time someone has Neon SQL editor access, but no longer blocking.
-- [ ] Delete the Neon dev branch from the Neon console (manual — no API access from here)
-- [ ] Delete the orphaned `preview/pr-*` CI branches in Neon (one-time; the deterministic naming in `neon_workflow.yml` prevents new ones)
+- [x] **Verify `0006` applied to prod.** Confirmed 2026-05-26 by transitive proof (prod `/health` SHA had `0010` in its ancestry; migrate is monotonic). **Directly confirmed 2026-07-16:** an information_schema query against the production branch returned 0 rows for `sessions`/`login_attempts` (run via a one-off Actions workflow using CI's `NEON_API_KEY`).
+- [x] Delete the Neon dev branch — `dev-django` (`br-sweet-dust-aj35ltvq`) deleted 2026-07-16 via the Neon API from a one-off Actions workflow. Pre-deletion audit confirmed it was stale: Django migrations ended at `0005` (2026-05-11), newest data row 2026-05-05 — pre-cutover test data only. The local `.env` that pointed at it now uses `sqlite:///db.sqlite3`.
+- [x] Delete the orphaned `preview/pr-*` CI branches in Neon — only one existed (`preview/pr-131-django`), deleted 2026-07-16 in the same workflow run. New ones can't accumulate: `neon_workflow.yml` sets a 14-day `expires_at` on create and deletes on PR close. Post-deletion listing shows exactly one branch remaining: `production` (default).
 - [x] Delete the stale merged git branches `fix/event-dedupe` and `feat/event-time-dropdown` — already deleted on GitHub (auto-delete-merged-branches); local stale remote-tracking refs pruned 2026-05-26.
 
 `schema_postgres.sql`, `scripts/migrate_p2_config_to_id_pk.sql`, and `365_Great_Management_Ideas.md` stay at the repo root: the Django PG smoke test bootstraps the schema from the first two (`smoke_pg_django.py` mirrors the cutover bootstrap), and the coaching engine reads the wisdom library from the last (`coaching/services.py:107`). The other Streamlit `scripts/migrate_p1_*.sql` and `fix_sequences.sql` are pure history and live in `legacy/scripts/`.

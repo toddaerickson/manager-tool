@@ -86,8 +86,8 @@ The riskiest moment in the entire plan. **All five required:**
 
 After **at least one full week** of running fine on Django (cutover was 2026-05-10):
 - [x] Streamlit code moved to `legacy/` (not deleted — keep one rollback option in git for 30 days) — PR #93
-- [~] `sessions` and `login_attempts` tables dropped via Django migration (`0006`) — merged; **verify it ran cleanly in prod with `\dt`** (applies on the next Render deploy)
-- [ ] Neon dev branch deleted from Neon console
+- [x] `sessions` and `login_attempts` tables dropped via Django migration (`0006`) — directly verified on the prod branch 2026-07-16 (information_schema query returned 0 rows; run via a one-off Actions workflow using CI's `NEON_API_KEY`)
+- [x] Neon dev branch deleted — `dev-django` deleted via the Neon API 2026-07-16 after a pre-deletion audit confirmed only stale pre-cutover test data (migrations ended at `0005`, newest row 2026-05-05); the orphaned `preview/pr-131-django` CI branch was deleted in the same run. Only `production` (default) remains.
 - [x] README points new contributors at the Django app, not the Streamlit one — PR #93
 - [x] Audit L5 finally honored: `gui.py` and `manager_tool.py` deleted — PR #93
 
