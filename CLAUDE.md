@@ -118,7 +118,7 @@ The smoke test seeds a second manager via app helpers (NOT raw SQL — raw-SQL s
 
 ## Known limitations
 
-- Recurring-series calendar invites: the series parent sends one `RRULE:FREQ=…;COUNT=…` invite; RFC 5545 monthly on day 29–31 SKIPS short months while the app's materializer clamps to month-end — the app's Event rows stay the source of truth.
+- Recurring-series calendar invites: the series parent sends one `RRULE:FREQ=…;COUNT=…` invite (COUNT = actual series size in the DB — parent + children — so until-capped series and orphaned children degrade correctly; a parent invite stamps `calendar_invite_sent` on its children). Caveat: RFC 5545 monthly on day 29–31 SKIPS short months while the app's materializer clamps to month-end — the app's Event rows stay the source of truth.
 - Local dev runs on SQLite (`sqlite:///db.sqlite3` in `.env`); there is no standing Neon dev branch. To test against real PG locally, create a throwaway Neon branch and point `DATABASE_URL` at it.
 
 ---
