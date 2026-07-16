@@ -1,5 +1,7 @@
 # Phase Gates — Streamlit → Django Migration
 
+> **📁 HISTORICAL — all gates passed; migration complete 2026-07-16.** This checklist governed the Streamlit → Django migration and is closed. Nothing here guides new work — see `MIGRATION_STATUS.md` for the final record and `CLAUDE.md` for current architecture. The gate-failure protocol at the bottom remains good practice for any future phased work.
+
 Hard transition criteria for `MIGRATION_PLAN.md`. Definition-of-done in the plan is the *narrative*; this file is the *checklist*. **All items in a gate must be true before advancing.** A gate item that requires "decision" means a one-paragraph note committed to the repo, not a verbal commitment.
 
 The gates exist because the Streamlit codebase has shipped four PG-only bugs that pytest missed. The pattern that bites this code is "looks fine, ships, breaks in prod" — gates are the antidote.
