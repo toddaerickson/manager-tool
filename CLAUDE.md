@@ -3,172 +3,123 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
-Manager Tool is a management coaching journal with a dual-mode database (SQLite local / Neon PostgreSQL). The wisdom library contains 620 management ideas from 23 books.
 
-**The production app is the Django app** (`manager-tool-django/`). All development goes here. See `MIGRATION_STATUS.md` for phase progress and `MIGRATION_PLAN.md` for the full plan.
+Manager Tool is a single-manager management coaching journal: 1:1 meeting records, journal, delegations, feedback, goals, decisions, analytics, and an AI coaching layer grounded in a wisdom library of 620 management ideas from 23 books (`365_Great_Management_Ideas.md`).
 
-The original **Streamlit app was archived to `legacy/`** during Phase 8 decommission (cutover was 2026-05-10). It is frozen and not deployed — kept in git as a rollback option only. The module map below describes those archived files for historical reference.
-
-## Module Map (archived Streamlit app, now under `legacy/`)
-| File | Role |
-|------|------|
-| `legacy/web_app.py` (2.9k lines) | Streamlit UI — all page functions, sidebar nav, `_DISPATCH` table |
-| `legacy/database.py` (3.8k lines) | Dual-backend DB layer — helpers, schema, migrations, encryption |
-| `legacy/auth.py` | Session validation, login/logout, rate limiting |
-| `legacy/coaching.py` | Anthropic API integration for coaching suggestions |
-| `legacy/calendar_service.py` | ICS export and calendar integration |
-| `legacy/templates.py` | Email and notification templates |
-| `gui.py`, `manager_tool.py` | Deleted in Phase 8 (audit L5) |
+**The app is Django** (`manager-tool-django/`), live at https://manager-tool-django.onrender.com. It began as a Streamlit app that was migrated (Phases 0–8, complete 2026-07-16) and then decommissioned; the Streamlit code was deleted from the working tree and lives only in git history (last present under `legacy/` at commit `c252193`). `MIGRATION_STATUS.md`, `MIGRATION_PLAN.md`, `PHASE_GATES.md`, `PLAN.md`, and `AUDIT.md` are historical records — useful when reading old commits, not guidance for new work.
 
 ## Development Commands
-
-### Django app (active development)
 
 ```bash
 cd manager-tool-django
 
-# Run dev server
+# Run dev server (local dev uses SQLite via .env's DATABASE_URL)
 .venv/bin/python manage.py runserver
 
-# Run tests (SQLite in-memory, via settings_test.py)
-.venv/bin/pytest -v
-.venv/bin/pytest core/tests.py -v
+# Run tests (SQLite in-memory, via mt/settings_test.py)
+.venv/bin/pytest -q
 .venv/bin/pytest core/tests.py::TestClassName::test_name -v
 
-# PG smoke test (requires DATABASE_URL)
+# Lint (CI runs this before pytest)
+.venv/bin/ruff check .
+
+# PG smoke test (needs a real Postgres DATABASE_URL; CI runs it against postgres:16)
 DATABASE_URL=postgresql://... .venv/bin/python scripts/smoke_pg_django.py
 
 # Django migrations
 .venv/bin/python manage.py makemigrations
 .venv/bin/python manage.py migrate
 
-# Install deps
-pip install -r requirements.txt
+# Install deps (the .claude SessionStart hook does this on web sessions)
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
-### Streamlit app (frozen — bug fixes only)
-
-```bash
-# Run locally
-streamlit run web_app.py
-
-# Run tests (SQLite-only)
-python -m pytest tests/ -v
-python -m pytest tests/test_database.py::test_name -v
-
-# PG smoke test (requires DATABASE_URL)
-python scripts/smoke_pg.py
-
-# Install dev dependencies
-pip install -r requirements-dev.txt
-```
-
-## Django App Architecture (`manager-tool-django/`)
+## Architecture
 
 ### Stack
 
-Django 5.1 + django-allauth (Google OAuth) + django-htmx + Tailwind CSS. Deployed on Render via `render.yaml`. PG via Neon.
+Django 5.1 + django-allauth (Google OAuth only) + django-htmx + compiled Tailwind CSS. Deployed on Render via `render.yaml` (auto-deploys `main`; the build step runs `manage.py migrate`). Postgres via Neon (single `production` branch; Neon's serverless proxy handles pooling — no app-side pool). Sentry for errors. Verify any deploy with `GET /health/` → `{status, git_sha}`.
 
-**Visual design:** deliberate type + color system documented in `manager-tool-django/DESIGN.md` (Fraunces/Public Sans, single teal `accent-*`, tightened radius). Tokens live in `manager-tool-django/tailwind.config.js` and compile into `static/css/tw.css` (rebuild after class changes — command in base.html's head comment; render.yaml reruns it on every deploy). Build with `accent-*`/`font-display` rather than raw values, and check new UI against the forbidden-slop list in DESIGN.md.
+**Visual design:** deliberate type + color system documented in `manager-tool-django/DESIGN.md` (Fraunces/Public Sans, single teal `accent-*`, tightened radius). Tokens live in `tailwind.config.js` and compile into `static/css/tw.css` — rebuild after class changes (command in base.html's head comment; render.yaml reruns it on every deploy; `TestCompiledCssCoverage` fails CI on class-without-rebuild). Build with `accent-*`/`font-display` rather than raw values, and check new UI against the forbidden-slop list in DESIGN.md.
 
 ### Project layout
 
 - `mt/` — Django project: settings, urls, wsgi. `settings_test.py` overrides DB to SQLite `:memory:` for pytest.
-- `core/` — Single Django app: models, views, forms, middleware, services, management commands.
-- `coaching/` — Anthropic API integration (not yet ported from Streamlit).
-- `templates/` — Full-page templates. `_partials/` — HTMX fragment templates (swapped via `hx-target`).
-- `scripts/smoke_pg_django.py` — PG smoke test (mirrors Streamlit's `scripts/smoke_pg.py`).
+- `core/` — the main app. `core/views/` is a package, one module per domain (`journal.py`, `events.py`, `one_on_ones.py`, `inbox.py`, `search.py`, …) sharing helpers in `_common.py`. Models, forms, middleware, managers, services, and management commands (`send_weekly_digests`, `purge_deleted_team_members`, `poll_inbox_email` — all wired as Render crons).
+- `coaching/` — Anthropic API integration (`services.py`): daily coach suggestions, 1:1 prep briefs, SBI feedback drafting, digest "week plan". Reads the wisdom library from the repo-root `365_Great_Management_Ideas.md`. Per-manager API key from the DB first, `ANTHROPIC_API_KEY` env fallback.
+- `templates/` — full-page templates extending `base.html` (which holds the sidebar). `templates/_partials/` — HTMX fragments (swapped via `hx-target`).
+- `scripts/smoke_pg_django.py` — the PG safety net (see Testing).
 
-### Tenant isolation
+### Sidebar IA (3 sections)
 
-- `TenantManager` (`core/managers.py`) — custom manager on all tenant-scoped models. Views must call `.objects.for_manager(request.manager.id)` instead of `.objects.all()`. Raises `ValueError` if `manager_id` is None.
-- `ManagerBridgeMiddleware` (`core/middleware.py`) — maps allauth's `request.user.email` to the existing `Manager` row and sets `request.manager`. Views check `request.manager is None` → 403.
-
-### View pattern
-
-All views are function-based in `core/views.py`. Every view that touches tenant data is `@login_required` and gates on `request.manager`. HTMX requests return partials from `_partials/`; full-page requests return top-level templates extending `base.html`.
-
-### Date-shape decision
-
-Django ORM returns native `datetime.date`/`datetime.datetime` objects (unlike Streamlit's ISO-string normalization). `*_date` columns remain `TextField` because the DB stores `'YYYY-MM-DD'` text. `DateTimeField` columns (`created_at`, `updated_at`) return Python datetime objects. Before porting helpers, grep for `BETWEEN`, `startswith(`, `[:10]` patterns that assume string dates.
-
-## Sidebar IA (3 sections)
-The sidebar is organized into Manager → Directs → Reference. Settings/Log Out live inside Reference under a thin divider. Tile labels are deliberate; page-keys in `_DISPATCH` are stable across rename rounds so cached `nav_page` values from prior deploys keep resolving:
+Rendered in `templates/base.html`, active state via `request.resolver_match.url_name`:
 
 ```
 MANAGER:    Dashboard · Upcoming · Manager Journal · Schedule Event · To Do · Decisions
-DIRECTS:    New 1:1 · Meetings · 1:1 Notes · Delegations · Feedback · Goals · Career Dev
+DIRECTS:    New 1:1 · Meetings · Notes · Delegations · Feedback · Goals · Career Dev
 REFERENCE:  Analytics · History · Resources · Team · ── · Settings · Log Out
 ```
 
-Timeline is folded into Team detail. Clicking a member sets `st.session_state["team_member_id"]`; `page_team_roster` short-circuits to render the `_render_member_timeline(member_id, name)` body. Legacy `_DISPATCH["Timeline"]` and `_DISPATCH["Member Timeline"]` redirect to `page_team_roster`.
+Plus a sidebar quick-add box feeding the `/inbox/` triage queue, and a cross-model search box (`/search/?q=` across all 11 content models). Meetings = structured 10/10/10 records; Notes = async between-meeting jots.
 
-## Key Architecture Decisions
+### Tenant isolation
 
-### Database access
-- All reads/writes go through `_exec()` / `_fetchone()` / `_fetchall()` / `_exec_returning_id()` helpers. They handle the `?` → `%s` placeholder conversion (`_q()`) and PG/SQLite cursor differences. **Never call `conn.execute(...)` on PG paths** — psycopg2 connections don't expose `.execute()`; SQLite ones do, which is how this bug class slips past local tests.
-- `_fetchone` / `_fetchall` route through `_normalize_row()` which converts psycopg2's `datetime`/`date` returns to ISO strings so callers see uniform string-typed shapes on both backends.
-- Every user-owned helper takes a required `manager_id: int` and filters on it. `assert manager_id is not None` at the top of aggregator-style helpers — None must fail loud, never silently return zero rows.
+- `TenantManager` (`core/managers.py`) — custom manager on all tenant-scoped models. Views must call `.objects.for_manager(request.manager.id)` instead of `.objects.all()`. Raises `ValueError` if `manager_id` is None — None must fail loud, never silently return zero rows.
+- `ManagerBridgeMiddleware` (`core/middleware.py`) — maps allauth's `request.user.email` to the `Manager` row and sets `request.manager`. Views check `request.manager is None` → 403.
+- Every view that touches tenant data is `@login_required` and gates on `request.manager`. HTMX requests return partials; full-page requests return top-level templates.
 
-### Schema dual-write rule
-Every schema change touches **three** locations:
-1. A migration entry in `_MIGRATIONS` (`database.py:631`) for existing deploys.
-2. The `CREATE TABLE` in `schema_postgres.sql` for fresh PG deploys.
-3. The `CREATE TABLE` in the SQLite block in `database.py` for pytest fixtures.
+### Schema changes
 
-Indexes get the same treatment: in the migration AND in `schema_postgres.sql`'s index block. Skipping any of the three breaks one of {existing prod, fresh deploy, pytest}.
+One Django migration in `core/migrations/` is the whole change — merges to `main` apply it in prod via the Render build step. **Do not edit `schema_postgres.sql`** for new columns: it is the frozen cutover-era baseline that `smoke_pg_django.py` applies before `migrate --fake-initial` fakes `0001` and really applies `0002+`. Editing it to include a later migration's column would break the fake-initial handoff the smoke test exists to prove.
 
-### Date semantics
-- Date columns are TEXT (`YYYY-MM-DD`) on both backends. Lex order matches chronological order, so `text_col BETWEEN ? AND ?` with string params works on PG and SQLite.
-- TIMESTAMP columns (PG) / TEXT columns (SQLite) — use `_sql_date_of_timestamp(col)` to render either as a `'YYYY-MM-DD'` text value when comparing in WHERE clauses.
-- **Do NOT inline `_sql_current_date()` into a BETWEEN comparison.** On PG it returns a `date` and `text BETWEEN date AND date` is the same `UndefinedFunction` class that has bitten this codebase four times. Compute date bounds in Python (`date.today().isoformat()`) and bind as TEXT params.
+### Date semantics (inherited from the cutover)
+
+- `*_date` columns are TEXT `'YYYY-MM-DD'` (lex order == chronological, so string `BETWEEN` works). The ORM returns them as `str`; don't add `DateField`s to these without a real migration plan.
+- `created_at`/`updated_at` are real timestamps and come back as `datetime` objects.
+- Historical bug class (4 shipped instances in the Streamlit era): comparing TEXT dates against SQL `date`/timestamp expressions is `UndefinedFunction` on PG but passes on SQLite. Compute date bounds in Python (`date.today().isoformat()`) and pass as string params; never compare a TEXT column to `CURRENT_DATE` or `LEFT(timestamp, 10)` in raw SQL.
 
 ### Auth & secrets
-- Passwords use bcrypt; sensitive config values use Fernet encryption (fail-closed — refuses to write plaintext on init failure).
-- Server-side sessions in the `sessions` table (`session_token` cookie + `expires_at` + UA hash binding). Persistent rate-limited login via `login_attempts`.
-- `MANAGER_TOOL_ENV=prod` is required in production: it gates encryption-key auto-generation off and forces the SQLite fallback off when `DATABASE_URL` is set but Postgres is unreachable.
-- **Anthropic API key handling.** Never paste, echo, or log a real `ANTHROPIC_API_KEY` in chat, terminal output, commits, PRs, or tests — use placeholders like `sk-ant-test-...` when an assertion needs a value. If the key lives in a `.env` file, that file must be gitignored (`.env` and `.env.*` are already covered at repo root and `manager-tool-django/`). The Django coaching client (`coaching/services.py:_get_client`) reads a per-manager DB key first and falls back to the env var.
 
-### Recurring events (PR 4)
-- `events.recurrence_rule`, `events.parent_event_id` (FK with `ON DELETE SET NULL`), `events.recurrence_warned_at`.
-- `create_recurring_events(...)` materializes the parent + N-1 children atomically via `_materialize_in_txn`.
-- `_materialize_in_txn` bypasses BOTH backends' auto-commit pitfalls: PG's `conn.autocommit = True` (explicit `BEGIN/COMMIT/ROLLBACK` on the cursor) and SQLite's `_exec_returning_id` auto-commit (raw cursor + deferred `conn.commit()`). Hard cap of 32 children. **The forced-failure no-orphan smoke assertion is the only credible guard against this bug class.**
-- `_add_months_anchored(start, n)` implements end-of-month clamp anchored to the original start date (Algo A): Jan 31 + 1mo = Feb 28, + 2mo = Mar 31 (anchor preserved).
-- The `next_step_for(manager_id)` wrapper surfaces an expiry-warning when a series' latest child is within 14 days; warning state is stamped on every child of the series so a SET-NULL'd parent doesn't break suppression.
+- Login is Google OAuth via allauth exclusively (no passwords; `ModelBackend` removed).
+- Sensitive config values (per-manager Anthropic key, IMAP app password) use Fernet encryption, fail-closed: refuses to write plaintext on init failure, and `get_config` fails loud on decryption errors.
+- `MANAGER_TOOL_ENV=prod` is required in production (gates encryption-key auto-generation off).
+- **Anthropic API key handling.** Never paste, echo, or log a real `ANTHROPIC_API_KEY` in chat, terminal output, commits, PRs, or tests — use placeholders like `sk-ant-test-...`. `.env` files are gitignored at repo root and `manager-tool-django/`.
 
-### Pooling
-Pooling is handled by Neon's serverless proxy; the app opens direct connections (no app-side pool).
+### Ops
 
-## Testing gotchas
+- Nightly encrypted backups: pg_dump → encrypt → restore-proof, with a healthchecks.io dead-man switch.
+- `/health/` checks the DB (503 when dead) and reports the live git SHA.
+- Crons on Render: weekly digest (Monday), soft-delete purge, IMAP inbox poll (15 min).
+- `.github/workflows/neon_workflow.yml` creates a Neon branch per PR for a real-Neon smoke run (14-day `expires_at`, deleted on PR close).
 
-### CI runs 4 jobs (`.github/workflows/test.yml`)
+## Testing
 
-| Job | Scope | What it proves |
-| --- | ----- | -------------- |
-| `tests-sqlite` | Streamlit `tests/` via pytest | Logic correctness (SQLite only) |
-| `smoke-pg` | `scripts/smoke_pg.py` against `postgres:16` | Streamlit PG safety |
-| `tests-django-sqlite` | Django `core/tests.py` via pytest | Django logic (SQLite `:memory:`) |
-| `smoke-pg-django` | `scripts/smoke_pg_django.py` against `postgres:16` | Django PG safety |
+### CI (`.github/workflows/test.yml` + `neon_workflow.yml`)
 
-### pytest is SQLite-only (both apps)
+| Job | What it proves |
+| --- | -------------- |
+| `tests-django-sqlite` | ruff clean + logic correctness (SQLite `:memory:`, ~536 tests) |
+| `smoke-pg-django` | PG safety against a real `postgres:16` service |
+| `validate-render-blueprint` | `render.yaml` is deployable (`scripts/validate_render_blueprint.py`) |
+| `smoke_pg_django_neon` | same smoke against a real Neon branch (PR-scoped) |
 
-Streamlit: `tests/conftest.py` pins `_USE_PG=False`. Django: `mt/settings_test.py` overrides DB to SQLite `:memory:`. **Green pytest does not prove PG safety in either app.** The codebase has shipped four PG-only bugs that the SQLite suite missed: `init_db AttributeError`, `validate_session TypeError`, `LEFT(timestamp, 10)`, and `text BETWEEN date`.
+### pytest is SQLite-only
 
-### PG smoke tests are the safety net
-
-Each app has its own smoke script. Both run against a real `postgres:16` service in CI on every PR. **Any PR touching SQL or schema must extend the relevant smoke script.**
+`mt/settings_test.py` overrides the DB to SQLite `:memory:`. **Green pytest does not prove PG safety** — the SQLite/PG divergence shipped four production bugs in the Streamlit era. `scripts/smoke_pg_django.py` is the safety net: **any PR touching SQL, model fields, or schema must extend it.**
 
 ### Cross-tenant tests
 
-The smoke tests seed a second manager via app helpers (NOT raw SQL — round-3 review caught raw-SQL seeding as tautological) and assert bidirectional isolation: manager A sees zero of B's rows, AND vice versa. Mirror this when adding new aggregator-style helpers.
+The smoke test seeds a second manager via app helpers (NOT raw SQL — raw-SQL seeding is tautological) and asserts bidirectional isolation: manager A sees zero of B's rows, AND vice versa. Mirror this for new aggregator-style queries.
 
-## Dispatch (`_DISPATCH`)
-Sidebar nav is dispatched via a string→callable dict at `web_app.py:2005`. Renames change the *label* on the button, not the page key — that keeps cached `nav_page` values resolving across deploys. `tests/test_dispatch.py` parses the file via AST and asserts every value resolves to a defined function.
+### Other guards
+
+- `except: pass` literals are forbidden (no-silent-excepts test in `core/tests.py`); assign a fallback or `logger.warning` instead.
+- Multi-row writes that must be atomic get a forced-failure no-orphan assertion in the smoke test — it's the only credible guard for transaction bugs (SQLite autocommit hides them).
 
 ## Known limitations
-- Recurring-series invites: the series PARENT sends one `RRULE:FREQ=…;COUNT=…` invite (COUNT = actual series size in the DB — parent + children — so until-capped series and orphaned children degrade correctly); children/one-offs send single `VEVENT`s, and a parent invite stamps `calendar_invite_sent` on its children. Caveat: RFC 5545 monthly on day 29–31 SKIPS short months while the app's materializer clamps to month-end — the app's Event rows stay the source of truth.
-- `prefill_series_id` flow (clicking the expiry warning to extend a series) populates from session_state and is lost on browser refresh — same limitation as the rest of the app's session-state-driven nav.
-- Streamlit version is unpinned upper (`streamlit>=1.38.0`); deliberately no bespoke CSS pinned to internal class names.
+
+- Recurring-series calendar invites: the series parent sends one `RRULE:FREQ=…;COUNT=…` invite; RFC 5545 monthly on day 29–31 SKIPS short months while the app's materializer clamps to month-end — the app's Event rows stay the source of truth.
+- Local dev runs on SQLite (`sqlite:///db.sqlite3` in `.env`); there is no standing Neon dev branch. To test against real PG locally, create a throwaway Neon branch and point `DATABASE_URL` at it.
 
 ---
 
@@ -187,11 +138,11 @@ Use this skill whenever you are asked to review code, troubleshoot a failure, or
 
 ## 2. Mandatory Validation Checklist
 Before declaring a task "fixed," you MUST verify:
-- **Silent Failures:** Search for `try-except` blocks without logging or re-raising. Flag any instance where an error is "swallowed". Repository convention: `except: pass` literal patterns are forbidden by `tests/test_no_silent_excepts.py`; prefer assigning a fallback value or calling `logger.warning`.
+- **Silent Failures:** Search for `try-except` blocks without logging or re-raising. Flag any instance where an error is "swallowed". Repository convention: `except: pass` literal patterns are forbidden by the no-silent-excepts test in `core/tests.py`; prefer assigning a fallback value or calling `logger.warning`.
 - **Import Accuracy:** Verify that all newly added imports actually exist in the project environment.
 - **Edge Cases:** Explicitly check for null/undefined inputs, empty lists, and network timeouts.
-- **PG safety:** Any change to SQL, helpers, or schema must run via `scripts/smoke_pg.py`. SQLite-only pytest is not enough.
-- **Schema dual-write:** New columns/indexes must land in all three locations (migration, `schema_postgres.sql`, SQLite block in `database.py`).
+- **PG safety:** Any change to SQL, model fields, or schema must run via `scripts/smoke_pg_django.py`. SQLite-only pytest is not enough.
+- **Schema changes:** One Django migration is the whole change — never edit `schema_postgres.sql` (frozen fake-initial baseline).
 
 ## 3. Troubleshooting & Recovery
 | Problem | Immediate Action |
@@ -199,7 +150,7 @@ Before declaring a task "fixed," you MUST verify:
 | Tool Timeout | Wait 5s and retry once. If it fails again, report the specific timeout to the user. |
 | Missing Context | Use `Grep` to find where the variable/class is defined before guessing its structure. |
 | Test Failure | Do NOT "fix" the test to pass. Analyze the logic error in the source code first. |
-| PG-only failure | Suspect TIMESTAMP-vs-TEXT comparison, `LEFT()` on a timestamp, or `conn.execute()` on a psycopg2 connection. |
+| PG-only failure | Suspect a TEXT-date vs SQL-date comparison in raw SQL, or timezone-naive vs aware datetime handling. |
 
 ## 4. Critical Rules
 - **No Hallucinations:** If an MCP tool returns "no results," do NOT generate synthetic data. State "No results found" and ask for alternative search parameters.

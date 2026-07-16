@@ -12,7 +12,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 
 - **Phases 0–7 done.** Django is the sole production app (cutover 2026-05-10). All pages ported, coaching wired, crons running.
 - **Phase 8 (decommission) DONE — the migration is complete.** Streamlit is archived to `legacy/`, the legacy CLI is deleted, the Streamlit CI jobs are gone, `0006` is directly verified on prod (0 leftover tables), and the Neon `dev-django` branch + the last `preview/pr-*` orphan were deleted 2026-07-16. Only the `production` (default) Neon branch remains.
-- **Streamlit is RETIRED**, not just frozen — code lives in `legacy/` as a 30-day rollback option only; it is not deployed.
+- **Streamlit is RETIRED and deleted.** The 30-day rollback window (from the 2026-05-10 cutover) expired unused; `legacy/` was removed from the working tree 2026-07-16 and lives only in git history (last present at commit `c252193`).
 - **Render auto-deploys main.** `render.yaml` drives it; the build step runs `manage.py migrate`, so merges to `main` apply pending migrations automatically.
 - **Verify a deploy** with `GET /health/` → `{status, git_sha}` (the live commit SHA).
 
@@ -103,7 +103,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 
 ## Phase 8 — Decommission checklist
 
-- [x] Streamlit code moved to `legacy/` (kept in git as a rollback option, not deleted)
+- [x] Streamlit code moved to `legacy/` (kept in git as a rollback option, not deleted) — *and later fully deleted from the tree on 2026-07-16, after the 30-day window expired unused; recover from git history at `c252193` if ever needed*
 - [x] `gui.py` and `manager_tool.py` deleted (audit L5 finally honored)
 - [x] Streamlit CI jobs (`tests-sqlite`, `smoke-pg`) removed; Django jobs remain
 - [x] `sessions` + `login_attempts` models removed; `core/migrations/0006` drops the tables (`SeparateDatabaseAndState`, idempotent `DROP ... IF EXISTS`)
@@ -113,7 +113,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 - [x] Delete the orphaned `preview/pr-*` CI branches in Neon — only one existed (`preview/pr-131-django`), deleted 2026-07-16 in the same workflow run. New ones can't accumulate: `neon_workflow.yml` sets a 14-day `expires_at` on create and deletes on PR close. Post-deletion listing shows exactly one branch remaining: `production` (default).
 - [x] Delete the stale merged git branches `fix/event-dedupe` and `feat/event-time-dropdown` — already deleted on GitHub (auto-delete-merged-branches); local stale remote-tracking refs pruned 2026-05-26.
 
-`schema_postgres.sql`, `scripts/migrate_p2_config_to_id_pk.sql`, and `365_Great_Management_Ideas.md` stay at the repo root: the Django PG smoke test bootstraps the schema from the first two (`smoke_pg_django.py` mirrors the cutover bootstrap), and the coaching engine reads the wisdom library from the last (`coaching/services.py:107`). The other Streamlit `scripts/migrate_p1_*.sql` and `fix_sequences.sql` are pure history and live in `legacy/scripts/`.
+`schema_postgres.sql`, `scripts/migrate_p2_config_to_id_pk.sql`, and `365_Great_Management_Ideas.md` stay at the repo root: the Django PG smoke test bootstraps the schema from the first two (`smoke_pg_django.py` mirrors the cutover bootstrap), and the coaching engine reads the wisdom library from the last (`coaching/services.py:107`). The other Streamlit `scripts/migrate_p1_*.sql` and `fix_sequences.sql` are pure history, recoverable from git history (under `legacy/scripts/` at `c252193`).
 
 ### Runbook — apply migration 0006 to prod Neon
 

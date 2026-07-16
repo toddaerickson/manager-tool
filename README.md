@@ -52,7 +52,7 @@ A private management coaching journal and team management platform that makes yo
 
 ### Team Hub
 - Team roster with inline add-member form and detail view
-- Click "View Details" on a member → renders the full member timeline inline: pre-meeting prep with days since last meeting, feedback ratio, pending actions, active goals, recent notes, coaching pane, activity timeline. The standalone Timeline page was folded into Team detail; legacy `_DISPATCH["Timeline"]` and `_DISPATCH["Member Timeline"]` redirect to the new home.
+- Click "View Details" on a member → renders the full member timeline inline: pre-meeting prep with days since last meeting, feedback ratio, pending actions, active goals, recent notes, coaching pane, activity timeline. The standalone Timeline page was folded into Team detail.
 - Career Development: conversation tracker, skills inventory with proficiency levels, development plans with milestones
 
 ### Meetings (10/10/10 recorder)
@@ -121,7 +121,7 @@ Schedule Event has an always-visible Repeats selector. Pick None / Weekly / Mont
 
 ## Architecture
 
-The production app is **Django 5.1 + HTMX + Tailwind**, deployed on Render with Postgres on Neon. It lives in `manager-tool-django/`. The original Streamlit app was archived to `legacy/` after the 2026-05 cutover (kept in git as a rollback option; see `MIGRATION_STATUS.md`).
+The production app is **Django 5.1 + HTMX + Tailwind**, deployed on Render with Postgres on Neon. It lives in `manager-tool-django/`. The original Streamlit app was decommissioned after the 2026-05 cutover and deleted from the tree on 2026-07-16; it survives only in git history (under `legacy/` at commit `c252193` — see `MIGRATION_STATUS.md`).
 
 | Path | Purpose |
 |---|---|
@@ -135,7 +135,7 @@ The production app is **Django 5.1 + HTMX + Tailwind**, deployed on Render with 
 | `schema_postgres.sql` | Postgres schema; used to bootstrap the Django PG smoke test |
 | `.github/workflows/test.yml` | CI: Django pytest (SQLite) + Django PG smoke (postgres:16 service) on every PR |
 | `render.yaml` | Render deploy config (build runs `manage.py migrate`) |
-| `legacy/` | Archived Streamlit app (`web_app.py`, `database.py`, `coaching.py`, `auth.py`, its `tests/` and `scripts/`) — frozen, not deployed |
+| *(git history)* | The Streamlit app that preceded Django — deleted from the tree 2026-07-16, recoverable from commit `c252193` under `legacy/` |
 
 ## Database
 

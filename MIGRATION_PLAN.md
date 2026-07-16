@@ -1,5 +1,7 @@
 # Migration Plan: Streamlit → Django + HTMX on Render
 
+> **📁 HISTORICAL — migration complete 2026-07-16.** All eight phases shipped; the Streamlit app was decommissioned and deleted from the working tree (in git history under `legacy/` at commit `c252193`). Nothing here guides new work — see `MIGRATION_STATUS.md` for the final record and `CLAUDE.md` for current architecture. Kept because the phase reasoning is useful when reading migration-era commits.
+
 **Source app:** `manager-tool` (current Streamlit + Python on Neon Postgres, audit-closed, 220 tests)
 **Target app:** Django 5 + HTMX + Tailwind, hosted on Render, Postgres on Neon (kept)
 **Audience:** Solo novice programmer + Claude Code as pair, working in VS Code WSL Ubuntu
