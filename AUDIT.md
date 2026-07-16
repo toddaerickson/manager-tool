@@ -1,5 +1,7 @@
 # Code Audit — Manager Tool
 
+> **📁 HISTORICAL — all findings resolved 2026-05-03; the Streamlit app it audited was deleted 2026-07-16.** The file:line references below point into the Streamlit codebase, which now lives only in git history (under `legacy/` at commit `c252193`). Nothing here guides new work — see `CLAUDE.md` for current architecture. Kept because the findings and remediation reasoning are useful when reading audit-era commits.
+
 **Date:** 2026-05-02
 **Branch:** `claude/audit-code-TYxHC`
 **Scope:** Full repository (~7.9K LOC Python, plus SQL/shell). Four parallel audits: security, database/architecture, code quality, tests.

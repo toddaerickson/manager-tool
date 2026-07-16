@@ -1,5 +1,7 @@
 # Remediation Plan — Manager Tool
 
+> **📁 HISTORICAL — remediation complete 2026-05-03; the Streamlit app it targeted was deleted 2026-07-16.** This plan covered the Streamlit codebase, which now lives only in git history (under `legacy/` at commit `c252193`). Nothing here guides new work — see `CLAUDE.md` for current architecture. Kept because the dependency reasoning and risk notes are useful when reading audit-era commits.
+
 **Source:** `AUDIT.md` (2026-05-02)
 **Owner:** Engineering
 **Planning date:** 2026-05-02

@@ -1,6 +1,6 @@
 # Migration status
 
-Snapshot of where the Streamlit → Django migration stands. Update this doc when phase boundaries move; re-merge to main so it stays the source of truth for "where are we right now."
+> **📁 HISTORICAL — migration complete 2026-07-16.** This is the final record of the Streamlit → Django migration: all eight phases shipped, the Streamlit app was decommissioned and deleted from the tree, and this doc is closed. Nothing here guides new work — see `CLAUDE.md` for current architecture. Kept because it maps what shipped in which phase when reading migration-era commits.
 
 **Last updated:** 2026-07-16
 **Live Django app:** https://manager-tool-django.onrender.com
@@ -103,7 +103,7 @@ Snapshot of where the Streamlit → Django migration stands. Update this doc whe
 
 ## Phase 8 — Decommission checklist
 
-- [x] Streamlit code moved to `legacy/` (kept in git as a rollback option, not deleted) — *and later fully deleted from the tree on 2026-07-16, after the 30-day window expired unused; recover from git history at `c252193` if ever needed*
+- [x] Streamlit code moved to `legacy/` as a 30-day rollback option — the window expired unused, and `legacy/` was fully deleted from the tree on 2026-07-16; recover from git history at `c252193` if ever needed
 - [x] `gui.py` and `manager_tool.py` deleted (audit L5 finally honored)
 - [x] Streamlit CI jobs (`tests-sqlite`, `smoke-pg`) removed; Django jobs remain
 - [x] `sessions` + `login_attempts` models removed; `core/migrations/0006` drops the tables (`SeparateDatabaseAndState`, idempotent `DROP ... IF EXISTS`)

@@ -294,7 +294,7 @@ The pytest suite runs against **SQLite `:memory:`** (`mt/settings_test.py`). PG-
 ## Development with Claude Code
 
 This project includes a `CLAUDE.md` file with:
-- Project architecture context for AI-assisted development (Django app + frozen Streamlit archive)
+- Project architecture context for AI-assisted development (Django app)
 - A **code-validator** skill that activates on review/debug requests with a mandatory validation checklist, troubleshooting recovery table, and critical rules (no hallucinations, test-first debugging)
 
 ## License
