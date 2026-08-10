@@ -1,12 +1,12 @@
 {
-  "name": "Python 3",
+  "name": "Manager Tool (Django)",
   // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
   "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bookworm",
   "customizations": {
     "codespaces": {
       "openFiles": [
         "README.md",
-        "web_app.py"
+        "manager-tool-django/README.md"
       ]
     },
     "vscode": {
@@ -17,17 +17,19 @@
       ]
     }
   },
-  "updateContentCommand": "[ -f packages.txt ] && sudo apt update && sudo apt upgrade -y && sudo xargs apt install -y <packages.txt; [ -f requirements.txt ] && pip3 install --user -r requirements.txt; pip3 install --user streamlit; echo '✅ Packages installed and Requirements met'",
+  // The Streamlit app (web_app.py) was retired 2026-07-16; this container
+  // now targets the Django app in manager-tool-django/.
+  "postCreateCommand": "cd manager-tool-django && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
   "postAttachCommand": {
-    "server": "streamlit run web_app.py --server.enableCORS false --server.enableXsrfProtection false"
+    "server": "cd manager-tool-django && .venv/bin/python manage.py runserver 0.0.0.0:8000"
   },
   "portsAttributes": {
-    "8501": {
-      "label": "Application",
+    "8000": {
+      "label": "Django App",
       "onAutoForward": "openPreview"
     }
   },
   "forwardPorts": [
-    8501
+    8000
   ]
 }
