@@ -105,3 +105,58 @@ but don't rely on them as the backup.
 2. **Configure an offsite target for the `backup_db` cron** (S3 bucket) so the
    nightly dump is retained.
 3. Optionally, export all data manually whenever you want a portable copy.
+
+---
+
+## One-command activation (`scripts/activate_backups.py`)
+
+A helper script automates both sides (Render cron + env vars, and Neon PITR +
+snapshot + schedule). It uses the current Render v1 and Neon v2 APIs and has a
+`--dry-run` mode so you can preview before applying.
+
+**What you need before running (5 min):**
+
+1. **Render API key** — https://dashboard.render.com/account/api-keys → *Create API key*.
+2. **Neon API key** — Neon console → *Account → API keys* → *Create API key*.
+3. **(Recommended) an S3 bucket** + AWS access key/secret for durable offsite
+   retention of the nightly dump.
+
+**Exact steps (run from the repo root, using the project venv python):**
+
+```bash
+# 1. Export your secrets (never commit these):
+export RENDER_API_KEY="rnd_..."
+export NEON_API_KEY="..."
+# Optional - for durable offsite retention of the nightly pg_dump:
+export BACKUP_S3_BUCKET="your-backup-bucket"
+export AWS_ACCESS_KEY_ID="AKIA..."
+export AWS_SECRET_ACCESS_KEY="..."
+# Optional - days of PITR history (default 7; max depends on Neon plan):
+export BACKUP_RETENTION="7"
+# Optional - target a specific Neon project/branch (auto-detected otherwise):
+# export PROJECT_ID="..."
+# export BRANCH_ID="..."
+
+# 2. Preview everything it will do (no changes):
+manager-tool-django/.venv/bin/python scripts/activate_backups.py --dry-run
+
+# 3. Apply it (Render + Neon):
+manager-tool-django/.venv/bin/python scripts/activate_backups.py
+
+# 4. Verify:
+#    - Render dashboard → Cron Jobs → backup-db → last run "successful"
+#    - Neon console → the project → Backups/Snapshots → PITR window set + a snapshot exists
+```
+
+What the script does:
+- **Render**: finds the `backup-db` cron, sets `BACKUP_S3_BUCKET`, `BACKUP_RETENTION`,
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` env vars (if provided), redeploys so they
+  apply, and triggers one run to confirm it works.
+- **Neon**: sets the project **history retention** (PITR window, from `BACKUP_RETENTION`),
+  creates a **snapshot now**, and requests a **daily backup schedule** (best-effort — the
+  exact schedule body can vary by plan; any error prints verbatim so you can align).
+
+> Because this script can't be exercised against live accounts in CI (no API keys),
+> always run `--dry-run` first and confirm the planned calls look right. If Neon or Render
+> changes an API shape, the script prints the raw error so you can adjust the affected call.
+
