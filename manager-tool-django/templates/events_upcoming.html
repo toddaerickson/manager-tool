@@ -33,5 +33,17 @@
       {% endfor %}
     </div>
   {% endif %}
+
+  {# Completed events — with a Reopen action (undo Complete) #}
+  {% if completed_events %}
+  <div class="mt-4">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Completed</h2>
+    <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
+      {% for ev in completed_events %}
+        {% include "_partials/event_row.html" with ev=ev %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}

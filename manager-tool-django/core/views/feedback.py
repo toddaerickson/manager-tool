@@ -2,7 +2,7 @@
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from core.models import (
@@ -124,5 +124,27 @@ def feedback_delete(request, feedback_id: int):
     log_mutation(manager.id, "delete", "Feedback", feedback_id,
                  "Deleted feedback entry")
     return HttpResponse(status=200)
+
+
+@login_required
+def feedback_edit(request, feedback_id: int):
+    """Edit a feedback record — GET shows the SBI form, POST saves and
+    redirects (UI review follow-up: feedback was previously write-once)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    fb = get_object_or_404(
+        Feedback.objects.for_manager(manager.id), pk=feedback_id,
+    )
+    if request.method == "POST":
+        form = FeedbackForm(request.POST, instance=fb, manager_id=manager.id)
+        if form.is_valid():
+            obj = form.save()
+            log_mutation(manager.id, "update", "Feedback", obj.id,
+                         f"Updated {obj.feedback_type} feedback for {obj.team_member.name}")
+            return redirect("feedback")
+    else:
+        form = FeedbackForm(instance=fb, manager_id=manager.id)
+    return render(request, "feedback_edit.html", {"form": form, "feedback": fb})
 
 

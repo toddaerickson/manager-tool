@@ -14,6 +14,7 @@ from core.views.events import dashboard_overview  # noqa: F401
 from core.views.team import (  # noqa: F401
     team_members_add,
     team_members_delete,
+    team_members_edit,
     team_members_list,
     team_members_restore,
 )
@@ -25,6 +26,7 @@ from core.views.events import (  # noqa: F401
     events_edit,
     events_schedule,
     events_send_invite,
+    events_uncomplete,
     events_upcoming,
 )
 from core.views.todos import (  # noqa: F401
@@ -41,6 +43,7 @@ from core.views.todos import (  # noqa: F401
 from core.views.journal import (  # noqa: F401
     journal_add,
     journal_coaching,
+    journal_delete,
     journal_edit,
     journal_export_csv,
     journal_list,
@@ -89,12 +92,14 @@ from core.views.one_on_ones import (  # noqa: F401
 from core.views.notes import (  # noqa: F401
     notes_add,
     notes_delete,
+    notes_edit,
     notes_list,
 )
 from core.views.feedback import (  # noqa: F401
     feedback_add,
     feedback_delete,
     feedback_draft_sbi,
+    feedback_edit,
     feedback_list,
 )
 from core.views.settings_views import (  # noqa: F401

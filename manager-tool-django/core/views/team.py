@@ -1,9 +1,11 @@
 """Views: team."""
 
+import logging
+from datetime import date
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from core.models import (
@@ -14,6 +16,8 @@ from core.forms import (
 )
 from core.services.audit import log_mutation
 from core.views._common import _require_manager
+
+logger = logging.getLogger(__name__)
 
 @login_required
 def team_members_list(request):
@@ -117,5 +121,38 @@ def team_members_restore(request, member_id: int):
         "members": TeamMember.objects.active_for_manager(manager.id).order_by("name"),
         "deleted_members": TeamMember.objects.recently_deleted_for_manager(manager.id),
     })
+
+
+@login_required
+def team_members_edit(request, member_id: int):
+    """Edit a team member's profile (name/email/role/start/notes) — GET
+    shows the form, POST saves and redirects. UI review follow-up: members
+    previously couldn't be corrected in place (only delete + re-add, which
+    broke FK/audit linkage)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    member = get_object_or_404(
+        TeamMember.objects.active_for_manager(manager.id), pk=member_id,
+    )
+    if request.method == "POST":
+        form = TeamMemberForm(request.POST, instance=member)
+        if form.is_valid():
+            from django.utils import timezone
+            obj = form.save(commit=False)
+            obj.updated_at = timezone.now()
+            obj.save()
+            log_mutation(manager.id, "update", "TeamMember", obj.id,
+                         f"Updated team member: {obj.name}")
+            return redirect("team")
+    else:
+        form = TeamMemberForm(instance=member)
+        if member.start_date:
+            try:
+                form.initial["start_date"] = date.fromisoformat(member.start_date)
+            except ValueError:
+                logger.warning("TeamMember %s has unparseable start_date %r",
+                               member.id, member.start_date)
+    return render(request, "team_members_edit.html", {"form": form, "member": member})
 
 

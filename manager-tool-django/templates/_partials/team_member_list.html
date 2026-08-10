@@ -18,15 +18,19 @@
       <td class="px-3 py-[3px] text-slate-600">{{ m.role|default:"—" }}</td>
       <td class="px-3 py-[3px] text-slate-600 tabular-nums">{{ m.start_date|default:"—" }}</td>
       <td class="px-3 py-[3px] text-right">
-        <button type="button"
-                hx-delete="{% url 'team-delete' m.id %}"
-                hx-target="#member-row-{{ m.id }}"
-                hx-swap="outerHTML"
-                hx-confirm="Delete {{ m.name }}? You can restore within 30 days from the Recently deleted section."
-                hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
-                class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">
-          Delete
-        </button>
+        <div class="flex items-center justify-end gap-1">
+          <a href="{% url 'team-edit' m.id %}"
+             class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Edit</a>
+          <button type="button"
+                  hx-delete="{% url 'team-delete' m.id %}"
+                  hx-target="#member-row-{{ m.id }}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete {{ m.name }}? You can restore within 30 days from the Recently deleted section."
+                  hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                  class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">
+            Delete
+          </button>
+        </div>
       </td>
     </tr>
     {% endfor %}
