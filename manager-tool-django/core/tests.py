@@ -340,6 +340,18 @@ class TestDashboardView:
         assert "Daily coach" in body
         assert "SEEDED COACH SUGGESTION" in body
 
+    def test_overview_renders_daily_wisdom(self, client):
+        Manager.objects.create(
+            username="todd_wisdom", display_name="Todd",
+            password_hash="x", email="todd_wisdom@example.com",
+        )
+        self._login_as(client, "todd_wisdom@example.com")
+        resp = client.get("/dashboard/panels/overview/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Today's wisdom" in body
+        assert "wisdom.number" not in body  # rendered value, not a template var
+
     def test_dashboard_coach_dismiss_hides_card_for_the_day(self, client):
         from datetime import date
         from coaching.models import CoachSuggestion
@@ -2568,6 +2580,73 @@ class TestJournalList:
         )
         resp = client.get("/journal/")
         assert b"Secret thoughts" not in resp.content
+
+
+@pytest.mark.django_db
+class TestJournalExport:
+    """GET /journal/export/ — CSV download of the manager's journal history."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_jexp", display_name="Todd",
+            password_hash="x", email="todd_jexp@example.com",
+        )
+        self._login_as(client, "todd_jexp@example.com")
+        return m
+
+    def test_export_returns_csv_download(self, client):
+        m = self._setup(client)
+        JournalEntry.objects.create(
+            entry_date="2026-05-08", entry_type="daily",
+            content="Had a great 1:1, comma, and \"quotes\"",
+            mood=4, energy=3, tags="reflection",
+            manager_id=m.id,
+        )
+        resp = client.get("/journal/export/")
+        assert resp.status_code == 200
+        assert resp["Content-Type"].startswith("text/csv")
+        assert "attachment" in resp["Content-Disposition"]
+        assert "journal-export-" in resp["Content-Disposition"]
+        text = resp.content.decode("utf-8-sig")
+        assert "entry_date,entry_type,mood" in text
+        assert "2026-05-08" in text
+        assert "Had a great 1:1" in text
+
+    def test_export_is_tenant_scoped(self, client):
+        m = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_jexp", display_name="Other",
+            password_hash="x", email="other_jexp@example.com",
+        )
+        JournalEntry.objects.create(
+            entry_date="2026-05-08", entry_type="daily",
+            content="MY SECRET ENTRY", manager_id=m.id,
+        )
+        JournalEntry.objects.create(
+            entry_date="2026-05-09", entry_type="daily",
+            content="OTHER SECRET ENTRY", manager_id=m2.id,
+        )
+        resp = client.get("/journal/export/")
+        text = resp.content.decode("utf-8-sig")
+        assert "MY SECRET ENTRY" in text
+        assert "OTHER SECRET ENTRY" not in text
+
+    def test_export_requires_authenticated_manager(self, client):
+        # Anonymous — no manager session.
+        resp = client.get("/journal/export/")
+        assert resp.status_code in (302, 403)
+        # Logged-in but no Manager profile → 403.
+        self._login_as(client, "stranger_jexp@example.com")
+        resp = client.get("/journal/export/")
+        assert resp.status_code == 403
 
 
 @pytest.mark.django_db
