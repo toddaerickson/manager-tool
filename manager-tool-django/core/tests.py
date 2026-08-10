@@ -9144,3 +9144,53 @@ class TestEventsCompleteSeries:
         m, parent, child = self._setup(client)
         assert client.post(f"/events/{child.id}/complete-series/").status_code == 400
 
+
+class TestBackupCommandHelpers:
+    """Unit tests for core.management.commands.backup_db pure helpers.
+    No DB / no live pg_dump needed."""
+
+    def test_backup_filename_format_and_sortability(self):
+        from datetime import datetime
+        from core.management.commands.backup_db import backup_filename
+        a = backup_filename(datetime(2026, 5, 1, 3, 0, 0))
+        b = backup_filename(datetime(2026, 5, 2, 3, 0, 0))
+        assert a.startswith("manager-tool-")
+        assert a.endswith(".sql.gz")
+        assert a < b  # lexical order == chronological order
+
+    def test_prune_keeps_most_recent(self, tmp_path):
+        from core.management.commands.backup_db import prune_old_backups
+        (tmp_path / "manager-tool-20260501-030000.sql.gz").write_text("a")
+        (tmp_path / "manager-tool-20260502-030000.sql.gz").write_text("b")
+        (tmp_path / "manager-tool-20260503-030000.sql.gz").write_text("c")
+        deleted = prune_old_backups(tmp_path, keep=2)
+        remaining = sorted(p.name for p in tmp_path.iterdir())
+        assert deleted == [str(tmp_path / "manager-tool-20260501-030000.sql.gz")]
+        assert remaining == [
+            "manager-tool-20260502-030000.sql.gz",
+            "manager-tool-20260503-030000.sql.gz",
+        ]
+
+    def test_pg_env_parses_url_without_leaking_password(self):
+        from core.management.commands.backup_db import pg_env_from_url
+        env = pg_env_from_url(
+            "postgresql://user:pw@db.example.com:5433/mydb?sslmode=verify-full",
+        )
+        assert env["PGHOST"] == "db.example.com"
+        assert env["PGPORT"] == "5433"
+        assert env["PGUSER"] == "user"
+        assert env["PGPASSWORD"] == "pw"
+        assert env["PGDATABASE"] == "mydb"
+        assert env["PGSSLMODE"] == "verify-full"
+        # The password must live in env, never in argv (process-list safe).
+        cmd = ["pg_dump", "--no-owner", "--no-privileges"]
+        assert "pw" not in cmd
+        assert all("pw" not in arg for arg in cmd)
+
+    def test_command_has_dry_run_and_targets(self):
+        from django.core.management import call_command
+        import io
+        out = io.StringIO()
+        call_command("backup_db", "--dry-run", "--dir", "/tmp/does-not-exist", stdout=out)
+        assert "DRY-RUN" in out.getvalue()
+
