@@ -12,7 +12,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 
 from core.forms import MeetingActionItemForm, OneOnOneSessionForm
-from core.models import ActionItem, OneOnOneSession, TeamMember
+from core.models import ActionItem, Delegation, OneOnOneSession, TeamMember
 from core.services.audit import log_mutation
 from core.views._common import (
     _parse_member_filter,
@@ -341,27 +341,55 @@ def one_on_ones_add_action(request, session_id: int):
         pk=session_id,
     )
     form = MeetingActionItemForm(request.POST)
+    owner = request.POST.get("owner", "mine")
     if form.is_valid():
         due = form.cleaned_data.get("due_date")
-        item = ActionItem.objects.create(
-            manager_id=manager.id,
-            one_on_one_session=session,
-            event=session.event,
-            description=form.cleaned_data["description"],
-            due_date=due.isoformat() if due else None,
-            status="pending",
-            created_at=timezone.now(),
-        )
-        log_mutation(manager.id, "create", "ActionItem", item.id,
-                     f"Action from meeting: {item.description[:60]}")
+        description = form.cleaned_data["description"]
+        if owner == "delegate" and session.team_member_id:
+            # Capture as a delegation for THIS member — no need to leave
+            # the meeting page to hand off work (UI review follow-up).
+            delegation = Delegation.objects.create(
+                manager_id=manager.id,
+                team_member=session.team_member,
+                task=description,
+                autonomy_level="guided",
+                check_in_date=due.isoformat() if due else None,
+                status="active",
+                notes="Captured in 1:1",
+                created_at=timezone.now(),
+            )
+            log_mutation(
+                manager.id, "create", "Delegation", delegation.id,
+                f"Delegated from meeting to {session.team_member.name}: {description[:60]}",
+            )
+        else:
+            item = ActionItem.objects.create(
+                manager_id=manager.id,
+                one_on_one_session=session,
+                event=session.event,
+                description=description,
+                due_date=due.isoformat() if due else None,
+                status="pending",
+                created_at=timezone.now(),
+            )
+            log_mutation(manager.id, "create", "ActionItem", item.id,
+                         f"Action from meeting: {description[:60]}")
 
     action_items = ActionItem.objects.active_for_manager(manager.id).filter(
         one_on_one_session=session,
     ).order_by("-created_at")
+    open_delegations = []
+    if session.team_member_id:
+        open_delegations = (
+            Delegation.objects.for_manager(manager.id)
+            .filter(team_member=session.team_member, status="active")
+            .order_by("check_in_date", "id")
+        )
     action_form = MeetingActionItemForm()
     return render(request, "_partials/meeting_action_items.html", {
         "session": session,
         "action_items": action_items,
+        "open_delegations": open_delegations,
         "action_form": action_form,
     })
 

@@ -4759,6 +4759,42 @@ class TestOneOnOneSessions:
         assert items.count() == 1
         assert items.first().description == "Follow up on training"
 
+    def test_add_delegation_from_meeting(self, client):
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft",
+        )
+        resp = client.post(f"/meetings/{session.id}/action/", {
+            "owner": "delegate",
+            "description": "Prepare the Q3 deck",
+            "due_date": "2026-06-01",
+        })
+        assert resp.status_code == 200
+        deps = Delegation.objects.for_manager(m.id)
+        assert deps.count() == 1
+        dep = deps.first()
+        assert dep.team_member_id == tm.id
+        assert dep.task == "Prepare the Q3 deck"
+        assert dep.check_in_date == "2026-06-01"
+        assert dep.status == "active"
+        # A delegation — NOT a to-do.
+        assert ActionItem.objects.for_manager(m.id).count() == 0
+
+    def test_add_action_item_defaults_to_mine(self, client):
+        m, tm = self._setup(client)
+        session = OneOnOneSession.objects.create(
+            manager=m, team_member=tm, session_date="2026-05-10",
+            status="draft",
+        )
+        # No owner → defaults to a to-do for the manager.
+        resp = client.post(f"/meetings/{session.id}/action/", {
+            "description": "Block time for the Q3 review",
+        })
+        assert resp.status_code == 200
+        assert ActionItem.objects.for_manager(m.id).count() == 1
+        assert Delegation.objects.for_manager(m.id).count() == 0
+
     def test_duplicate_date_redirects_to_existing(self, client):
         m, tm = self._setup(client)
         existing = OneOnOneSession.objects.create(
