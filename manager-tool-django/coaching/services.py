@@ -949,8 +949,22 @@ def render_weekly_plan_html(text):
 
 
 def get_daily_suggestion(manager_id):
-    """Get today's coach suggestion. Uses cache, generates if needed."""
+    """Get today's coach suggestion. Uses cache, generates if needed.
+
+    A dismissal for today is honored for the rest of the day: if any of
+    today's suggestions was dismissed ("Got it"), return None instead of
+    regenerating — otherwise the always-on rule-based fallback would
+    immediately repopulate a fresh card.
+    """
     today_iso = date.today().isoformat()
+
+    # A prior dismissal for today wins — don't regenerate.
+    if (
+        CoachSuggestion.objects.for_manager(manager_id)
+        .filter(suggestion_date=today_iso, dismissed=1)
+        .exists()
+    ):
+        return None
 
     # Check cache
     cached = (

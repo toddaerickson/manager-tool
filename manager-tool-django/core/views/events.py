@@ -359,6 +359,10 @@ def dashboard_overview(request):
     today_iso = today.isoformat()
     week_ago_iso = (today - timedelta(days=7)).isoformat()
 
+    # Daily coach (Tier-1 rule / Tier-2 AI) — cached per day, dismissable.
+    from coaching.services import get_daily_suggestion
+    coach = get_daily_suggestion(mid)
+
     members = list(TeamMember.objects.active_for_manager(mid).order_by("name"))
 
     # ── Next Actions ─────────────────────────────────────────
@@ -560,7 +564,23 @@ def dashboard_overview(request):
         "recap": recap,
         "streak": streak,
         "today_iso": today_iso,
+        "coach": coach,
     }
     return render(request, "_partials/dashboard_overview.html", ctx)
+
+
+@login_required
+@require_http_methods(["POST"])
+def dashboard_coach_dismiss(request):
+    """"Got it" — dismiss today's daily-coach suggestion. Returns an empty
+    200 so the HTMX target swaps the card out of the DOM."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    from coaching.models import CoachSuggestion
+    CoachSuggestion.objects.for_manager(manager.id).filter(
+        suggestion_date=date.today().isoformat(), dismissed=0,
+    ).update(dismissed=1)
+    return HttpResponse("")
 
 

@@ -9,6 +9,7 @@ urlpatterns = [
     path("health/", core_views.health, name="health"),
     path("dashboard/", core_views.dashboard, name="dashboard"),
     path("dashboard/panels/overview/", core_views.dashboard_overview, name="dashboard-overview"),
+    path("dashboard/coach/dismiss/", core_views.dashboard_coach_dismiss, name="dashboard-coach-dismiss"),
     path("team/", core_views.team_members_list, name="team"),
     path("team/add/", core_views.team_members_add, name="team-add"),
     path("team/<int:member_id>/delete/", core_views.team_members_delete, name="team-delete"),
