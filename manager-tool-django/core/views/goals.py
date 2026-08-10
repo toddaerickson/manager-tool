@@ -11,6 +11,7 @@ from core.models import (
     Goal, TeamMember,
 )
 from core.forms import (
+    GOAL_STATUS_CHOICES,
     GoalForm,
 )
 from core.services.audit import log_mutation
@@ -110,5 +111,37 @@ def goals_delete(request, goal_id: int):
         return HttpResponse(status=404)
     log_mutation(manager.id, "delete", "Goal", goal_id, "Deleted goal")
     return HttpResponse(status=200)
+
+
+@login_required
+@require_http_methods(["POST"])
+def goal_status(request, goal_id: int):
+    """HTMX: quick status change — set a goal's state without opening the
+    edit form (UI review follow-up). Re-renders the goal list so the badge
+    and quick-status dropdown stay in sync."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    new_status = request.POST.get("status", "")
+    valid = {c for c, _ in GOAL_STATUS_CHOICES}
+    if new_status not in valid:
+        return HttpResponse(status=400)
+    updated = (
+        Goal.objects.for_manager(manager.id)
+        .filter(pk=goal_id)
+        .update(status=new_status)
+    )
+    if updated == 0:
+        return HttpResponse(status=404)
+
+    member_id = _parse_member_filter(request)
+    goals = Goal.objects.for_manager(manager.id).select_related("team_member")
+    if member_id:
+        goals = goals.filter(team_member_id=member_id)
+    goals = goals.order_by("-created_at")
+    return render(request, "_partials/goal_list.html", {
+        "goals": goals,
+        "status_labels": _GOAL_STATUS_LABELS,
+    })
 
 

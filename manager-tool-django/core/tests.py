@@ -9010,3 +9010,137 @@ class TestEventsUncomplete:
         ev.save(update_fields=["status"])
         assert client.post(f"/events/{ev.id}/uncomplete/").status_code == 404
 
+
+@pytest.mark.django_db
+class TestGoalStatus:
+    """POST /goals/<id>/status/ — quick status change without the edit form."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_gst", display_name="Todd",
+            password_hash="x", email="todd_gst@example.com",
+        )
+        self._login_as(client, "todd_gst@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        goal = Goal.objects.create(
+            team_member=tm, quarter="Q2 2026", description="Ship X",
+            status="not_started", manager_id=m.id,
+        )
+        return m, goal
+
+    def test_status_updates_and_returns_list(self, client):
+        m, goal = self._setup(client)
+        resp = client.post(f"/goals/{goal.id}/status/", {"status": "in_progress"})
+        assert resp.status_code == 200
+        goal.refresh_from_db()
+        assert goal.status == "in_progress"
+        assert b"Ship X" in resp.content
+
+    def test_invalid_status_returns_400(self, client):
+        m, goal = self._setup(client)
+        assert client.post(f"/goals/{goal.id}/status/", {"status": "bogus"}).status_code == 400
+
+    def test_cross_tenant_returns_404(self, client):
+        m, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_gst", display_name="Other",
+            password_hash="x", email="other_gst@example.com",
+        )
+        tm2 = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        other = Goal.objects.create(
+            team_member=tm2, quarter="Q2 2026", description="Other", manager_id=m2.id,
+        )
+        assert client.post(f"/goals/{other.id}/status/", {"status": "met"}).status_code == 404
+
+
+@pytest.mark.django_db
+class TestDelegationsComplete:
+    """POST /delegations/<id>/complete/ — lightweight check-in."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_dcm", display_name="Todd",
+            password_hash="x", email="todd_dcm@example.com",
+        )
+        self._login_as(client, "todd_dcm@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        dep = Delegation.objects.create(
+            manager_id=m.id, team_member=tm, task="Do X", status="active",
+        )
+        return m, dep
+
+    def test_complete_marks_completed(self, client):
+        m, dep = self._setup(client)
+        resp = client.post(f"/delegations/{dep.id}/complete/")
+        assert resp.status_code == 200
+        dep.refresh_from_db()
+        assert dep.status == "completed"
+        assert dep.completed_at is not None
+
+    def test_complete_on_completed_returns_404(self, client):
+        m, dep = self._setup(client)
+        dep.status = "completed"
+        dep.save(update_fields=["status"])
+        assert client.post(f"/delegations/{dep.id}/complete/").status_code == 404
+
+
+@pytest.mark.django_db
+class TestEventsCompleteSeries:
+    """POST /events/<id>/complete-series/ — complete a whole recurring series."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from datetime import date
+        m = Manager.objects.create(
+            username="todd_ecs", display_name="Todd",
+            password_hash="x", email="todd_ecs@example.com",
+        )
+        self._login_as(client, "todd_ecs@example.com")
+        parent = Event.objects.create(
+            manager_id=m.id, title="Weekly", event_type="one_on_one",
+            scheduled_date=date.today().isoformat(), scheduled_time="10:00",
+            status="scheduled", recurrence_rule="weekly",
+        )
+        child = Event.objects.create(
+            manager_id=m.id, title="Weekly", event_type="one_on_one",
+            scheduled_date="2099-01-01", scheduled_time="10:00",
+            status="scheduled", parent_event=parent,
+        )
+        return m, parent, child
+
+    def test_completes_parent_and_children(self, client):
+        m, parent, child = self._setup(client)
+        resp = client.post(f"/events/{parent.id}/complete-series/")
+        assert resp.status_code == 200
+        parent.refresh_from_db()
+        child.refresh_from_db()
+        assert parent.status == "completed"
+        assert child.status == "completed"
+
+    def test_child_is_not_series_parent_returns_400(self, client):
+        m, parent, child = self._setup(client)
+        assert client.post(f"/events/{child.id}/complete-series/").status_code == 400
+

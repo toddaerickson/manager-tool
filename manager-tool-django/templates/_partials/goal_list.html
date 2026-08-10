@@ -20,11 +20,17 @@
       </td>
       <td class="px-3 py-[3px] tabular-nums text-slate-600">{{ g.quarter }}{% if g.target_date %}<br><span class="text-xs">by {{ g.target_date }}</span>{% endif %}</td>
       <td class="px-3 py-[3px]">
-        {% with label=status_labels|default_if_none:"" %}
-        <span class="text-xs px-1.5 py-0.5 rounded {% if g.status == 'met' or g.status == 'exceeded' %}bg-emerald-100 text-emerald-700{% elif g.status == 'not_met' %}bg-red-100 text-red-700{% elif g.status == 'in_progress' %}bg-amber-100 text-amber-700{% else %}bg-slate-100 text-slate-600{% endif %}">
-          {% for key, val in status_labels.items %}{% if key == g.status %}{{ val }}{% endif %}{% endfor %}{% if not g.status %}Not started{% endif %}
-        </span>
-        {% endwith %}
+        <select name="status"
+                hx-post="{% url 'goals-status' g.id %}{% if request.GET.member %}?member={{ request.GET.member }}{% endif %}"
+                hx-trigger="change"
+                hx-target="#goal-list"
+                hx-swap="innerHTML"
+                hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+                class="text-xs border border-slate-300 rounded px-1 py-0.5 text-slate-700">
+          {% for key, val in status_labels.items %}
+          <option value="{{ key }}" {% if key == g.status %}selected{% endif %}>{{ val }}</option>
+          {% endfor %}
+        </select>
       </td>
       <td class="px-3 py-[3px] text-right">
         <div class="flex items-center justify-end gap-1">
@@ -33,7 +39,7 @@
                   hx-delete="{% url 'goals-delete' g.id %}"
                   hx-target="#goal-row-{{ g.id }}"
                   hx-swap="outerHTML"
-                  hx-confirm="Delete this goal? Cannot be undone."
+                  hx-confirm="Delete this goal? This cannot be undone."
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                   class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">
             Delete

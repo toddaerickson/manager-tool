@@ -114,3 +114,24 @@ def delegations_delete(request, delegation_id: int):
     return HttpResponse(status=200)
 
 
+@login_required
+@require_http_methods(["POST"])
+def delegations_complete(request, delegation_id: int):
+    """HTMX: mark an active delegation completed — a lightweight check-in
+    without opening the edit form (UI review follow-up)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    from django.utils import timezone
+    updated = (
+        Delegation.objects.for_manager(manager.id)
+        .filter(pk=delegation_id, status="active")
+        .update(status="completed", completed_at=timezone.now())
+    )
+    if updated == 0:
+        return HttpResponse(status=404)
+    log_mutation(manager.id, "update", "Delegation", delegation_id,
+                 "Marked delegation completed")
+    return HttpResponse(status=200)
+
+
