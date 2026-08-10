@@ -6,7 +6,8 @@ __pycache__/
 !.env.template
 !.env.example
 db.sqlite3
-staticfiles/
+staticfiles/*
+!staticfiles/.gitkeep
 .pytest_cache/
 .ruff_cache/
 cutover_diff_*.json
