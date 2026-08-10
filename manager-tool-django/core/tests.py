@@ -8445,3 +8445,74 @@ class TestActualDuration:
         assert 'name="actual_duration_minutes"' in body
         assert 'value="25"' in body
         assert "Actual duration" in body
+@pytest.mark.django_db
+class TestAntiPatternDetector:
+    """Unit tests for core.services.anti_patterns.detect_anti_patterns
+    (pure function — no DB), plus one analytics-view integration check."""
+
+    def test_clean_no_patterns(self):
+        from core.services.anti_patterns import detect_anti_patterns
+        cadence = [{"name": "Alice", "last_date": "2026-08-01", "days_ago": 3}]
+        ratios = [{"name": "Alice", "positive": 4, "constructive": 1}]
+        assert detect_anti_patterns(cadence, ratios) == []
+
+    def test_ghost_overdue(self):
+        from core.services.anti_patterns import detect_anti_patterns
+        cadence = [{"name": "Alice", "last_date": "2026-07-01", "days_ago": 40}]
+        pats = detect_anti_patterns(cadence, [])
+        assert len(pats) == 1
+        assert pats[0]["pattern"] == "The Ghost"
+        assert "40 days" in pats[0]["evidence"]
+
+    def test_ghost_never_met(self):
+        from core.services.anti_patterns import detect_anti_patterns
+        cadence = [{"name": "Alice", "last_date": None, "days_ago": None}]
+        pats = detect_anti_patterns(cadence, [])
+        assert pats and pats[0]["pattern"] == "The Ghost"
+        assert "never had a recorded meeting" in pats[0]["evidence"]
+
+    def test_micromanager(self):
+        from core.services.anti_patterns import detect_anti_patterns
+        ratios = [{"name": "Alice", "positive": 0, "constructive": 5}]
+        pats = detect_anti_patterns([], ratios)
+        assert "The Micromanager" in {p["pattern"] for p in pats}
+
+    def test_buddy(self):
+        from core.services.anti_patterns import detect_anti_patterns
+        ratios = [{"name": "Alice", "positive": 3, "constructive": 0}]
+        pats = detect_anti_patterns([], ratios)
+        assert "The Buddy" in {p["pattern"] for p in pats}
+
+    def test_scorekeeper(self):
+        from core.services.anti_patterns import detect_anti_patterns
+        ratios = [
+            {"name": "Alice", "positive": 2, "constructive": 1},
+            {"name": "Bob", "positive": 0, "constructive": 5},
+        ]
+        pats = detect_anti_patterns([], ratios)
+        assert "The Scorekeeper" in {p["pattern"] for p in pats}
+
+    def test_analytics_view_surfaces_anti_patterns(self, client):
+        from datetime import date, timedelta
+        from django.contrib.auth import get_user_model
+        m = Manager.objects.create(
+            username="ap_mgr", display_name="AP", password_hash="x",
+            email="ap@example.com",
+        )
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        # An event 25 days ago (>21) should surface "The Ghost".
+        Event.objects.create(
+            manager_id=m.id, title="Old 1:1", event_type="one_on_one",
+            team_member=tm,
+            scheduled_date=(date.today() - timedelta(days=25)).isoformat(),
+            scheduled_time="09:00", status="completed",
+        )
+        u = get_user_model().objects.create_user(
+            username="ap@example.com", email="ap@example.com", password="x",
+        )
+        client.force_login(u)
+        resp = client.get("/analytics/")
+        assert resp.status_code == 200
+        assert b"Anti-patterns" in resp.content
+        assert b"The Ghost" in resp.content
+
