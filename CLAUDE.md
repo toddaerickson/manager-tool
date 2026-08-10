@@ -38,7 +38,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 ### Stack
 
-Django 5.1 + django-allauth (Google OAuth only) + django-htmx + compiled Tailwind CSS. Deployed on Render via `render.yaml` (auto-deploys `main`; the build step runs `manage.py migrate`). Postgres via Neon (single `production` branch; Neon's serverless proxy handles pooling — no app-side pool). Sentry for errors. Verify any deploy with `GET /health/` → `{status, git_sha}`.
+Django 5.1 + django-allauth (Google OAuth only) + django-htmx + compiled Tailwind CSS. Deployed on Render via `render.yaml` (auto-deploys `main`; the build step runs `manage.py migrate`). Postgres via Neon (single `production` branch; Neon's serverless proxy handles pooling — no app-side pool). Sentry for errors. Verify any deploy with `GET /health/` → `{status, db, git_sha}`.
 
 **Visual design:** deliberate type + color system documented in `manager-tool-django/DESIGN.md` (Fraunces/Public Sans, single teal `accent-*`, tightened radius). Tokens live in `tailwind.config.js` and compile into `static/css/tw.css` — rebuild after class changes (command in base.html's head comment; render.yaml reruns it on every deploy; `TestCompiledCssCoverage` fails CI on class-without-rebuild). Build with `accent-*`/`font-display` rather than raw values, and check new UI against the forbidden-slop list in DESIGN.md.
 
@@ -55,9 +55,9 @@ Django 5.1 + django-allauth (Google OAuth only) + django-htmx + compiled Tailwin
 Rendered in `templates/base.html`, active state via `request.resolver_match.url_name`:
 
 ```
-MANAGER:    Dashboard · Upcoming · Manager Journal · Schedule Event · To Do · Decisions
-DIRECTS:    New 1:1 · Meetings · Notes · Delegations · Feedback · Goals · Career Dev
-REFERENCE:  Analytics · History · Resources · Team · ── · Settings · Log Out
+MANAGER:    Dashboard · Inbox · Upcoming · Manager Journal · Schedule Event · To Do · Delegations · Decisions
+DIRECTS:    New 1:1 · Meetings · Notes · Feedback · Goals · Career Dev
+REFERENCE:  Analytics · History · Audit Log · Resources · Team · ── · Settings · Log Out
 ```
 
 Plus a sidebar quick-add box feeding the `/inbox/` triage queue, and a cross-model search box (`/search/?q=` across all 11 content models). Meetings = structured 10/10/10 records; Notes = async between-meeting jots.
