@@ -4420,6 +4420,16 @@ class TestReferencePages:
         resp = client.get("/analytics/")
         assert b"1" in resp.content  # 1 team member
 
+    def test_analytics_shows_management_score(self, client):
+        m, tm = self._setup(client)
+        resp = client.get("/analytics/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Management score" in body
+        # A fresh account (no feedback/goals/actions) still resolves to a 0
+        # score from the cadence + streak components, with a letter grade.
+        assert "Grade" in body
+
     def test_history_renders(self, client):
         self._setup(client)
         resp = client.get("/history/")
@@ -8632,4 +8642,130 @@ class TestAntiPatternDetector:
         assert resp.status_code == 200
         assert b"Anti-patterns" in resp.content
         assert b"The Ghost" in resp.content
+
+
+class TestManagementScore:
+    """Unit tests for core.services.management_score.compute_management_score.
+    Pure function — no DB access, no django_db marker needed."""
+
+    def test_all_components_high_yields_high_grade(self):
+        from core.services.management_score import compute_management_score
+        res = compute_management_score({
+            "feedback": 90, "cadence": 100, "streak": 14,
+            "goals": 100, "actions": 100,
+        })
+        assert res["score"] >= 90
+        assert res["grade"] == "A"
+        assert res["subscores"] == {
+            "feedback": 90, "cadence": 100, "streak": 100,
+            "goals": 100, "actions": 100,
+        }
+
+    def test_no_data_returns_none(self):
+        from core.services.management_score import compute_management_score
+        res = compute_management_score({})
+        assert res["score"] is None
+        assert res["grade"] is None
+        assert res["subscores"] == {}
+
+    def test_partial_data_reweights(self):
+        from core.services.management_score import compute_management_score
+        # Only feedback present (weight 0.30) → score equals the feedback value.
+        res = compute_management_score({"feedback": 40})
+        assert res["score"] == 40
+        assert res["subscores"] == {"feedback": 40}
+
+    def test_streak_capped_at_target(self):
+        from core.services.management_score import compute_management_score
+        # 7 days → 50% of the 14-day target; 30 days → capped at 100%.
+        assert compute_management_score({"streak": 7})["subscores"]["streak"] == 50
+        assert compute_management_score({"streak": 30})["subscores"]["streak"] == 100
+
+    def test_values_clamped_to_0_100(self):
+        from core.services.management_score import compute_management_score
+        res = compute_management_score({"feedback": 120, "cadence": -5})
+        assert res["subscores"]["feedback"] == 100
+        assert res["subscores"]["cadence"] == 0
+
+    def test_grade_bands(self):
+        from core.services.management_score import compute_management_score
+        for score, expected in [(90, "A"), (75, "B"), (60, "C"), (40, "D"), (20, "F")]:
+            res = compute_management_score({"feedback": score})
+            assert res["score"] == score
+            assert res["grade"] == expected
+
+
+@pytest.mark.django_db
+class TestDataExport:
+    """GET /export/ — JSON archive of the manager's tenant-scoped data."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_exp", display_name="Todd",
+            password_hash="x", email="todd_exp@example.com",
+        )
+        self._login_as(client, "todd_exp@example.com")
+        return m
+
+    def test_export_returns_json_archive(self, client):
+        import json
+        m = self._setup(client)
+        TeamMember.objects.create(name="Alice", manager_id=m.id)
+        JournalEntry.objects.create(
+            entry_date="2026-05-08", entry_type="daily",
+            content="hello", manager_id=m.id,
+        )
+        resp = client.get("/export/")
+        assert resp.status_code == 200
+        assert "application/json" in resp["Content-Type"]
+        assert "attachment" in resp["Content-Disposition"]
+        assert "manager-data-" in resp["Content-Disposition"]
+        data = json.loads(resp.content)
+        assert data["manager"]["email"] == "todd_exp@example.com"
+        assert data["team_members"][0]["name"] == "Alice"
+        assert data["journal_entries"][0]["content"] == "hello"
+        assert data["events"] == []
+
+    def test_export_is_tenant_scoped(self, client):
+        import json
+        m = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_exp", display_name="Other",
+            password_hash="x", email="other_exp@example.com",
+        )
+        TeamMember.objects.create(name="MINE", manager_id=m.id)
+        TeamMember.objects.create(name="THEIRS", manager_id=m2.id)
+        resp = client.get("/export/")
+        data = json.loads(resp.content)
+        names = [r["name"] for r in data["team_members"]]
+        assert "MINE" in names
+        assert "THEIRS" not in names
+
+    def test_export_omits_config_secrets(self, client):
+        import json
+        m = self._setup(client)
+        from core.models import Config
+        Config.objects.create(
+            manager_id=m.id, key="anthropic_api_key", value="sk-super-secret",
+        )
+        resp = client.get("/export/")
+        data = json.loads(resp.content)
+        raw = resp.content.decode()
+        assert "sk-super-secret" not in raw
+        assert "config" not in data
+
+    def test_export_requires_authenticated_manager(self, client):
+        resp = client.get("/export/")
+        assert resp.status_code in (302, 403)
+        self._login_as(client, "stranger_exp@example.com")
+        resp = client.get("/export/")
+        assert resp.status_code == 403
 

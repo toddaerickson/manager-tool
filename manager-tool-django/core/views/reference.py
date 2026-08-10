@@ -101,6 +101,36 @@ def analytics(request):
     total_feedback = Feedback.objects.for_manager(mid).count()
     streak = _journal_streak(mid, today_iso)
 
+    # Management score — composite 0-100 from the metrics above. Each
+    # component only contributes when the manager has data for it.
+    if feedback_ratios:
+        feedback_ratio_avg = sum(
+            f["ratio_pct"] for f in feedback_ratios
+        ) / len(feedback_ratios)
+    else:
+        feedback_ratio_avg = None
+    if team_count:
+        on_track = sum(
+            1 for m in meeting_cadence
+            if m["days_ago"] is not None and m["days_ago"] <= 14
+        )
+        cadence_coverage_pct = round(on_track / team_count * 100)
+    else:
+        cadence_coverage_pct = None
+    goal_total = sum(goal_stats.values()) if goal_stats else 0
+    goal_completed = goal_stats.get("completed", 0)
+    goal_completion_pct = round(goal_completed / goal_total * 100) if goal_total else None
+    action_completion_pct = completion_pct if action_total else None
+
+    from core.services.management_score import compute_management_score
+    ms = compute_management_score({
+        "feedback": feedback_ratio_avg,
+        "cadence": cadence_coverage_pct,
+        "streak": streak,
+        "goals": goal_completion_pct,
+        "actions": action_completion_pct,
+    })
+
     return render(request, "analytics.html", {
         "team_count": team_count,
         "total_events": total_events,
@@ -109,6 +139,7 @@ def analytics(request):
         "meeting_cadence": meeting_cadence,
         "feedback_ratios": feedback_ratios,
         "anti_patterns": anti_patterns,
+        "ms": ms,
         "action_total": action_total,
         "action_completed": action_completed,
         "action_pending": action_pending,

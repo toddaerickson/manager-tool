@@ -1,7 +1,10 @@
 """Views: settings page + on-demand digest send."""
 
+from datetime import date
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 
@@ -105,3 +108,22 @@ def settings_send_digest(request):
     else:
         messages.error(request, msg)
     return redirect("settings")
+
+
+@login_required
+def data_export(request):
+    """Export the manager's full data (all tenant-scoped content models) as a
+    JSON attachment. Intentionally excludes Config — that table holds secrets."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    from django.utils import timezone
+    from core.services.export import build_export_payload
+
+    payload = build_export_payload(manager)
+    payload["exported_at"] = timezone.now().isoformat()
+    response = JsonResponse(payload)
+    response["Content-Disposition"] = (
+        f'attachment; filename="manager-data-{date.today().isoformat()}.json"'
+    )
+    return response
