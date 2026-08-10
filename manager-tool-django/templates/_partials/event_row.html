@@ -34,6 +34,16 @@ detail page (the canonical URL the user pastes into Outlook invites).
     <a href="{% url 'events-edit' ev.id %}" class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">
       Edit
     </a>
+    {% if ev.status == "completed" %}
+    <button type="button"
+            hx-post="{% url 'events-uncomplete' ev.id %}"
+            hx-target="#event-row-{{ ev.id }}"
+            hx-swap="outerHTML"
+            hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+            class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">
+      Reopen
+    </button>
+    {% else %}
     <button type="button"
             hx-post="{% url 'events-complete' ev.id %}"
             hx-target="#event-row-{{ ev.id }}"
@@ -42,6 +52,7 @@ detail page (the canonical URL the user pastes into Outlook invites).
             class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">
       Complete
     </button>
+    {% endif %}
     <button type="button"
             hx-delete="{% url 'events-delete' ev.id %}"
             hx-target="#event-row-{{ ev.id }}"

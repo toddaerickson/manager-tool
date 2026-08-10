@@ -8805,3 +8805,208 @@ class TestDataExport:
         resp = client.get("/export/")
         assert resp.status_code == 403
 
+
+@pytest.mark.django_db
+class TestJournalDelete:
+    """DELETE /journal/<id>/delete/ — remove a journal entry (UI review follow-up)."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_jdel", display_name="Todd",
+            password_hash="x", email="todd_jdel@example.com",
+        )
+        self._login_as(client, "todd_jdel@example.com")
+        entry = JournalEntry.objects.create(
+            entry_date="2026-05-05", entry_type="daily",
+            content="To delete", manager_id=m.id,
+        )
+        return m, entry
+
+    def test_delete_removes_entry(self, client):
+        m, entry = self._setup(client)
+        resp = client.delete(f"/journal/{entry.id}/delete/")
+        assert resp.status_code == 200
+        assert JournalEntry.objects.for_manager(m.id).count() == 0
+
+    def test_delete_cross_tenant_returns_404(self, client):
+        m, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_jdel", display_name="Other",
+            password_hash="x", email="other_jdel@example.com",
+        )
+        other = JournalEntry.objects.create(
+            entry_date="2026-05-06", entry_type="daily",
+            content="Theirs", manager_id=m2.id,
+        )
+        assert client.delete(f"/journal/{other.id}/delete/").status_code == 404
+        assert JournalEntry.objects.for_manager(m2.id).count() == 1
+
+
+@pytest.mark.django_db
+class TestNotesEdit:
+    """GET/POST /notes/<id>/edit/ — edit a running note (UI review follow-up)."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_ned", display_name="Todd",
+            password_hash="x", email="todd_ned@example.com",
+        )
+        self._login_as(client, "todd_ned@example.com")
+        note = RunningNote.objects.create(
+            manager_id=m.id, note_date="2026-05-09",
+            content="Original", category="general",
+        )
+        return m, note
+
+    def test_edit_loads_form(self, client):
+        _, note = self._setup(client)
+        resp = client.get(f"/notes/{note.id}/edit/")
+        assert resp.status_code == 200
+        assert b"Original" in resp.content
+
+    def test_edit_updates_note(self, client):
+        m, note = self._setup(client)
+        resp = client.post(f"/notes/{note.id}/edit/", {
+            "note_date": "2026-05-09",
+            "content": "Edited content",
+            "category": "follow_up",
+        })
+        assert resp.status_code == 302
+        note.refresh_from_db()
+        assert note.content == "Edited content"
+        assert note.category == "follow_up"
+
+
+@pytest.mark.django_db
+class TestFeedbackEdit:
+    """GET/POST /feedback/<id>/edit/ — edit a feedback record."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_fed", display_name="Todd",
+            password_hash="x", email="todd_fed@example.com",
+        )
+        self._login_as(client, "todd_fed@example.com")
+        tm = TeamMember.objects.create(name="Alice", manager_id=m.id)
+        fb = Feedback.objects.create(
+            team_member=tm, feedback_type="positive",
+            situation="S1", manager_id=m.id,
+        )
+        return m, fb
+
+    def test_edit_updates_feedback(self, client):
+        m, fb = self._setup(client)
+        resp = client.post(f"/feedback/{fb.id}/edit/", {
+            "team_member": fb.team_member_id, "feedback_type": "constructive",
+            "situation": "S2", "behavior": "B", "impact": "I",
+        })
+        assert resp.status_code == 302
+        fb.refresh_from_db()
+        assert fb.feedback_type == "constructive"
+        assert fb.situation == "S2"
+
+
+@pytest.mark.django_db
+class TestTeamMembersEdit:
+    """GET/POST /team/<id>/edit/ — edit a team member profile."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        m = Manager.objects.create(
+            username="todd_ted", display_name="Todd",
+            password_hash="x", email="todd_ted@example.com",
+        )
+        self._login_as(client, "todd_ted@example.com")
+        member = TeamMember.objects.create(name="Alice", role="Eng", manager_id=m.id)
+        return m, member
+
+    def test_edit_updates_member(self, client):
+        m, member = self._setup(client)
+        resp = client.post(f"/team/{member.id}/edit/", {
+            "name": "Alicia", "email": "alicia@example.com", "role": "Staff Eng",
+        })
+        assert resp.status_code == 302
+        member.refresh_from_db()
+        assert member.name == "Alicia"
+        assert member.role == "Staff Eng"
+
+    def test_edit_cross_tenant_returns_404(self, client):
+        m, _ = self._setup(client)
+        m2 = Manager.objects.create(
+            username="other_ted", display_name="Other",
+            password_hash="x", email="other_ted@example.com",
+        )
+        other = TeamMember.objects.create(name="Bob", manager_id=m2.id)
+        assert client.post(f"/team/{other.id}/edit/", {"name": "Hacked"}).status_code == 404
+
+
+@pytest.mark.django_db
+class TestEventsUncomplete:
+    """POST /events/<id>/uncomplete/ — undo Complete (reopen symmetry)."""
+
+    def _login_as(self, client, email):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username=email, email=email, password="x",
+        )
+        client.force_login(u)
+        return u
+
+    def _setup(self, client):
+        from datetime import date, timedelta
+        m = Manager.objects.create(
+            username="todd_evu", display_name="Todd",
+            password_hash="x", email="todd_evu@example.com",
+        )
+        self._login_as(client, "todd_evu@example.com")
+        ev = Event.objects.create(
+            manager_id=m.id, title="X", event_type="one_on_one",
+            scheduled_date=(date.today() + timedelta(days=1)).isoformat(),
+            scheduled_time="10:00", status="completed",
+        )
+        return m, ev
+
+    def test_uncomplete_returns_to_scheduled(self, client):
+        m, ev = self._setup(client)
+        resp = client.post(f"/events/{ev.id}/uncomplete/")
+        assert resp.status_code == 200
+        ev.refresh_from_db()
+        assert ev.status == "scheduled"
+
+    def test_uncomplete_on_scheduled_returns_404(self, client):
+        m, ev = self._setup(client)
+        ev.status = "scheduled"
+        ev.save(update_fields=["status"])
+        assert client.post(f"/events/{ev.id}/uncomplete/").status_code == 404
+

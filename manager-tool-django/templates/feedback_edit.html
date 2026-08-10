@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Feedback — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Edit Feedback</h1>
+    <p class="text-sm text-slate-500 mt-1">SBI framework: Situation, Behavior, Impact.</p>
+  </header>
+
+  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
+    <form method="post" class="space-y-3">
+      {% csrf_token %}
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Team member *</label>
+          {{ form.team_member }}
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700">Type</label>
+          {{ form.feedback_type }}
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Situation</label>
+        {{ form.situation }}
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Behavior</label>
+        {{ form.behavior }}
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700">Impact</label>
+        {{ form.impact }}
+      </div>
+
+      <div class="flex items-center justify-between pt-2">
+        <a href="{% url 'feedback' %}" class="text-sm text-slate-600 hover:text-slate-900 underline">Back to feedback</a>
+        <button type="submit" class="bg-accent-700 text-white text-sm px-4 py-2 rounded hover:bg-accent-800">
+          Save changes
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

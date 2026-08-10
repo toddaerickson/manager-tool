@@ -44,11 +44,13 @@
         </div>
         <div class="flex items-center gap-3">
           <span class="text-xs text-slate-500 tabular-nums">{{ n.note_date }}</span>
+          <a href="{% url 'notes-edit' n.id %}"
+             class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Edit</a>
           <button type="button"
                   hx-delete="{% url 'notes-delete' n.id %}"
                   hx-target="#note-row-{{ n.id }}"
                   hx-swap="outerHTML"
-                  hx-confirm="Delete this note?"
+                  hx-confirm="Delete this note? This cannot be undone."
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                   class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
         </div>

@@ -235,6 +235,24 @@ def journal_edit(request, entry_id: int):
 
 
 @login_required
+@require_http_methods(["DELETE"])
+def journal_delete(request, entry_id: int):
+    """HTMX: permanently delete a journal entry (UI review follow-up —
+    previously entries could only be edited, never removed)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    deleted, _ = (
+        JournalEntry.objects.for_manager(manager.id).filter(pk=entry_id).delete()
+    )
+    if deleted == 0:
+        return HttpResponse(status=404)
+    log_mutation(manager.id, "delete", "JournalEntry", entry_id,
+                 "Deleted journal entry")
+    return HttpResponse(status=200)
+
+
+@login_required
 def journal_export_csv(request):
     """CSV export of the manager's full journal history, oldest first.
 

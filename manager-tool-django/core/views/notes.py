@@ -1,9 +1,11 @@
 """Views: notes."""
 
+import logging
+from datetime import date
 
 from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from core.models import (
@@ -14,6 +16,8 @@ from core.forms import (
 )
 from core.services.audit import log_mutation
 from core.views._common import _parse_member_filter, _require_manager
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # Phase 5.6 — Running Notes (1:1 Notes)
@@ -87,5 +91,33 @@ def notes_delete(request, note_id: int):
     log_mutation(manager.id, "delete", "RunningNote", note_id,
                  "Deleted running note")
     return HttpResponse(status=200)
+
+
+@login_required
+def notes_edit(request, note_id: int):
+    """Edit a running note — GET shows the form, POST saves and redirects
+    (UI review follow-up: notes were previously write-once + delete)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    note = get_object_or_404(
+        RunningNote.objects.for_manager(manager.id), pk=note_id,
+    )
+    if request.method == "POST":
+        form = RunningNoteForm(request.POST, instance=note, manager_id=manager.id)
+        if form.is_valid():
+            obj = form.save()
+            log_mutation(manager.id, "update", "RunningNote", obj.id,
+                         f"Updated note: {obj.content[:60]}")
+            return redirect("notes")
+    else:
+        form = RunningNoteForm(instance=note, manager_id=manager.id)
+        if note.note_date:
+            try:
+                form.initial["note_date"] = date.fromisoformat(note.note_date)
+            except ValueError:
+                logger.warning("RunningNote %s has unparseable note_date %r",
+                               note.id, note.note_date)
+    return render(request, "notes_edit.html", {"form": form, "note": note})
 
 

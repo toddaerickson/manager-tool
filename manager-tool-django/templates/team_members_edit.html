@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Member — Manager Tool{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl">
+  <header class="mb-6">
+    <h1 class="text-2xl font-semibold">Edit Member</h1>
+    <p class="text-sm text-slate-500 mt-1">{{ member.name }}</p>
+  </header>
+
+  <div class="bg-white rounded-lg shadow-sm border border-slate-200 px-6 py-6">
+    <form method="post" class="space-y-3">
+      {% csrf_token %}
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label for="{{ form.name.id_for_label }}" class="block text-sm font-medium text-slate-700">Name *</label>
+          {{ form.name }}
+          {% if form.name.errors %}<p class="text-xs text-red-600 mt-1">{{ form.name.errors.0 }}</p>{% endif %}
+        </div>
+        <div>
+          <label for="{{ form.email.id_for_label }}" class="block text-sm font-medium text-slate-700">Email</label>
+          {{ form.email }}
+          {% if form.email.errors %}<p class="text-xs text-red-600 mt-1">{{ form.email.errors.0 }}</p>{% endif %}
+        </div>
+        <div>
+          <label for="{{ form.role.id_for_label }}" class="block text-sm font-medium text-slate-700">Role</label>
+          {{ form.role }}
+        </div>
+        <div>
+          <label for="{{ form.start_date.id_for_label }}" class="block text-sm font-medium text-slate-700">Start date</label>
+          {{ form.start_date }}
+          {% if form.start_date.errors %}<p class="text-xs text-red-600 mt-1">{{ form.start_date.errors.0 }}</p>{% endif %}
+        </div>
+      </div>
+
+      <div>
+        <label for="{{ form.notes.id_for_label }}" class="block text-sm font-medium text-slate-700">Notes</label>
+        {{ form.notes }}
+      </div>
+
+      <div class="flex items-center justify-between pt-2">
+        <a href="{% url 'team' %}" class="text-sm text-slate-600 hover:text-slate-900 underline">Back to team</a>
+        <button type="submit" class="bg-accent-700 text-white text-sm px-4 py-2 rounded hover:bg-accent-800">
+          Save changes
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

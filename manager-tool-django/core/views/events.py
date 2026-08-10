@@ -70,9 +70,18 @@ def events_upcoming(request):
         .select_related("team_member")
         .order_by("scheduled_date", "scheduled_time")
     )
+    # Completed events (with a Reopen action) — UI review follow-up: gave
+    # events the same undo symmetry to-dos and meetings already had.
+    completed_events = (
+        Event.objects.for_manager(manager.id)
+        .filter(status="completed")
+        .select_related("team_member")
+        .order_by("-scheduled_date")[:20]
+    )
     return render(request, "events_upcoming.html", {
         "groups": _group_events_by_date(events, today_iso, tomorrow_iso),
         "any_events": events.exists(),
+        "completed_events": completed_events,
     })
 
 
@@ -189,6 +198,25 @@ def events_complete(request, event_id: int):
         Event.objects.for_manager(manager.id)
         .filter(pk=event_id, status="scheduled")
         .update(status="completed")
+    )
+    if updated == 0:
+        return HttpResponse(status=404)
+    return HttpResponse(status=200)
+
+
+@login_required
+@require_http_methods(["POST"])
+def events_uncomplete(request, event_id: int):
+    """HTMX: undo Complete — set status back to 'scheduled'. UI review
+    follow-up: events previously had no reopen symmetry with to-dos and
+    meetings."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    updated = (
+        Event.objects.for_manager(manager.id)
+        .filter(pk=event_id, status="completed")
+        .update(status="scheduled")
     )
     if updated == 0:
         return HttpResponse(status=404)
