@@ -192,5 +192,18 @@
       <p class="text-sm text-slate-500">No configuration set yet.</p>
     {% endif %}
   </div>
+
+  {# Your data #}
+  <div class="bg-white border border-slate-200 rounded-md px-6 py-6 mt-4">
+    <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Your data</h2>
+    <p class="text-sm text-slate-500 mb-3">
+      Download everything this account has recorded as a JSON archive — team,
+      events, feedback, journal, goals, decisions, and more. Secrets are never exported.
+    </p>
+    <a href="{% url 'data-export' %}"
+       class="inline-block bg-white border border-slate-300 text-slate-800 text-sm px-4 py-2 rounded hover:bg-slate-50">
+      Export all data (JSON)
+    </a>
+  </div>
 </div>
 {% endblock %}

@@ -84,6 +84,7 @@ urlpatterns = [
     path("resources/", core_views.resources, name="resources"),
     path("settings/", core_views.settings_page, name="settings"),
     path("settings/send-digest/", core_views.settings_send_digest, name="settings-send-digest"),
+    path("export/", core_views.data_export, name="data-export"),
     path("sentry-debug/", core_views.sentry_debug, name="sentry-debug"),
     # Force Google-only by short-circuiting allauth's default form. The
     # email/password page exists in allauth but we never want users to
