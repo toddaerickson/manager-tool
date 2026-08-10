@@ -2,13 +2,11 @@
 __pycache__/
 *.pyc
 *.db
-ics_exports/
 .env
 .env.*
 !.env.template
 !.env.example
 *.sqlite3
-.streamlit/secrets.toml
 *.pdf
 .encryption_key
 backups/
