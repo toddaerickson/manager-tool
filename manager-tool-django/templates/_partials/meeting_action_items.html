@@ -5,23 +5,39 @@
   {% for a in action_items %}
   <li class="flex items-center justify-between text-sm">
     <span class="text-slate-700">{{ a.description }}</span>
-    <span class="text-xs text-slate-500 ml-2 shrink-0">
-      {% if a.due_date %}due {{ a.due_date }}{% endif %}
-      <span class="text-xs px-1.5 py-0.5 rounded {% if a.status == 'completed' %}bg-emerald-100 text-emerald-700{% else %}bg-slate-100 text-slate-600{% endif %}">{{ a.status }}</span>
-    </span>
+    <span class="text-xs text-slate-500 ml-2 shrink-0">{% if a.due_date %}due {{ a.due_date }}{% endif %}</span>
   </li>
   {% endfor %}
 </ul>
-{% else %}
-<p class="text-sm text-slate-500 mb-4">No action items yet.</p>
+{% endif %}
+
+{% if open_delegations %}
+<div class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1 mt-2">Delegated to {{ session.team_member.name }}</div>
+<ul class="space-y-1.5 mb-4">
+  {% for d in open_delegations %}
+  <li class="flex items-center justify-between text-sm">
+    <span class="text-slate-700">{{ d.task }}</span>
+    <span class="text-xs text-slate-500 ml-2 shrink-0">{% if d.check_in_date %}due {{ d.check_in_date }}{% endif %}</span>
+  </li>
+  {% endfor %}
+</ul>
 {% endif %}
 
 <form hx-post="{% url 'meetings-add-action' session.id %}"
       hx-target="#meeting-actions"
       hx-swap="innerHTML"
       hx-disabled-elt="find button[type='submit']"
-      class="flex items-end gap-2">
+      class="flex flex-wrap items-end gap-2">
   {% csrf_token %}
+  <div class="flex items-center gap-3 w-full text-sm mb-1">
+    <span class="text-slate-600">Capture as:</span>
+    <label class="inline-flex items-center gap-1.5 cursor-pointer">
+      <input type="radio" name="owner" value="mine" checked class="accent-accent-700">To-do (mine)
+    </label>
+    <label class="inline-flex items-center gap-1.5 cursor-pointer">
+      <input type="radio" name="owner" value="delegate" class="accent-accent-700">Delegate to {{ session.team_member.name }}
+    </label>
+  </div>
   <div class="flex-1">
     {{ action_form.description }}
   </div>

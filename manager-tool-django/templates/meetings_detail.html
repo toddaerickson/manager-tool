@@ -19,16 +19,21 @@
           {% endif %}
         </p>
       </div>
-      <form method="post" action="{% url 'meetings-complete' session.id %}">
-        {% csrf_token %}
-        {% if session.status == "draft" %}
-          <button type="submit"
-                  class="bg-green-700 text-white text-sm px-4 py-2 rounded hover:bg-green-600">Mark complete</button>
-        {% else %}
-          <button type="submit"
-                  class="bg-slate-600 text-white text-sm px-4 py-2 rounded hover:bg-slate-500">Reopen</button>
-        {% endif %}
-      </form>
+      <div class="flex items-center gap-2">
+        <a href="{% url 'events-schedule' %}"
+           class="bg-white border border-slate-300 text-sm px-3 py-2 rounded hover:bg-slate-50"
+           title="Schedule the next 1:1 for {{ session.team_member.name }}">Schedule next</a>
+        <form method="post" action="{% url 'meetings-complete' session.id %}">
+          {% csrf_token %}
+          {% if session.status == "draft" %}
+            <button type="submit"
+                    class="bg-green-700 text-white text-sm px-4 py-2 rounded hover:bg-green-600">Mark complete</button>
+          {% else %}
+            <button type="submit"
+                    class="bg-slate-600 text-white text-sm px-4 py-2 rounded hover:bg-slate-500">Reopen</button>
+          {% endif %}
+        </form>
+      </div>
     </div>
   </div>
 
