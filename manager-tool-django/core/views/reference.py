@@ -92,6 +92,10 @@ def analytics(request):
         if c > 0:
             goal_stats[status] = c
 
+    # Personal anti-pattern synthesis (The Ghost / Micromanager / Buddy / Scorekeeper)
+    from core.services.anti_patterns import detect_anti_patterns
+    anti_patterns = detect_anti_patterns(meeting_cadence, feedback_ratios)
+
     # Totals
     total_events = Event.objects.for_manager(mid).count()
     total_feedback = Feedback.objects.for_manager(mid).count()
@@ -104,6 +108,7 @@ def analytics(request):
         "streak": streak,
         "meeting_cadence": meeting_cadence,
         "feedback_ratios": feedback_ratios,
+        "anti_patterns": anti_patterns,
         "action_total": action_total,
         "action_completed": action_completed,
         "action_pending": action_pending,
