@@ -1,5 +1,7 @@
 """Views: journal."""
 
+import csv
+import io
 from datetime import date
 
 from django.contrib.auth.decorators import login_required
@@ -230,5 +232,46 @@ def journal_edit(request, entry_id: int):
         if entry.energy is not None:
             form.initial["energy"] = str(entry.energy)
     return render(request, "journal_edit.html", {"form": form, "entry": entry})
+
+
+@login_required
+def journal_export_csv(request):
+    """CSV export of the manager's full journal history, oldest first.
+
+    Tenant-scoped via for_manager. Serves a downloadable attachment with a
+    UTF-8 BOM so Excel opens it without mojibake. Replaces the Streamlit-era
+    CSV export the README still promises."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    entries = (
+        JournalEntry.objects.for_manager(manager.id)
+        .order_by("entry_date", "created_at")
+    )
+    buf = io.StringIO()
+    # BOM so Excel detects UTF-8 (streamlit export used the same trick).
+    buf.write("\ufeff")
+    writer = csv.writer(buf)
+    writer.writerow([
+        "entry_date", "entry_type", "mood", "energy", "content",
+        "tags", "coaching_response", "private_notes", "created_at",
+    ])
+    for e in entries:
+        writer.writerow([
+            e.entry_date,
+            e.entry_type,
+            e.mood if e.mood is not None else "",
+            e.energy if e.energy is not None else "",
+            e.content or "",
+            e.tags or "",
+            e.coaching_response or "",
+            e.private_notes or "",
+            e.created_at.isoformat() if e.created_at else "",
+        ])
+    response = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = (
+        f'attachment; filename="journal-export-{date.today().isoformat()}.csv"'
+    )
+    return response
 
 

@@ -26,6 +26,17 @@ and a single uppercase section-header style. Numbers use tabular-nums
 </section>
 {% endif %}
 
+{# ---- 0b. Today's Wisdom ---- #}
+{% if wisdom %}
+<section class="mb-6">
+  <div class="bg-indigo-50 border border-indigo-200 rounded-md px-4 py-3">
+    <div class="text-xs text-indigo-500 uppercase tracking-wider mb-1">Today's wisdom (#{{ wisdom.number }})</div>
+    <p class="text-sm text-indigo-900">{{ wisdom.text }}</p>
+    <p class="text-xs text-indigo-600 mt-1">— {{ wisdom.section }}</p>
+  </div>
+</section>
+{% endif %}
+
 {# ---- 1. Next Actions ---- #}
 <section class="mb-6">
   <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Next actions</h2>

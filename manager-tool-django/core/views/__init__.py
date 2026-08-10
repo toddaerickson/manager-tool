@@ -42,6 +42,7 @@ from core.views.journal import (  # noqa: F401
     journal_add,
     journal_coaching,
     journal_edit,
+    journal_export_csv,
     journal_list,
 )
 from core.views.goals import (  # noqa: F401

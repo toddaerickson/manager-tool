@@ -32,6 +32,7 @@ urlpatterns = [
     path("todos/<int:todo_id>/star/", core_views.todos_star, name="todos-star"),
     path("journal/", core_views.journal_list, name="journal"),
     path("journal/add/", core_views.journal_add, name="journal-add"),
+    path("journal/export/", core_views.journal_export_csv, name="journal-export"),
     path("journal/<int:entry_id>/coaching/", core_views.journal_coaching, name="journal-coaching"),
     path("journal/<int:entry_id>/edit/", core_views.journal_edit, name="journal-edit"),
     path("goals/", core_views.goals_list, name="goals"),

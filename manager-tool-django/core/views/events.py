@@ -363,6 +363,10 @@ def dashboard_overview(request):
     from coaching.services import get_daily_suggestion
     coach = get_daily_suggestion(mid)
 
+    # Today's wisdom (deterministic per calendar day) — small footer note.
+    from coaching.services import get_daily_wisdom
+    wisdom = get_daily_wisdom()
+
     members = list(TeamMember.objects.active_for_manager(mid).order_by("name"))
 
     # ── Next Actions ─────────────────────────────────────────
@@ -565,6 +569,7 @@ def dashboard_overview(request):
         "streak": streak,
         "today_iso": today_iso,
         "coach": coach,
+        "wisdom": wisdom,
     }
     return render(request, "_partials/dashboard_overview.html", ctx)
 
