@@ -26,7 +26,26 @@ and a single uppercase section-header style. Numbers use tabular-nums
 </section>
 {% endif %}
 
-{# ---- 0b. Today's Wisdom ---- #}
+{# ---- 0b. Getting Started (onboarding checklist) ---- #}
+{% if checklist_pending %}
+<section class="mb-6">
+  <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Getting started</h2>
+  <div class="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
+    {% for item in checklist %}
+    <div class="flex items-center gap-2.5 px-3 py-2">
+      <span class="w-1.5 h-1.5 rounded-full shrink-0 {% if item.done %}bg-emerald-500{% else %}bg-slate-400{% endif %}"></span>
+      {% if item.url and not item.done %}
+      <a href="{{ item.url }}" class="text-sm text-slate-800 hover:underline">{{ item.text }}</a>
+      {% else %}
+      <span class="text-sm {% if item.done %}text-slate-500{% else %}text-slate-800{% endif %}">{{ item.text }}</span>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{# ---- 0c. Today's Wisdom ---- #}
 {% if wisdom %}
 <section class="mb-6">
   <div class="bg-indigo-50 border border-indigo-200 rounded-md px-4 py-3">

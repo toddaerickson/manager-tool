@@ -352,6 +352,44 @@ class TestDashboardView:
         assert "Today's wisdom" in body
         assert "wisdom.number" not in body  # rendered value, not a template var
 
+    def test_overview_renders_onboarding_checklist(self, client):
+        Manager.objects.create(
+            username="todd_ob1", display_name="Todd",
+            password_hash="x", email="todd_ob1@example.com",
+        )
+        self._login_as(client, "todd_ob1@example.com")
+        resp = client.get("/dashboard/panels/overview/")
+        body = resp.content.decode()
+        assert "Getting started" in body
+        assert "Add your first team member" in body
+        assert "Write your first journal entry" in body
+        assert "Schedule your first 1:1" in body
+        assert "Give feedback to your team" in body
+
+    def test_overview_hides_onboarding_checklist_when_complete(self, client):
+        from datetime import date
+        m = Manager.objects.create(
+            username="todd_ob2", display_name="Todd",
+            password_hash="x", email="todd_ob2@example.com",
+        )
+        member = TeamMember.objects.create(name="Report A", manager_id=m.id)
+        JournalEntry.objects.create(
+            entry_date=date.today().isoformat(), entry_type="daily",
+            content="First entry", manager_id=m.id,
+        )
+        Event.objects.create(
+            title="1:1 with Report A", event_type="one_on_one",
+            scheduled_date=date.today().isoformat(), scheduled_time="09:00",
+            status="scheduled", manager_id=m.id,
+        )
+        Feedback.objects.create(
+            team_member=member, feedback_type="positive", manager_id=m.id,
+        )
+        self._login_as(client, "todd_ob2@example.com")
+        resp = client.get("/dashboard/panels/overview/")
+        body = resp.content.decode()
+        assert "Getting started" not in body
+
     def test_dashboard_coach_dismiss_hides_card_for_the_day(self, client):
         from datetime import date
         from coaching.models import CoachSuggestion

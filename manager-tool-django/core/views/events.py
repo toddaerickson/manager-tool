@@ -367,6 +367,32 @@ def dashboard_overview(request):
     from coaching.services import get_daily_wisdom
     wisdom = get_daily_wisdom()
 
+    # Onboarding checklist — core first-steps, each mapped to a page. Shown
+    # on the dashboard until the manager has completed all four.
+    checklist = [
+        {
+            "text": "Add your first team member",
+            "url": "/team/add/",
+            "done": TeamMember.objects.active_for_manager(mid).exists(),
+        },
+        {
+            "text": "Write your first journal entry",
+            "url": "/journal/",
+            "done": JournalEntry.objects.for_manager(mid).exists(),
+        },
+        {
+            "text": "Schedule your first 1:1",
+            "url": "/events/schedule/",
+            "done": Event.objects.for_manager(mid).filter(status="scheduled").exists(),
+        },
+        {
+            "text": "Give feedback to your team",
+            "url": "/feedback/add/",
+            "done": Feedback.objects.for_manager(mid).exists(),
+        },
+    ]
+    checklist_pending = any(not item["done"] for item in checklist)
+
     members = list(TeamMember.objects.active_for_manager(mid).order_by("name"))
 
     # ── Next Actions ─────────────────────────────────────────
@@ -570,6 +596,8 @@ def dashboard_overview(request):
         "today_iso": today_iso,
         "coach": coach,
         "wisdom": wisdom,
+        "checklist": checklist,
+        "checklist_pending": checklist_pending,
     }
     return render(request, "_partials/dashboard_overview.html", ctx)
 
