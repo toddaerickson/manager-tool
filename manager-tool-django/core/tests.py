@@ -321,6 +321,50 @@ class TestDashboardView:
         assert "Other's overdue" not in body
         assert "Other's meeting" not in body
 
+    def test_overview_renders_daily_coach_card(self, client):
+        from datetime import date
+        from coaching.models import CoachSuggestion
+        m = Manager.objects.create(
+            username="todd_coach", display_name="Todd",
+            password_hash="x", email="todd_coach@example.com",
+        )
+        CoachSuggestion.objects.create(
+            manager_id=m.id, suggestion_date=date.today().isoformat(),
+            tier="rule", suggestion="SEEDED COACH SUGGESTION",
+            dismissed=0,
+        )
+        self._login_as(client, "todd_coach@example.com")
+        resp = client.get("/dashboard/panels/overview/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert "Daily coach" in body
+        assert "SEEDED COACH SUGGESTION" in body
+
+    def test_dashboard_coach_dismiss_hides_card_for_the_day(self, client):
+        from datetime import date
+        from coaching.models import CoachSuggestion
+        m = Manager.objects.create(
+            username="todd_cdismiss", display_name="Todd",
+            password_hash="x", email="todd_cdismiss@example.com",
+        )
+        CoachSuggestion.objects.create(
+            manager_id=m.id, suggestion_date=date.today().isoformat(),
+            tier="rule", suggestion="SEEDED COACH SUGGESTION",
+            dismissed=0,
+        )
+        self._login_as(client, "todd_cdismiss@example.com")
+        # Card shows before dismissal
+        assert "SEEDED COACH SUGGESTION" in client.get(
+            "/dashboard/panels/overview/").content.decode()
+        # "Got it" dismisses today's suggestion
+        resp = client.post("/dashboard/coach/dismiss/")
+        assert resp.status_code == 200
+        assert CoachSuggestion.objects.for_manager(m.id).filter(
+            dismissed=1).count() == 1
+        # Card no longer shows for the rest of the day (dismiss honored)
+        body = client.get("/dashboard/panels/overview/").content.decode()
+        assert "SEEDED COACH SUGGESTION" not in body
+
     def test_logout_invalidates_session_with_setup(self, client):
         Manager.objects.create(
             username="todd", display_name="Todd",

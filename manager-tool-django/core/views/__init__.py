@@ -18,6 +18,7 @@ from core.views.team import (  # noqa: F401
     team_members_restore,
 )
 from core.views.events import (  # noqa: F401
+    dashboard_coach_dismiss,
     events_complete,
     events_delete,
     events_detail,
