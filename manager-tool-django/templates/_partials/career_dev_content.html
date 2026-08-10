@@ -43,7 +43,7 @@ updates without a full reload (D4 consistency fix).
                     hx-delete="{% url 'skills-delete' s.id %}"
                     hx-target="#career-dev-content"
                     hx-swap="outerHTML"
-                    hx-confirm="Delete this skill?"
+                    hx-confirm="Delete this skill? This cannot be undone."
                     hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                     class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
           </td>

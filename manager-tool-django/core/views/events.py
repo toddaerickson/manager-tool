@@ -224,6 +224,32 @@ def events_uncomplete(request, event_id: int):
 
 
 @login_required
+@require_http_methods(["POST"])
+def events_complete_series(request, event_id: int):
+    """Mark all remaining scheduled occurrences of a recurring series as
+    completed. Only valid on the series parent (recurrence_rule set, no
+    parent of its own). UI review follow-up: complete the whole series at
+    once instead of one occurrence at a time."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    ev = get_object_or_404(
+        Event.objects.for_manager(manager.id), pk=event_id,
+    )
+    if not ev.recurrence_rule or ev.parent_event_id is not None:
+        return HttpResponse(status=400)
+    from django.db.models import Q
+    n = (
+        Event.objects.for_manager(manager.id)
+        .filter(Q(parent_event=ev) | Q(pk=ev.id), status="scheduled")
+        .update(status="completed")
+    )
+    if n == 0:
+        return HttpResponse(status=404)
+    return HttpResponse(status=200)
+
+
+@login_required
 def events_detail(request, event_id: int):
     """Phase 6 (D2 link contract) — minimal event-detail page. The
     canonical URL the user pastes into their Outlook invite. Shows

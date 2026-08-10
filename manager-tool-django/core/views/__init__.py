@@ -21,6 +21,7 @@ from core.views.team import (  # noqa: F401
 from core.views.events import (  # noqa: F401
     dashboard_coach_dismiss,
     events_complete,
+    events_complete_series,
     events_delete,
     events_detail,
     events_edit,
@@ -53,6 +54,7 @@ from core.views.goals import (  # noqa: F401
     goals_delete,
     goals_edit,
     goals_list,
+    goal_status,
 )
 from core.views.career import (  # noqa: F401
     career_dev,
@@ -67,6 +69,7 @@ from core.views.career import (  # noqa: F401
 )
 from core.views.delegations import (  # noqa: F401
     delegations_add,
+    delegations_complete,
     delegations_delete,
     delegations_edit,
     delegations_list,

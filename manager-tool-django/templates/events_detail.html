@@ -129,6 +129,17 @@
       {% endif %}
     {% endif %}
   </div>
+
+  {% if ev.recurrence_rule and ev.parent_event_id is None and ev.status == "scheduled" %}
+  <form method="post" action="{% url 'events-complete-series' ev.id %}" class="mt-4"
+        onsubmit="return confirm('Mark the entire series as complete?')">
+    {% csrf_token %}
+    <button type="submit"
+            class="bg-white border border-slate-300 text-sm px-4 py-2 rounded hover:bg-slate-50">
+      Complete entire series
+    </button>
+  </form>
+  {% endif %}
 </div>
 
 <script>

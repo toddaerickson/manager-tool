@@ -36,7 +36,7 @@
                   hx-delete="{% url 'decisions-delete' d.id %}"
                   hx-target="#decision-row-{{ d.id }}"
                   hx-swap="outerHTML"
-                  hx-confirm="Delete this decision?"
+                  hx-confirm="Delete this decision? This cannot be undone."
                   hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
                   class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-500 hover:bg-red-50 hover:text-red-700">Delete</button>
         </div>
