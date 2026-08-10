@@ -141,6 +141,8 @@ The production app is **Django 5.1 + HTMX + Tailwind**, deployed on Render with 
 
 **Neon PostgreSQL** in production; SQLite `:memory:` for the pytest suite (`mt/settings_test.py`). Neon's serverless proxy handles pooling; the app opens direct connections.
 
+**Backups** — see `manager-tool-django/BACKUPS.md`. Three layers: Neon's built-in point-in-time restore + snapshots (set up in the Neon console), an automated nightly `python manage.py backup_db` pg_dump cron (defined in `render.yaml`), and manual in-app exports (Settings → Export all data, Journal → Export CSV).
+
 ### Tables
 
 | Category | Tables |

@@ -11,3 +11,4 @@ staticfiles/*
 .pytest_cache/
 .ruff_cache/
 cutover_diff_*.json
+backups/

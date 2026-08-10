@@ -150,3 +150,33 @@ services:
         value: prod
       - key: PYTHON_VERSION
         value: "3.11"
+
+  - type: cron
+    name: backup-db
+    runtime: python
+    repo: https://github.com/toddaerickson/manager-tool
+    rootDir: manager-tool-django
+    plan: starter
+    region: oregon
+    branch: main
+    schedule: "0 13 * * *"  # daily 9 AM ET (UTC-4)
+    buildCommand: pip install -r requirements.txt
+    startCommand: python manage.py backup_db
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: MANAGER_TOOL_ENV
+        value: prod
+      - key: PYTHON_VERSION
+        value: "3.11"
+      # Retention: number of daily snapshots to keep locally.
+      # - key: BACKUP_RETENTION
+      #   value: "7"
+      # Optional OFF-SITE copy. Render cron disks are ephemeral (the local
+      # snapshot vanishes after the job), so to keep a durable backup set
+      # BACKUP_S3_BUCKET + AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY and the
+      # snapshot is also uploaded to S3. Commented out until you configure a
+      # bucket — until then the snapshot is written to the job's ephemeral
+      # disk only (still produced every run, but not retained).
+      # - key: BACKUP_S3_BUCKET
+      #   sync: false
