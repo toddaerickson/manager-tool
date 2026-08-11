@@ -20,11 +20,18 @@ from core.services.config import (
     set_config,
 )
 from core.services.digest import send_weekly_digest
-from core.views._common import _require_manager
+from core.services.audit import log_mutation
+from core.views._common import _require_manager, rate_limit
 
 # ============================================================
 # Phase 6 — Settings: profile + AI key + SMTP + digest test
 # ============================================================
+
+# Extraction-sensitive export endpoints: allow a burst of a few downloads
+# per manager per hour, then throttle. Keyed per manager (not IP) so a
+# legitimate user isn't locked out by IP churn.
+EXPORT_RATE_LIMIT = 5
+EXPORT_RATE_WINDOW_SECONDS = 3600
 
 CONFIG_FIELDS = (
     "anthropic_api_key",
@@ -111,6 +118,7 @@ def settings_send_digest(request):
 
 
 @login_required
+@rate_limit(limit=EXPORT_RATE_LIMIT, window_seconds=EXPORT_RATE_WINDOW_SECONDS, key="export")
 def data_export(request):
     """Export the manager's full data (all tenant-scoped content models) as a
     JSON attachment. Intentionally excludes Config — that table holds secrets."""
@@ -126,4 +134,6 @@ def data_export(request):
     response["Content-Disposition"] = (
         f'attachment; filename="manager-data-{date.today().isoformat()}.json"'
     )
+    log_mutation(manager.id, "export", "DataExport", manager.id,
+                 "Exported full data archive (JSON)")
     return response

@@ -12,6 +12,7 @@ each page port).
 """
 
 import pytest
+from django.test import override_settings
 
 from coaching.models import CoachSuggestion
 from core.models import (
@@ -2657,6 +2658,10 @@ class TestJournalExport:
         assert "entry_date,entry_type,mood" in text
         assert "2026-05-08" in text
         assert "Had a great 1:1" in text
+        # Exports are audited so downloads are traceable (hardening follow-up).
+        assert AuditLog.objects.filter(
+            manager_id=m.id, action="export", entity_type="JournalEntry",
+        ).exists()
 
     def test_export_is_tenant_scoped(self, client):
         m = self._setup(client)
@@ -8769,6 +8774,21 @@ class TestDataExport:
         assert data["team_members"][0]["name"] == "Alice"
         assert data["journal_entries"][0]["content"] == "hello"
         assert data["events"] == []
+        # Exports are audited so downloads are traceable (hardening follow-up).
+        assert AuditLog.objects.filter(
+            manager_id=m.id, action="export", entity_type="DataExport",
+        ).exists()
+
+    @override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache", "LOCATION": "test-export-ratelimit"}})
+    def test_export_is_rate_limited(self, client):
+        from core.views.settings_views import EXPORT_RATE_LIMIT
+        self._setup(client)
+        statuses = [
+            client.get("/export/").status_code
+            for _ in range(EXPORT_RATE_LIMIT + 1)
+        ]
+        assert statuses[:EXPORT_RATE_LIMIT] == [200] * EXPORT_RATE_LIMIT
+        assert statuses[-1] == 429
 
     def test_export_is_tenant_scoped(self, client):
         import json
