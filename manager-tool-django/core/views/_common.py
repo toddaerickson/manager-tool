@@ -2,11 +2,15 @@
 
 import logging
 import os
+import time
+from functools import wraps
 
 from django.conf import settings as _settings
 from django.contrib.auth.decorators import login_required
+from django.core.cache import cache
 from django.db import connection
 from django.http import (
+    HttpResponse,
     HttpResponseForbidden,
     HttpResponseNotFound,
     JsonResponse,
@@ -22,6 +26,41 @@ from core.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def rate_limit(*, limit, window_seconds, key=None):
+    """Per-manager request-rate limiter using the Django cache backend.
+
+    Protects sensitive endpoints (e.g. data export) from being hammered to
+    bulk-extract a tenant's data. Keys on the authenticated manager id; an
+    optional `key` disambiguates multiple endpoints for the same manager.
+
+    Requests without a manager are passed straight through — they're already
+    rejected by `_require_manager`, so there's nothing to protect. Uses the
+    default cache (LocMemCache, in-process): a solid v1; swapping in a shared
+    Redis cache would make the limit cluster-wide.
+    """
+    def decorator(view):
+        @wraps(view)
+        def wrapper(request, *args, **kwargs):
+            manager = getattr(request, "manager", None)
+            uid = manager.id if manager is not None else None
+            if uid is None:
+                return view(request, *args, **kwargs)
+            if key is not None:
+                uid = f"{uid}:{key}"
+            bucket = int(time.time()) // window_seconds
+            cache_key = f"ratelimit:{uid}:{bucket}"
+            count = cache.get(cache_key, 0)
+            if count >= limit:
+                return HttpResponse(
+                    "Rate limit exceeded. Please try again later.",
+                    status=429,
+                )
+            cache.set(cache_key, count + 1, window_seconds)
+            return view(request, *args, **kwargs)
+        return wrapper
+    return decorator
 
 
 def health(request):

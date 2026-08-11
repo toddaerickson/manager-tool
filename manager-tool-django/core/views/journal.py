@@ -2,6 +2,7 @@
 
 import csv
 import io
+import logging as _logging
 from datetime import date
 
 from django.contrib.auth.decorators import login_required
@@ -17,10 +18,13 @@ from core.forms import (
 )
 from core.services.audit import log_mutation
 from core.services.journal import journal_streak as _journal_streak
-from core.views._common import _require_manager
+from core.views._common import _require_manager, rate_limit
 
-import logging as _logging
 _logger = _logging.getLogger(__name__)
+
+# Extraction-sensitive endpoint: a small per-manager hourly cap on downloads.
+EXPORT_RATE_LIMIT = 5
+EXPORT_RATE_WINDOW_SECONDS = 3600
 
 # ============================================================
 # Phase 5.4 — Journal entries
@@ -253,6 +257,7 @@ def journal_delete(request, entry_id: int):
 
 
 @login_required
+@rate_limit(limit=EXPORT_RATE_LIMIT, window_seconds=EXPORT_RATE_WINDOW_SECONDS, key="export-journal")
 def journal_export_csv(request):
     """CSV export of the manager's full journal history, oldest first.
 
@@ -290,6 +295,8 @@ def journal_export_csv(request):
     response["Content-Disposition"] = (
         f'attachment; filename="journal-export-{date.today().isoformat()}.csv"'
     )
+    log_mutation(manager.id, "export", "JournalEntry", manager.id,
+                 "Exported journal history (CSV)")
     return response
 
 
