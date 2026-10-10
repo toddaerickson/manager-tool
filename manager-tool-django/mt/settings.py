@@ -22,7 +22,11 @@ env = environ.Env(
     MANAGER_TOOL_ENV=(str, "dev"),
     SENTRY_DSN=(str, ""),
 )
-environ.Env.read_env(BASE_DIR / ".env")
+# scripts/validate_render_blueprint.py boots this module with ONLY the env
+# keys a render.yaml service declares; a local .env would silently fill
+# the gaps and pass a service that crashes on Render.
+if not os.environ.get("MT_IGNORE_DOTENV"):
+    environ.Env.read_env(BASE_DIR / ".env")
 
 IS_PROD = env("MANAGER_TOOL_ENV") == "prod"
 DEBUG = not IS_PROD

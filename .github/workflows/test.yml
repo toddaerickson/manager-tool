@@ -69,13 +69,19 @@ jobs:
     # for ~3 weeks. The full `render blueprints validate` would catch
     # this too, but requires an authenticated workspace; this offline
     # script catches the field-name class without needing a CI secret.
+    # It also boots every service with ONLY its declared env keys — the
+    # `backup-db` cron declared MANAGER_TOOL_ENV=prod without
+    # CONFIG_ENCRYPTION_KEY, which settings.py refuses to boot — which
+    # is why this job installs the app's requirements, not just pyyaml.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install pyyaml
-        run: pip install pyyaml
+          cache: pip
+          cache-dependency-path: manager-tool-django/requirements.txt
+      - name: Install app requirements + pyyaml
+        run: pip install -r manager-tool-django/requirements.txt pyyaml
       - name: Validate render.yaml
         run: python scripts/validate_render_blueprint.py

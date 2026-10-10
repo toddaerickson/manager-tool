@@ -1,10 +1,15 @@
-# Render IaC: defines the Django web service.
+# Render IaC: defines the Django web service and its crons.
 # When the user connects the repo to Render and Render reads this file,
 # the service is created automatically. Secrets still need to be pasted
-# into the Render dashboard (sync: false).
+# into the Render dashboard (sync: false) — and Render prompts for them
+# ONLY when the Blueprint is first created. A service added to this file
+# later gets no prompt, so paste its sync:false values by hand before its
+# first run. CI boots every service with exactly the keys declared here
+# (scripts/validate_render_blueprint.py), so a missing required key fails
+# the PR rather than the cron.
 #
-# Phase 4: deploy points at the Neon dev-django branch via DATABASE_URL.
-# Phase 7 cutover: swap DATABASE_URL to point at production Neon.
+# Database backups are NOT a Render cron: .github/workflows/backup.yml
+# dumps, encrypts and restore-proves prod nightly (see BACKUPS.md).
 
 services:
   - type: web
@@ -150,33 +155,3 @@ services:
         value: prod
       - key: PYTHON_VERSION
         value: "3.11"
-
-  - type: cron
-    name: backup-db
-    runtime: python
-    repo: https://github.com/toddaerickson/manager-tool
-    rootDir: manager-tool-django
-    plan: starter
-    region: oregon
-    branch: main
-    schedule: "0 13 * * *"  # daily 9 AM ET (UTC-4)
-    buildCommand: pip install -r requirements.txt
-    startCommand: python manage.py backup_db
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: MANAGER_TOOL_ENV
-        value: prod
-      - key: PYTHON_VERSION
-        value: "3.11"
-      # Retention: number of daily snapshots to keep locally.
-      # - key: BACKUP_RETENTION
-      #   value: "7"
-      # Optional OFF-SITE copy. Render cron disks are ephemeral (the local
-      # snapshot vanishes after the job), so to keep a durable backup set
-      # BACKUP_S3_BUCKET + AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY and the
-      # snapshot is also uploaded to S3. Commented out until you configure a
-      # bucket — until then the snapshot is written to the job's ephemeral
-      # disk only (still produced every run, but not retained).
-      # - key: BACKUP_S3_BUCKET
-      #   sync: false
