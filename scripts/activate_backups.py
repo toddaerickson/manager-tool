@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Activate the backup system end-to-end: Render cron + env vars, and Neon PITR + snapshots.
+"""Activate Neon's managed backups: PITR history window + snapshots.
+
+The nightly logical dump is NOT configured here — it is
+.github/workflows/backup.yml and needs only repo secrets (see BACKUPS.md).
+This script once also configured a Render `backup-db` cron; that cron was
+retired as a weaker duplicate of the workflow.
 
 Usage (run with the project venv python so `requests` is available):
 
     python scripts/activate_backups.py --dry-run    # show what would be done (no changes)
-    python scripts/activate_backups.py              # do everything (Render + Neon)
-    python scripts/activate_backups.py --render     # Render only
-    python scripts/activate_backups.py --neon       # Neon only
+    python scripts/activate_backups.py              # apply it
 
-Required secrets (env vars - never commit):
-    RENDER_API_KEY      https://dashboard.render.com/account/api-keys
+Required secret (env var - never commit):
     NEON_API_KEY        https://console.neon.tech -> Account -> API keys
 
 Optional:
-    BACKUP_S3_BUCKET, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY  (offsite S3 retention)
     BACKUP_RETENTION    days of PITR history (default 7; max depends on Neon plan)
     PROJECT_ID, BRANCH_ID    Neon project/branch to back up (auto-detected if omitted)
 
-Endpoints verified against current docs:
-    Render  https://api.render.com/v1   (Bearer RENDER_API_KEY)
+Endpoint:
     Neon    https://console.neon.tech/api/v2 (Bearer NEON_API_KEY)
 
 This cannot be exercised against live accounts here (no API keys), so run --dry-run
@@ -38,14 +38,9 @@ except ImportError:
           "Run it with the project venv python:  python scripts/activate_backups.py")
     sys.exit(1)
 
-RENDER_BASE = "https://api.render.com/v1"
 NEON_BASE = "https://console.neon.tech/api/v2"
 
 DRY_RUN = "--dry-run" in sys.argv
-DO_RENDER = "--render" in sys.argv
-DO_NEON = "--neon" in sys.argv
-if not DO_RENDER and not DO_NEON:
-    DO_RENDER = DO_NEON = True
 
 
 def log(msg):
@@ -67,76 +62,6 @@ def call(base, method, path, token, json_body=None):
         return resp.json()
     except Exception:
         return {"status": resp.status_code}
-
-
-# ---------------------------------------------------------------------------
-# Render
-# ---------------------------------------------------------------------------
-def render_token():
-    if DRY_RUN:
-        return "DRY-RUN"  # not needed - call() only prints in dry-run
-    tok = os.environ.get("RENDER_API_KEY")
-    if not tok:
-        print("RENDER_API_KEY is not set. Create one at "
-              "https://dashboard.render.com/account/api-keys and export it.", file=sys.stderr)
-    return tok
-
-
-def activate_render():
-    tok = render_token()
-    if not tok:
-        return False
-    if DRY_RUN:
-        print("  Render plan - find the 'backup-db' cron job, then:")
-        for key in ("BACKUP_S3_BUCKET", "BACKUP_RETENTION",
-                    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
-            print(f"    PUT /services/<cron-id>/env-vars/{key}")
-        print("    POST /services/<cron-id>/deploys   (apply env vars)")
-        print("    POST /cron-jobs/<cron-id>/runs     (verify one run)")
-        return True
-    services = call(RENDER_BASE, "GET", "/services", tok)
-    if not services:
-        return False
-    cron = next(
-        (s for s in services if s.get("type") == "cron_job" or s.get("name") == "backup-db"),
-        None,
-    )
-    if not cron:
-        print("Could not find the backup-db cron job on Render. It is defined in "
-              "render.yaml - deploy the repo (autoDeploy) first, then re-run. "
-              "Available services: " + ", ".join(s.get("name", "?") for s in services),
-              file=sys.stderr)
-        return False
-    sid = cron["id"]
-    log(f"Found backup-db cron on Render: {cron.get('name')} ({sid})")
-
-    # Env vars for the cron. BACKUP_S3_BUCKET + AWS creds enable durable offsite
-    # retention (Render cron disks are ephemeral). Secret-type for the AWS key.
-    desired = {
-        "BACKUP_S3_BUCKET": os.environ.get("BACKUP_S3_BUCKET"),
-        "BACKUP_RETENTION": os.environ.get("BACKUP_RETENTION", "7"),
-        "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID"),
-        "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY"),
-    }
-    for key, value in desired.items():
-        if not value:
-            if key == "BACKUP_S3_BUCKET":
-                print("  NOTE: BACKUP_S3_BUCKET not set - the nightly dump will only live "
-                      "on the cron's ephemeral disk. Set it (+ AWS creds) for durable "
-                      "offsite backups.", file=sys.stderr)
-            continue
-        body = {
-            "value": value,
-            "envVarType": "secret" if key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY") else "plaintext",
-        }
-        log(f"Set {key} on backup-db cron")
-        call(RENDER_BASE, "PUT", f"/services/{sid}/env-vars/{key}", tok, body)
-
-    log("Deploy backup-db cron (applies env vars)")
-    call(RENDER_BASE, "POST", f"/services/{sid}/deploys", tok, {})
-    log("Trigger a backup-db run")
-    call(RENDER_BASE, "POST", f"/cron-jobs/{sid}/runs", tok, {})
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +96,8 @@ def _neon_target(tok):
         default = next((b for b in blist if b.get("default")), blist[0] if blist else None)
         branch_id = default["id"] if default else None
         print(f"  Auto-detected Neon branch: {default.get('name') if default else '?'} "
-              f"({branch_id}). If your production data lives on a different branch "
-              f"('dev-django'), set BRANCH_ID explicitly.", file=sys.stderr)
+              f"({branch_id}). Production data lives on the `production` (default) "
+              f"branch; set BRANCH_ID if that ever changes.", file=sys.stderr)
     return pid, branch_id
 
 
@@ -218,17 +143,13 @@ def activate_neon():
 
 
 def main():
-    print("manager-tool backup activation")
-    print("  dry-run:", "ON" if DRY_RUN else "off", "| render:", DO_RENDER, "| neon:", DO_NEON)
-    if DO_RENDER:
-        activate_render()
-    if DO_NEON:
-        activate_neon()
+    print("manager-tool backup activation (Neon)")
+    print("  dry-run:", "ON" if DRY_RUN else "off")
+    activate_neon()
     if DRY_RUN:
         print("\nDry run complete - no changes were made. Re-run without --dry-run to apply.")
     else:
-        print("\nDone. Verify: Neon console -> Backups/Snapshots (PITR + snapshot), "
-              "Render dashboard -> Cron Jobs -> backup-db (last run).")
+        print("\nDone. Verify: Neon console -> Backups/Snapshots (PITR + snapshot).")
 
 
 if __name__ == "__main__":

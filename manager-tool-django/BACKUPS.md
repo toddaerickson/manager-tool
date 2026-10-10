@@ -34,50 +34,50 @@ To enable/raise it (do this in the Neon console, not in code):
 > This is the highest-leverage step: it's set-and-forget, needs no code, and
 > protects the entire DB. If you do nothing else, do this.
 
-## Layer 2 — Automated `backup_db` (pg_dump) cron
+## Layer 2 — Nightly encrypted dump (GitHub Actions)
 
-`python manage.py backup_db` dumps the whole database to a gzipped,
-timestamped `manager-tool-YYYYMMDD-HHMMSS.sql.gz` and prunes old snapshots
-(`BACKUP_RETENTION`, default 7). It's wired to a **Render cron job**
-(`backup-db`, daily 9 AM ET) defined in `render.yaml`.
+`.github/workflows/backup.yml` runs daily at 08:30 UTC (and on demand:
+`gh workflow run backup.yml`). Each run:
 
-```bash
-# Run once manually to verify (needs pg_dump installed + DATABASE_URL set):
-python manage.py backup_db --dry-run        # prints target, writes nothing
-python manage.py backup_db                  # real dump to ./backups/
-python manage.py backup_db --dir /tmp/x --keep 14
-```
+1. `pg_dump`s production with a **Postgres 17** client — prod is Postgres 17,
+   and `pg_dump` refuses to dump a server newer than itself.
+2. Encrypts the dump (AES-256, `BACKUP_PASSPHRASE`) and proves the
+   decrypt round-trip.
+3. **Restores it into a scratch Postgres 17 and counts rows** on the core
+   tables — an empty or wrong-database dump fails the run.
+4. Fails if the row total shrank more than 30% since the previous run.
+5. Uploads the encrypted dump as a workflow artifact, kept **30 days**.
+6. Pings healthchecks.io. A day without a ping alerts you — this is what
+   catches GitHub silently disabling a scheduled workflow.
 
-Key properties:
-
-- **Credentials stay out of the process list**: `DATABASE_URL` is parsed into
-  libpq env vars (`PGHOST`/`PGUSER`/`PGPASSWORD`/...), never passed as argv.
-- **Retention**: keeps the newest `BACKUP_RETENTION` files (default 7), deletes
-  older.
-- **Fail-loud**: if `pg_dump` exits non-zero the command raises, so the cron run
-  is marked failed and you'll see it in Render logs.
-- **Optional offsite copy**: if `BACKUP_S3_BUCKET` (plus AWS credentials) is set,
-  the snapshot is also uploaded to S3.
-
-> ⚠️ **Render cron disks are ephemeral.** The local `backups/` file on the cron
-> job's filesystem is deleted after the job finishes. So for the dump to
-> actually be *durable* you must either (a) set `BACKUP_S3_BUCKET` + AWS creds
-> in the cron's env so each snapshot is uploaded offsite, or (b) mount a
-> persistent disk to the cron (paid Render feature). Without one of these, the
-> nightly dump is still generated but not retained — Layer 1 (Neon) remains the
-> real backup until you configure an offsite target.
+Repo secrets: `PROD_DATABASE_URL`, `BACKUP_PASSPHRASE` (also in your password
+manager — **backups are unrecoverable without it**), `HEALTHCHECK_PING_URL`.
 
 ### Restore
 
 ```bash
-# Create a fresh DB, then:
-gunzip < manager-tool-2026-05-01-030000.sql.gz | psql "$NEW_DATABASE_URL"
-# Or in the Neon console: restore the snapshot / PITR branch.
+# 1. Pick a run (last 30 days are kept) and download its artifact:
+gh run list --workflow backup.yml --limit 10
+gh run download <run-id>                 # -> neon-backup-<N>/backup.dump.enc
+
+# 2. Decrypt (prompts for BACKUP_PASSPHRASE):
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+  -in neon-backup-<N>/backup.dump.enc -out backup.dump
+
+# 3. Restore into a FRESH database with a Postgres 17+ pg_restore. For a Neon
+#    target, use the direct (non "-pooler") connection string:
+pg_restore --no-owner --no-privileges -d "$NEW_DATABASE_URL" backup.dump
 ```
 
 The dump includes the encrypted `config` table (SMTP/Anthropic secrets) and all
-tenant data — store the file somewhere you trust (private bucket, encrypted
-disk).
+tenant data — keep the decrypted file somewhere you trust and delete it after.
+
+> **Why not a Render cron?** A Render cron (`backup-db`, added 2026-08-10)
+> duplicated this workflow and was retired: Render's native runtime documents
+> no Postgres 17 client (prod is 17), its disk is wiped after every run, and it
+> had no encryption or restore proof. The env it declared could not even boot
+> `settings.py` in prod mode, so it exited 1 before dumping anything —
+> `scripts/validate_render_blueprint.py` now checks that for every service.
 
 ## Layer 3 — Manual in-app exports
 
@@ -101,36 +101,27 @@ but don't rely on them as the backup.
 
 ## Summary
 
-1. **Enable Neon PITR window + scheduled snapshots** (console, 5 min) — the real backup.
-2. **Configure an offsite target for the `backup_db` cron** (S3 bucket) so the
-   nightly dump is retained.
+1. **Enable Neon PITR window + scheduled snapshots** (console, 5 min).
+2. **Keep the nightly workflow healthy** — it is already running; keep its three
+   secrets set and the healthchecks.io check active.
 3. Optionally, export all data manually whenever you want a portable copy.
 
 ---
 
-## One-command activation (`scripts/activate_backups.py`)
+## One-command Neon activation (`scripts/activate_backups.py`)
 
-A helper script automates both sides (Render cron + env vars, and Neon PITR +
-snapshot + schedule). It uses the current Render v1 and Neon v2 APIs and has a
-`--dry-run` mode so you can preview before applying.
+A helper script automates Layer 1 (Neon PITR + snapshot + schedule) via the
+Neon v2 API, with a `--dry-run` mode so you can preview before applying.
+Layer 2 needs no activation — it runs from repo secrets.
 
-**What you need before running (5 min):**
-
-1. **Render API key** — https://dashboard.render.com/account/api-keys → *Create API key*.
-2. **Neon API key** — Neon console → *Account → API keys* → *Create API key*.
-3. **(Recommended) an S3 bucket** + AWS access key/secret for durable offsite
-   retention of the nightly dump.
+**What you need before running:** a **Neon API key** — Neon console →
+*Account → API keys* → *Create API key*.
 
 **Exact steps (run from the repo root, using the project venv python):**
 
 ```bash
-# 1. Export your secrets (never commit these):
-export RENDER_API_KEY="rnd_..."
+# 1. Export your secret (never commit it):
 export NEON_API_KEY="..."
-# Optional - for durable offsite retention of the nightly pg_dump:
-export BACKUP_S3_BUCKET="your-backup-bucket"
-export AWS_ACCESS_KEY_ID="AKIA..."
-export AWS_SECRET_ACCESS_KEY="..."
 # Optional - days of PITR history (default 7; max depends on Neon plan):
 export BACKUP_RETENTION="7"
 # Optional - target a specific Neon project/branch (auto-detected otherwise):
@@ -140,23 +131,18 @@ export BACKUP_RETENTION="7"
 # 2. Preview everything it will do (no changes):
 manager-tool-django/.venv/bin/python scripts/activate_backups.py --dry-run
 
-# 3. Apply it (Render + Neon):
+# 3. Apply it:
 manager-tool-django/.venv/bin/python scripts/activate_backups.py
 
-# 4. Verify:
-#    - Render dashboard → Cron Jobs → backup-db → last run "successful"
-#    - Neon console → the project → Backups/Snapshots → PITR window set + a snapshot exists
+# 4. Verify: Neon console → the project → Backups/Snapshots → PITR window set + a snapshot exists
 ```
 
 What the script does:
-- **Render**: finds the `backup-db` cron, sets `BACKUP_S3_BUCKET`, `BACKUP_RETENTION`,
-  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` env vars (if provided), redeploys so they
-  apply, and triggers one run to confirm it works.
 - **Neon**: sets the project **history retention** (PITR window, from `BACKUP_RETENTION`),
   creates a **snapshot now**, and requests a **daily backup schedule** (best-effort — the
   exact schedule body can vary by plan; any error prints verbatim so you can align).
 
 > Because this script can't be exercised against live accounts in CI (no API keys),
-> always run `--dry-run` first and confirm the planned calls look right. If Neon or Render
+> always run `--dry-run` first and confirm the planned calls look right. If Neon
 > changes an API shape, the script prints the raw error so you can adjust the affected call.
 

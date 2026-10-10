@@ -100,7 +100,7 @@ One Django migration in `core/migrations/` is the whole change — merges to `ma
 | --- | -------------- |
 | `tests-django-sqlite` | ruff clean + logic correctness (SQLite `:memory:`, ~536 tests) |
 | `smoke-pg-django` | PG safety against a real `postgres:16` service |
-| `validate-render-blueprint` | `render.yaml` is deployable (`scripts/validate_render_blueprint.py`) |
+| `validate-render-blueprint` | `render.yaml` is deployable, and every service boots with only the env keys it declares (`scripts/validate_render_blueprint.py`) |
 | `smoke_pg_django_neon` | same smoke against a real Neon branch (PR-scoped) |
 
 ### pytest is SQLite-only
