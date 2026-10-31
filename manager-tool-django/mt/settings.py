@@ -181,6 +181,37 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
+# --- Outbound email + self-serve password reset --------------------------
+
+# Deliberately no global SMTP account: every message is sent from the
+# *recipient manager's* Config row (smtp_server/port/user/password,
+# manager_email), the same credentials calendar invites and the weekly digest
+# use. Allauth sends its password-reset mail through django.core.mail, so this
+# backend is the bridge — see core/email_backend.py. Without it, Django falls
+# back to localhost:25 and every reset request 500s after issuing a token.
+EMAIL_BACKEND = "core.email_backend.ManagerConfigEmailBackend"
+# Only a fallback for the rare message the backend sends without a manager
+# identity; the backend rewrites From: to the manager's own address.
+DEFAULT_FROM_EMAIL = env(
+    "DEFAULT_FROM_EMAIL", default="Manager Tool <no-reply@localhost>",
+)
+EMAIL_TIMEOUT = 30  # what the backend hands to SMTP; falls back to SMTP_TIMEOUT
+# A reset link is a bearer credential for a session on HR-sensitive data;
+# one hour instead of Django's 3-day default.
+PASSWORD_RESET_TIMEOUT = 3600
+# Sign the manager in after a successful reset, landing on /dashboard/.
+ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
+# Never promise mail we cannot send: allauth's unknown-account notice goes to
+# an address with no Manager row, hence no SMTP account to send from (the
+# backend drops it) — and unsolicited mail to strangers is a spam vector.
+ACCOUNT_EMAIL_UNKNOWN_ACCOUNTS = False
+ACCOUNT_EMAIL_SUBJECT_PREFIX = "[Manager Tool] "
+# Reset requests are already throttled by allauth; tighten the default
+# (20/m/ip,5/m/key). NOTE: there is no shared cache configured, so limits are
+# enforced per gunicorn worker (LocMemCache), i.e. effectively x2 in prod.
+ACCOUNT_RATE_LIMITS = {"reset_password": "10/m/ip,3/m/key"}
+
+
 # --- Sessions ------------------------------------------------------------
 
 # 24h sliding idle window: the app holds HR-sensitive notes, so an

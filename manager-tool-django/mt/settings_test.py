@@ -34,6 +34,12 @@ DATABASES = {
 # Speed up password hashing in tests
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 
+# Never open an SMTP socket from the suite. Password-reset tests assert on
+# django.core.mail.outbox; the routing tests in core/tests.py re-enable
+# core.email_backend.ManagerConfigEmailBackend under override_settings with
+# Django's SMTP backend monkeypatched.
+EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+
 # Disable the journal coaching daemon thread in tests. It opens its own
 # connection to the shared :memory: DB and commits a CoachingResponse
 # audit row outside the test transaction, leaking rows past rollback into

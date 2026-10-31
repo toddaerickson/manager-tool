@@ -1,0 +1,41 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Manager Tool{% endblock %}</title>
+
+  {% comment %} Shared shell for the signed-out pages (login, password
+     reset). Same type system + tokens as landing.html; standalone so an
+     anonymous visitor never loads the sidebar or any tenant-scoped data. {% endcomment %}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  {% comment %} Compiled Tailwind — see base.html for the rebuild command. {% endcomment %}
+  <link rel="stylesheet" href="{% static 'css/tw.css' %}">
+
+  <link rel="manifest" href="{% static 'manifest.webmanifest' %}">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-title" content="Manager Tool">
+  <link rel="icon" type="image/png" sizes="192x192" href="{% static 'icons/icon-192.png' %}">
+  <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
+  <main class="flex-1 flex items-center justify-center px-6 py-12">
+    <div class="w-full max-w-md">
+      <div class="text-center mb-8">
+        <h1 class="font-display tracking-tight text-5xl text-slate-900">Manager Tool</h1>
+        <p class="mt-2 text-sm text-slate-600">{% block subtitle %}Sign in with your email and password.{% endblock %}</p>
+      </div>
+
+      {% block card %}{% endblock %}
+
+      {% block after_card %}{% endblock %}
+    </div>
+  </main>
+  <footer class="px-6 py-3 text-center text-xs text-slate-400">
+    {% if git_sha and git_sha != "unknown" %}deploy {{ git_sha|slice:":7" }}{% endif %}
+  </footer>
+</body>
+</html>
