@@ -81,6 +81,10 @@ One Django migration in `core/migrations/` is the whole change — merges to `ma
 ### Auth & secrets
 
 - Login is email + password via allauth (`/accounts/login/`). Signup stays closed — the email→Manager bridge makes open registration an account-takeover surface. Provision or reset a password with `python manage.py set_manager_password <email>` (omit `--password` to generate and print a strong one). Google OAuth remains mounted as a fallback until a later phase removes it.
+- **Forgot password is self-serve** at `/accounts/password/reset/` (linked from the login page): allauth mails a single-use link that expires in one hour, then signs the manager in at `/dashboard/`. Reset mail goes through `core/email_backend.py`, a Django email backend that sends from the *recipient manager's* `Config` SMTP row — the app has no global SMTP account. Consequences to keep in mind:
+  - A manager with no `smtp_server`/`smtp_user`/`smtp_password`/`manager_email` config gets no reset mail (the backend logs `Cannot send ... SMTP is not configured` at ERROR and the page still says "sent", so the form can't be used to probe which addresses exist). `set_manager_password` remains the break-glass path, including when the stored SMTP password is stale.
+  - The backend never raises and never relays: it drops any message that isn't addressed to a single known manager. Do not "fix" that by falling back to the requester's SMTP.
+  - Requests are throttled by allauth (`ACCOUNT_RATE_LIMITS["reset_password"] = "10/m/ip,3/m/key"`). No shared cache is configured, so limits are per gunicorn worker.
 - Sensitive config values (per-manager Anthropic key, IMAP app password) use Fernet encryption, fail-closed: refuses to write plaintext on init failure, and `get_config` fails loud on decryption errors.
 - `MANAGER_TOOL_ENV=prod` is required in production (gates encryption-key auto-generation off).
 - **Anthropic API key handling.** Never paste, echo, or log a real `ANTHROPIC_API_KEY` in chat, terminal output, commits, PRs, or tests — use placeholders like `sk-ant-test-...`. `.env` files are gitignored at repo root and `manager-tool-django/`.

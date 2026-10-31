@@ -9359,3 +9359,371 @@ class TestSetManagerPasswordCommand:
         assert get_user_model().objects.filter(
             email__iexact="new@example.com",
         ).exists()
+
+
+# --- Password reset (email link) -----------------------------------------
+
+
+@pytest.mark.django_db
+class TestManagerConfigEmailBackend:
+    """Django mail is routed through the *recipient* manager's SMTP row.
+
+    `core.email_backend.SMTPBackend` is monkeypatched, so the suite never
+    opens a socket; TLS/auth/Bcc handling stays Django's and is not retested
+    here — only the routing and the failure behaviour this app adds.
+    """
+
+    EMAIL = "route@example.com"
+
+    @pytest.fixture(autouse=True)
+    def _routing_backend(self):
+        with override_settings(
+            EMAIL_BACKEND="core.email_backend.ManagerConfigEmailBackend",
+        ):
+            yield
+
+    @pytest.fixture(autouse=True)
+    def _capture_smtp(self, monkeypatch):
+        from core import email_backend
+
+        calls = []
+
+        class FakeSMTPBackend:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def send_messages(self, messages):
+                calls.extend((self.kwargs, message) for message in messages)
+                return len(messages)
+
+        monkeypatch.setattr(email_backend, "SMTPBackend", FakeSMTPBackend)
+        self.calls = calls
+
+    def _manager(self, email=None, **overrides):
+        from core.services.config import set_config
+
+        email = email or self.EMAIL
+        manager = Manager.objects.create(
+            username=f"route_{email}", display_name="Routing Test",
+            password_hash="h", email=email,
+        )
+        cfg = {
+            "manager_name": "Routing Test",
+            "manager_email": email,
+            "smtp_server": "smtp.example.com",
+            "smtp_port": "587",
+            "smtp_user": email,
+            "smtp_password": "app-password",
+        }
+        cfg.update(overrides)
+        for key, value in cfg.items():
+            if value is not None:
+                set_config(key, manager.id, value)
+        return manager
+
+    def _send(self, to):
+        from django.core.mail import EmailMessage
+
+        return EmailMessage(
+            subject="Reset your password", body="body",
+            from_email="no-reply@localhost", to=[to],
+        ).send()
+
+    def test_sends_through_the_recipient_managers_smtp(self):
+        self._manager()
+        assert self._send(self.EMAIL) == 1
+        assert len(self.calls) == 1
+        kwargs, message = self.calls[0]
+        assert kwargs["host"] == "smtp.example.com"
+        assert kwargs["port"] == 587
+        assert kwargs["username"] == self.EMAIL
+        assert kwargs["password"] == "app-password"
+        assert kwargs["use_tls"] is True
+        assert kwargs["use_ssl"] is False
+        assert message.from_email == f"Routing Test <{self.EMAIL}>"
+
+    def test_port_465_uses_implicit_tls(self):
+        self._manager(smtp_port="465")
+        assert self._send(self.EMAIL) == 1
+        kwargs, _ = self.calls[0]
+        assert kwargs["port"] == 465
+        assert kwargs["use_ssl"] is True
+        assert kwargs["use_tls"] is False
+
+    def test_from_falls_back_to_smtp_user_when_manager_email_differs(self):
+        """Gmail/Workspace rewrites or rejects a From it doesn't own."""
+        self._manager(
+            manager_email="alias@example.com", smtp_user="real@example.com",
+        )
+        assert self._send(self.EMAIL) == 1
+        _, message = self.calls[0]
+        assert message.from_email == "Routing Test <real@example.com>"
+
+    def test_non_manager_recipient_is_dropped(self):
+        assert self._send("stranger@example.com") == 0
+        assert self.calls == []
+
+    def test_manager_without_smtp_config_is_dropped_not_raised(self, caplog):
+        import logging
+
+        caplog.set_level(logging.ERROR, logger="core.email_backend")
+        Manager.objects.create(
+            username="nosmtp", display_name="No SMTP",
+            password_hash="h", email=self.EMAIL,
+        )
+        assert self._send(self.EMAIL) == 0
+        assert self.calls == []
+        assert any(
+            "SMTP is not configured" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_another_managers_credentials_are_never_used(self):
+        self._manager(email="known@example.com")
+        assert self._send("other@example.com") == 0
+        assert self.calls == []
+
+    def test_smtp_failure_is_swallowed_and_logged(self, monkeypatch, caplog):
+        import logging
+        import smtplib
+
+        from core import email_backend
+
+        caplog.set_level(logging.ERROR, logger="core.email_backend")
+        self._manager()
+
+        class FailingSMTPBackend:
+            def __init__(self, **kwargs):
+                pass
+
+            def send_messages(self, messages):
+                raise smtplib.SMTPAuthenticationError(535, b"bad credentials")
+
+        monkeypatch.setattr(
+            email_backend, "SMTPBackend", FailingSMTPBackend,
+        )
+        # Must not raise: allauth's reset page has to stay a uniform 200/302.
+        assert self._send(self.EMAIL) == 0
+        assert any(
+            "failed" in record.getMessage() for record in caplog.records
+        )
+
+    def test_multiple_recipients_are_dropped(self):
+        from django.core.mail import EmailMessage
+
+        self._manager()
+        sent = EmailMessage(
+            subject="Reset your password", body="body",
+            from_email="no-reply@localhost",
+            to=[self.EMAIL, "someone-else@example.com"],
+        ).send()
+        assert sent == 0
+        assert self.calls == []
+
+    def test_timeout_comes_from_the_email_timeout_setting(self):
+        """EMAIL_TIMEOUT must actually reach SMTP, or ops tuning it is a lie."""
+        self._manager()
+        with override_settings(EMAIL_TIMEOUT=7):
+            assert self._send(self.EMAIL) == 1
+        assert self.calls[0][0]["timeout"] == 7
+
+    def test_from_header_cannot_be_injected_through_config(self):
+        """A newline in manager_name must not create a header line."""
+        self._manager(manager_name="Routing Test\r\nBcc: evil@example.com")
+        assert self._send(self.EMAIL) == 1
+        message = self.calls[0][1]
+        assert "\r" not in message.from_email and "\n" not in message.from_email
+        # Serialised headers: the name is quoted inside From:, never its own line.
+        raw = message.message().as_string()
+        assert "\nBcc:" not in raw and "\rBcc:" not in raw
+        assert message.bcc == []
+
+    def test_unexpected_lookup_failure_is_swallowed(self, monkeypatch, caplog):
+        """A DB/decryption error must not become a 500 (account oracle)."""
+        import logging
+
+        from core import email_backend
+
+        caplog.set_level(logging.ERROR, logger="core.email_backend")
+        self._manager()
+
+        def boom(manager_id):
+            raise RuntimeError("database is down")
+
+        monkeypatch.setattr(email_backend, "get_smtp_settings", boom)
+        assert self._send(self.EMAIL) == 0
+        assert self.calls == []
+        assert any(
+            "message dropped" in record.getMessage() for record in caplog.records
+        )
+
+
+@pytest.mark.django_db
+class TestPasswordResetFlow:
+    """Allauth's email-link reset, from the form through to the new password."""
+
+    EMAIL = "reset@example.com"
+    PASSWORD = "old password 123"
+
+    @pytest.fixture(autouse=True)
+    def _clear_throttle_cache(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        yield
+        cache.clear()
+
+    def _account(self, email=None):
+        from allauth.account.models import EmailAddress
+        from django.contrib.auth import get_user_model
+
+        email = email or self.EMAIL
+        user = get_user_model().objects.create_user(
+            username=email, email=email, password=self.PASSWORD,
+        )
+        EmailAddress.objects.create(
+            user=user, email=email, verified=True, primary=True,
+        )
+        Manager.objects.create(
+            username=f"reset_{email}", display_name="Reset Test",
+            password_hash="h", email=email,
+        )
+        return user
+
+    def _request_link(self, client, email=None):
+        from django.core import mail
+
+        mail.outbox.clear()
+        return client.post(
+            "/accounts/password/reset/", {"email": email or self.EMAIL},
+        )
+
+    def _link_from_outbox(self):
+        import re
+
+        from django.core import mail
+
+        match = re.search(
+            r"http://testserver(/accounts/password/reset/key/\S+)",
+            mail.outbox[0].body,
+        )
+        assert match, mail.outbox[0].body
+        return match.group(1)
+
+    def test_login_page_links_to_the_reset_form(self, client):
+        body = client.get("/accounts/login/").content.decode()
+        assert 'href="/accounts/password/reset/"' in body
+        # The shared signed-out shell must still render the page chrome and
+        # the Google fallback after login.html started extending it.
+        assert "<title>Sign in — Manager Tool</title>" in body
+        assert "/accounts/google/login/" in body
+        assert 'name="login"' in body and 'name="password"' in body
+
+    def test_request_emails_a_single_link(self, client):
+        from django.core import mail
+
+        self._account()
+        resp = self._request_link(client)
+        assert resp.status_code == 302
+        assert resp["Location"].endswith("/accounts/password/reset/done/")
+        assert len(mail.outbox) == 1
+        message = mail.outbox[0]
+        assert message.to == [self.EMAIL]
+        assert "[Manager Tool]" in message.subject
+        assert "Reset your Manager Tool password" in message.subject
+        assert "within the next hour" in message.body
+        assert "/accounts/password/reset/key/" in message.body
+
+    def test_reset_link_sets_the_new_password_and_signs_in(self, client):
+        user = self._account()
+        self._request_link(client)
+        url = self._link_from_outbox()
+
+        resp = client.get(url)  # the token is moved into the session
+        assert resp.status_code == 302
+        form_url = resp["Location"]
+        assert form_url.endswith("-set-password/")
+        assert client.get(form_url).status_code == 200
+
+        new_password = "a-very-long-new-passphrase-9"
+        resp = client.post(
+            form_url, {"password1": new_password, "password2": new_password},
+        )
+        assert resp.status_code == 302
+        assert "/dashboard/" in resp["Location"]
+        user.refresh_from_db()
+        assert user.check_password(new_password)
+        assert "_auth_user_id" in client.session
+
+    def test_unknown_email_is_indistinguishable(self, client):
+        from django.core import mail
+
+        resp = self._request_link(client, email="nobody@example.com")
+        assert resp.status_code == 302
+        assert resp["Location"].endswith("/accounts/password/reset/done/")
+        assert mail.outbox == []
+
+    def test_invalid_token_shows_the_expired_page(self, client):
+        resp = client.get("/accounts/password/reset/key/abc-bogus-token/")
+        assert resp.status_code == 200
+        assert "invalid" in resp.content.decode().lower()
+
+    def test_done_pages_render(self, client):
+        for url in (
+            "/accounts/password/reset/done/",
+            "/accounts/password/reset/key/done/",
+        ):
+            resp = client.get(url)
+            assert resp.status_code == 200, url
+            assert "Manager Tool" in resp.content.decode()
+
+    def test_weak_password_is_rejected_on_the_reset_form(self, client):
+        user = self._account()
+        self._request_link(client)
+        form_url = client.get(self._link_from_outbox())["Location"]
+
+        resp = client.post(
+            form_url, {"password1": "short", "password2": "short"},
+        )
+        assert resp.status_code == 200
+        user.refresh_from_db()
+        assert user.check_password(self.PASSWORD)
+
+    def test_reset_requests_are_throttled(self, client):
+        self._account()
+        for _ in range(3):
+            assert self._request_link(client).status_code == 302
+        assert self._request_link(client).status_code == 429
+
+    def test_manager_without_smtp_config_still_gets_the_neutral_page(
+        self, client, monkeypatch, caplog,
+    ):
+        """Production path: the routing backend must not turn a missing SMTP
+        row into a 500 (that would be an account-existence oracle)."""
+        import logging
+
+        from core import email_backend
+
+        caplog.set_level(logging.ERROR, logger="core.email_backend")
+        self._account()
+
+        class NoSMTPExpected:
+            def __init__(self, **kwargs):
+                raise AssertionError("no SMTP connection expected")
+
+        monkeypatch.setattr(email_backend, "SMTPBackend", NoSMTPExpected)
+        with override_settings(
+            EMAIL_BACKEND="core.email_backend.ManagerConfigEmailBackend",
+        ):
+            resp = self._request_link(client)
+        assert resp.status_code == 302
+        assert resp["Location"].endswith("/accounts/password/reset/done/")
+        assert any(
+            "SMTP is not configured" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_token_ttl_is_one_hour(self):
+        from django.conf import settings
+
+        assert settings.PASSWORD_RESET_TIMEOUT == 3600
