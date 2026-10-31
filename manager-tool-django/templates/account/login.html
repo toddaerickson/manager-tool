@@ -1,0 +1,81 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in — Manager Tool</title>
+
+  {% comment %} Same type system + tokens as landing.html (intentional
+     duplication — the login page is standalone so signed-out users don't
+     load the sidebar). {% endcomment %}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  {% comment %} Compiled Tailwind — see base.html for the rebuild command. {% endcomment %}
+  <link rel="stylesheet" href="{% static 'css/tw.css' %}">
+
+  <link rel="manifest" href="{% static 'manifest.webmanifest' %}">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-title" content="Manager Tool">
+  <link rel="icon" type="image/png" sizes="192x192" href="{% static 'icons/icon-192.png' %}">
+  <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
+  <main class="flex-1 flex items-center justify-center px-6 py-12">
+    <div class="w-full max-w-md">
+      <div class="text-center mb-8">
+        <h1 class="font-display tracking-tight text-5xl text-slate-900">Manager Tool</h1>
+        <p class="mt-2 text-sm text-slate-600">Sign in with your email and password.</p>
+      </div>
+
+      <form method="post" class="bg-white border border-slate-200 rounded-md px-6 py-6 space-y-4 shadow-sm">
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {{ form.non_field_errors.0 }}
+          </div>
+        {% endif %}
+
+        <div>
+          <label for="id_login" class="block text-sm font-medium text-slate-700">Email</label>
+          <input type="email" name="login" id="id_login" autocomplete="email" required
+                 value="{{ form.login.value|default:'' }}"
+                 class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm">
+          {% if form.login.errors %}<p class="text-xs text-red-600 mt-1">{{ form.login.errors.0 }}</p>{% endif %}
+        </div>
+
+        <div>
+          <label for="id_password" class="block text-sm font-medium text-slate-700">Password</label>
+          <input type="password" name="password" id="id_password" autocomplete="current-password" required
+                 class="mt-1 block w-full border border-slate-300 rounded px-2 py-1.5 text-base sm:text-sm">
+          {% if form.password.errors %}<p class="text-xs text-red-600 mt-1">{{ form.password.errors.0 }}</p>{% endif %}
+        </div>
+
+        {% if redirect_field_name %}
+          <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}">
+        {% endif %}
+
+        <button type="submit"
+                class="w-full bg-accent-700 text-white font-medium rounded px-4 py-2.5 hover:bg-accent-800">
+          Sign in
+        </button>
+      </form>
+
+      <p class="mt-4 text-center text-xs text-slate-500">
+        Forgot your password? Ask the administrator to reset it.
+      </p>
+
+      <div class="mt-8 text-center">
+        <a href="/accounts/google/login/" class="text-xs text-slate-500 hover:text-slate-700 hover:underline">
+          Sign in with Google instead
+        </a>
+      </div>
+    </div>
+  </main>
+  <footer class="px-6 py-3 text-center text-xs text-slate-400">
+    {% if git_sha and git_sha != "unknown" %}deploy {{ git_sha|slice:":7" }}{% endif %}
+  </footer>
+</body>
+</html>

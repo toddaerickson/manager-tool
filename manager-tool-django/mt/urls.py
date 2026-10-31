@@ -94,19 +94,17 @@ urlpatterns = [
     path("settings/send-digest/", core_views.settings_send_digest, name="settings-send-digest"),
     path("export/", core_views.data_export, name="data-export"),
     path("sentry-debug/", core_views.sentry_debug, name="sentry-debug"),
-    # Force Google-only by short-circuiting allauth's default form. The
-    # email/password page exists in allauth but we never want users to
-    # hit it. Must be registered BEFORE the include() so it wins.
-    path(
-        "accounts/login/",
-        RedirectView.as_view(url="/accounts/google/login/", permanent=False),
-    ),
-    # Signup is closed at the framework level via ClosedSignupAdapter, but
-    # short-circuit the URL too so the form never renders. The bridge
-    # middleware (email→Manager) makes open signup an account-takeover risk.
+    # Login is allauth's own view at /accounts/login/ (rendered by
+    # templates/account/login.html). It is intentionally NOT redirected:
+    # email + password is the primary sign-in now.
+    #
+    # Signup is closed at the framework level via ClosedSignupAdapter, and
+    # this URL-level redirect keeps the form from ever rendering. The
+    # bridge middleware (email→Manager) makes open signup an
+    # account-takeover risk.
     path(
         "accounts/signup/",
-        RedirectView.as_view(url="/accounts/google/login/", permanent=False),
+        RedirectView.as_view(url="/accounts/login/", permanent=False),
     ),
     path("accounts/", include("allauth.urls")),
     path("admin/", admin.site.urls),

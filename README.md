@@ -108,7 +108,7 @@ Schedule Event has an always-visible Repeats selector. Pick None / Weekly / Mont
 - Coaching pane available on feedback entry
 
 ### Manager Profiles & Security
-- Google OAuth login via django-allauth (no passwords stored in the app)
+- Email + password login via django-allauth (complexity-checked; signup closed). Set or reset a password with `python manage.py set_manager_password <email>`; Google OAuth remains available as a fallback.
 - Sensitive config values (API keys, SMTP passwords) encrypted at rest with Fernet
 - Work schedule and timezone configuration
 - Complete data isolation between managers (multi-tenancy via `TenantManager.for_manager`)
@@ -147,7 +147,7 @@ The production app is **Django 5.1 + HTMX + Tailwind**, deployed on Render with 
 
 | Category | Tables |
 |---|---|
-| **Auth** | managers, users (Google OAuth via allauth), `django_session` |
+| **Auth** | managers, users (email + password, optional Google OAuth, via allauth), `django_session` |
 | **Team** | team_members |
 | **Activities** | events (with recurrence_rule, parent_event_id, recurrence_warned_at), action_items, feedback, goals (with target_date) |
 | **Journal** | journal_entries, self_assessments |
@@ -245,11 +245,11 @@ pip install -r requirements.txt
 python manage.py runserver
 ```
 
-Set `DATABASE_URL`, `DJANGO_SECRET_KEY`, `CONFIG_ENCRYPTION_KEY`, and the Google OAuth secrets in `manager-tool-django/.env` (see `.env.template`). Without `DATABASE_URL` the dev server falls back to local SQLite.
+Set `DATABASE_URL`, `DJANGO_SECRET_KEY`, and `CONFIG_ENCRYPTION_KEY` in `manager-tool-django/.env` (see `.env.template`); Google OAuth secrets are optional. Without `DATABASE_URL` the dev server falls back to local SQLite.
 
 ## Configuration
 
-1. **Sign in with Google** — allauth creates the session; the bridge middleware maps your email to a `Manager` row
+1. **Set a password, then sign in** — `python manage.py set_manager_password you@example.com` (add `--create` on a fresh DB). Sign in at `/accounts/login/`; the bridge middleware maps your email to a `Manager` row. Google sign-in remains available as a fallback.
 2. **Add your team** — name, role, email
 3. **Start journaling** — the core habit. Even one sentence counts.
 4. **Optional: Add an Anthropic API key** in Settings for Claude-powered coaching + AI daily suggestions
@@ -261,7 +261,7 @@ Deployed on **Render** (`render.yaml`), Postgres on **Neon**.
 - Root directory: `manager-tool-django/`
 - Build: `pip install -r requirements.txt && TAILWINDCSS_VERSION=v3.4.17 tailwindcss -c tailwind.config.js -i static/src/input.css -o static/css/tw.css --minify && python manage.py collectstatic --noinput && python manage.py migrate`
 - Start: `gunicorn mt.wsgi:application --bind 0.0.0.0:$PORT`
-- Env vars: `DATABASE_URL`, `DJANGO_SECRET_KEY`, `CONFIG_ENCRYPTION_KEY`, `MANAGER_TOOL_ENV=prod`, Google OAuth secrets, `SENTRY_DSN`
+- Env vars: `DATABASE_URL`, `DJANGO_SECRET_KEY`, `CONFIG_ENCRYPTION_KEY`, `MANAGER_TOOL_ENV=prod`, Google OAuth secrets (optional), `SENTRY_DSN`
 - A Render Cron service runs `python manage.py send_weekly_digests`
 - Build runs migrations automatically, so merging to `main` applies pending Django migrations on deploy
 - **Confirm a deploy:** `GET /health/` returns `{"status": "ok", "git_sha": ...}` (the live commit, from Render's `RENDER_GIT_COMMIT`)
