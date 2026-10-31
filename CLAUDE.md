@@ -38,7 +38,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 ### Stack
 
-Django 5.1 + django-allauth (Google OAuth only) + django-htmx + compiled Tailwind CSS. Deployed on Render via `render.yaml` (auto-deploys `main`; the build step runs `manage.py migrate`). Postgres via Neon (single `production` branch; Neon's serverless proxy handles pooling — no app-side pool). Sentry for errors. Verify any deploy with `GET /health/` → `{status, db, git_sha}`.
+Django 5.1 + django-allauth (email + password; optional Google OAuth) + django-htmx + compiled Tailwind CSS. Deployed on Render via `render.yaml` (auto-deploys `main`; the build step runs `manage.py migrate`). Postgres via Neon (single `production` branch; Neon's serverless proxy handles pooling — no app-side pool). Sentry for errors. Verify any deploy with `GET /health/` → `{status, db, git_sha}`.
 
 **Visual design:** deliberate type + color system documented in `manager-tool-django/DESIGN.md` (Fraunces/Public Sans, single teal `accent-*`, tightened radius). Tokens live in `tailwind.config.js` and compile into `static/css/tw.css` — rebuild after class changes (command in base.html's head comment; render.yaml reruns it on every deploy; `TestCompiledCssCoverage` fails CI on class-without-rebuild). Build with `accent-*`/`font-display` rather than raw values, and check new UI against the forbidden-slop list in DESIGN.md.
 
@@ -80,7 +80,7 @@ One Django migration in `core/migrations/` is the whole change — merges to `ma
 
 ### Auth & secrets
 
-- Login is Google OAuth via allauth exclusively (no passwords; `ModelBackend` removed).
+- Login is email + password via allauth (`/accounts/login/`). Signup stays closed — the email→Manager bridge makes open registration an account-takeover surface. Provision or reset a password with `python manage.py set_manager_password <email>` (omit `--password` to generate and print a strong one). Google OAuth remains mounted as a fallback until a later phase removes it.
 - Sensitive config values (per-manager Anthropic key, IMAP app password) use Fernet encryption, fail-closed: refuses to write plaintext on init failure, and `get_config` fails loud on decryption errors.
 - `MANAGER_TOOL_ENV=prod` is required in production (gates encryption-key auto-generation off).
 - **Anthropic API key handling.** Never paste, echo, or log a real `ANTHROPIC_API_KEY` in chat, terminal output, commits, PRs, or tests — use placeholders like `sk-ant-test-...`. `.env` files are gitignored at repo root and `manager-tool-django/`.

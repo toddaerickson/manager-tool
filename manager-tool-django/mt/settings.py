@@ -129,7 +129,9 @@ DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 # --- Auth ---------------------------------------------------------------
 
 AUTHENTICATION_BACKENDS = [
-    # ModelBackend removed — Google OAuth only via allauth.
+    # allauth's backend handles email + password AND its social providers.
+    # Django's plain ModelBackend is intentionally absent so every login
+    # (password included) goes through allauth's account checks.
     "allauth.account.auth_backends.AuthenticationBackend",
 ]
 
@@ -137,9 +139,12 @@ AUTHENTICATION_BACKENDS = [
 ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*"]
 ACCOUNT_EMAIL_VERIFICATION = "none"
-# Lock signup at the framework level — the app is Google-OAuth-only and the
-# email-iexact bridge middleware makes any open signup an account-takeover
-# surface. See core/auth_adapter.py.
+# Login is email + password (allauth's own LoginView at /accounts/login/).
+# Signup stays locked at the framework level: the email-iexact bridge
+# middleware makes any open signup an account-takeover surface — register
+# with a known manager's email and inherit their tenant data. See
+# core/auth_adapter.py. Passwords for existing accounts are provisioned
+# with `manage.py set_manager_password`.
 ACCOUNT_ADAPTER = "core.auth_adapter.ClosedSignupAdapter"
 SOCIALACCOUNT_PROVIDERS = {
     "google": {
@@ -154,12 +159,26 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 LOGIN_REDIRECT_URL = "/dashboard/"
 LOGOUT_REDIRECT_URL = "/"
-# Google-only auth: @login_required redirects straight to the Google
-# OAuth flow rather than allauth's default email/password form. Set
-# SOCIALACCOUNT_LOGIN_ON_GET so Google flow starts on GET (no
-# intermediate "click to continue" page).
-LOGIN_URL = "/accounts/google/login/"
+# Email + password is the primary sign-in. @login_required sends anonymous
+# users to allauth's login form at /accounts/login/. Google stays mounted
+# as a secondary option (landing + login page link) until Phase 3 removes
+# the provider; SOCIALACCOUNT_LOGIN_ON_GET starts that flow on GET.
+LOGIN_URL = "/accounts/login/"
 SOCIALACCOUNT_LOGIN_ON_GET = True
+
+# Complexity policy for every password-setting path: allauth's change form
+# and the set_manager_password command (which calls validate_password
+# explicitly). 12 chars minimum plus Django's stock common-password /
+# numeric / user-similarity checks.
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 12},
+    },
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
 
 
 # --- Sessions ------------------------------------------------------------

@@ -203,12 +203,11 @@ class TestDashboardView:
         client.force_login(u)
         return u
 
-    def test_anonymous_redirects_to_google_login(self, client):
-        """Phase 3: Google-only auth. Anonymous hits go straight to the
-        Google OAuth flow, not the email/password form."""
+    def test_anonymous_redirects_to_login(self, client):
+        """Anonymous hits go to the email/password login form."""
         resp = client.get("/dashboard/")
         assert resp.status_code == 302
-        assert "/accounts/google/login/" in resp["Location"]
+        assert "/accounts/login/" in resp["Location"]
 
     def test_logged_in_user_with_no_manager_gets_403(self, client):
         self._login_as(client, "stranger@example.com")
@@ -429,7 +428,7 @@ class TestDashboardView:
         # Now blocked
         resp = client.get("/dashboard/")
         assert resp.status_code == 302
-        assert "/accounts/google/login/" in resp["Location"]
+        assert "/accounts/login/" in resp["Location"]
 
     def test_overview_handles_naive_feedback_timestamp(self, client):
         """Regression: feedback.created_at is TIMESTAMP (no tz) on PG, so
@@ -475,10 +474,10 @@ class TestTeamMembersList:
         client.force_login(u)
         return u
 
-    def test_anonymous_redirects_to_google_login(self, client):
+    def test_anonymous_redirects_to_login(self, client):
         resp = client.get("/team/")
         assert resp.status_code == 302
-        assert "/accounts/google/login/" in resp["Location"]
+        assert "/accounts/login/" in resp["Location"]
 
     def test_logged_in_no_manager_yields_403(self, client):
         self._login_as(client, "stranger@example.com")
@@ -835,10 +834,10 @@ class TestEventsUpcoming:
         self._login_as(client, "todd@example.com")
         return m, date.today(), date.today() + timedelta(days=1)
 
-    def test_anonymous_redirects_to_google_login(self, client):
+    def test_anonymous_redirects_to_login(self, client):
         resp = client.get("/events/")
         assert resp.status_code == 302
-        assert "/accounts/google/login/" in resp["Location"]
+        assert "/accounts/login/" in resp["Location"]
 
     def test_no_manager_yields_403(self, client):
         self._login_as(client, "stranger@example.com")
@@ -1570,7 +1569,7 @@ class TestEventsDetail:
         )
         resp = client.get(f"/events/{ev.id}/")
         assert resp.status_code == 302
-        assert "/accounts/google/login/" in resp["Location"]
+        assert "/accounts/login/" in resp["Location"]
 
     def test_renders_event_with_copy_link_button(self, client):
         m, ev = self._setup(client)
@@ -1778,7 +1777,7 @@ class TestTodosList:
     def test_anonymous_redirects(self, client):
         resp = client.get("/todos/")
         assert resp.status_code == 302
-        assert "/accounts/google/login/" in resp["Location"]
+        assert "/accounts/login/" in resp["Location"]
 
     def test_no_manager_yields_403(self, client):
         self._login_as(client, "stranger@example.com")
@@ -4530,7 +4529,7 @@ class TestOneOnOneSessions:
     def test_meetings_list_requires_login(self, client):
         resp = client.get("/meetings/")
         assert resp.status_code == 302
-        assert "/accounts/login/" in resp.url or "/accounts/google/login/" in resp.url
+        assert "/accounts/login/" in resp.url
 
     def test_new_meeting_page_200(self, client):
         self._setup(client)
@@ -4542,7 +4541,7 @@ class TestOneOnOneSessions:
     def test_new_meeting_page_requires_login(self, client):
         resp = client.get("/meetings/new/")
         assert resp.status_code == 302
-        assert "/accounts/login/" in resp.url or "/accounts/google/login/" in resp.url
+        assert "/accounts/login/" in resp.url
 
     def test_new_meeting_page_is_get_only(self, client):
         self._setup(client)
@@ -5527,15 +5526,15 @@ class TestLanding:
 
 @pytest.mark.django_db
 class TestAccountSignupClosed:
-    """The app is Google-OAuth-only. /accounts/signup/ must not allow
-    creating a User row — otherwise the email-iexact bridge middleware
-    is an account-takeover surface."""
+    """Signup is closed for email + password login too. /accounts/signup/
+    must not allow creating a User row — otherwise the email-iexact bridge
+    middleware is an account-takeover surface."""
 
-    def test_signup_get_redirects_to_google_login(self, client):
+    def test_signup_get_redirects_to_login(self, client):
         resp = client.get("/accounts/signup/")
         # The URL-level RedirectView short-circuits before allauth renders.
         assert resp.status_code == 302
-        assert "/accounts/google/login/" in resp["Location"]
+        assert "/accounts/login/" in resp["Location"]
 
     def test_signup_post_does_not_create_user(self, client):
         """Even if a future URL change accidentally re-exposes the form,
@@ -9163,3 +9162,200 @@ class TestEventsCompleteSeries:
     def test_child_is_not_series_parent_returns_400(self, client):
         m, parent, child = self._setup(client)
         assert client.post(f"/events/{child.id}/complete-series/").status_code == 400
+
+
+@pytest.mark.django_db
+class TestEmailPasswordLogin:
+    """Email + password sign-in (replaces Google-only login).
+
+    ManagerBridgeMiddleware maps request.user.email -> Manager, so local
+    login must authenticate the *same* Django User row Google created.
+    """
+
+    def _user(self, email, password="correct horse battery staple"):
+        from django.contrib.auth import get_user_model
+        return get_user_model().objects.create_user(
+            username=email, email=email, password=password,
+        )
+
+    def test_login_page_renders_email_and_password_fields(self, client):
+        resp = client.get("/accounts/login/")
+        assert resp.status_code == 200
+        body = resp.content.decode()
+        assert 'name="login"' in body
+        assert 'name="password"' in body
+        assert "csrfmiddlewaretoken" in body
+        # Signup must never be offered.
+        assert "/accounts/signup/" not in body
+
+    def test_valid_credentials_log_in(self, client):
+        self._user("todd@example.com")
+        resp = client.post(
+            "/accounts/login/",
+            {"login": "todd@example.com",
+             "password": "correct horse battery staple"},
+        )
+        assert resp.status_code == 302
+        assert "/dashboard/" in resp["Location"]
+        assert "_auth_user_id" in client.session
+
+    def test_wrong_password_does_not_log_in(self, client):
+        self._user("todd@example.com")
+        resp = client.post(
+            "/accounts/login/",
+            {"login": "todd@example.com", "password": "definitely-wrong"},
+        )
+        assert resp.status_code == 200
+        assert "_auth_user_id" not in client.session
+
+    def test_unknown_email_does_not_log_in(self, client):
+        resp = client.post(
+            "/accounts/login/",
+            {"login": "nobody@example.com",
+             "password": "correct horse battery staple"},
+        )
+        assert resp.status_code == 200
+        assert "_auth_user_id" not in client.session
+
+    def test_email_match_is_case_insensitive(self, client):
+        """set_manager_password keeps an EmailAddress row in sync, so a
+        mixed-case stored email still signs in from a lowercased input."""
+        from io import StringIO
+        from django.contrib.auth import get_user_model
+        from django.core.management import call_command
+
+        u = get_user_model().objects.create_user(
+            username="Todd", email="Todd@Example.com",
+        )
+        u.set_unusable_password()
+        u.save()
+        call_command(
+            "set_manager_password", "Todd@Example.com",
+            "--password", "a-very-long-passphrase-9",
+            stdout=StringIO(),
+        )
+
+        resp = client.post(
+            "/accounts/login/",
+            {"login": "todd@example.com",
+             "password": "a-very-long-passphrase-9"},
+        )
+        assert resp.status_code == 302
+
+    def test_unusable_oauth_password_cannot_log_in(self, client):
+        """Users from the Google-only era have no usable password until
+        set_manager_password is run — the failure must be a clean form
+        error, not a 500."""
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username="oauth@example.com", email="oauth@example.com",
+        )
+        u.set_unusable_password()
+        u.save()
+        resp = client.post(
+            "/accounts/login/",
+            {"login": "oauth@example.com", "password": "anything-at-all-123"},
+        )
+        assert resp.status_code == 200
+        assert "_auth_user_id" not in client.session
+
+
+@pytest.mark.django_db
+class TestPasswordChange:
+    """Self-serve password change for a signed-in manager."""
+
+    def _user(self, email, password="old password 123"):
+        from django.contrib.auth import get_user_model
+        return get_user_model().objects.create_user(
+            username=email, email=email, password=password,
+        )
+
+    def test_requires_login(self, client):
+        resp = client.get("/accounts/password/change/")
+        assert resp.status_code == 302
+        assert "/accounts/login/" in resp["Location"]
+
+    def test_change_password_updates_credentials(self, client):
+        user = self._user("todd@example.com")
+        client.force_login(user)
+        resp = client.post("/accounts/password/change/", {
+            "oldpassword": "old password 123",
+            "password1": "a-very-long-new-passphrase-9",
+            "password2": "a-very-long-new-passphrase-9",
+        })
+        assert resp.status_code == 302
+        user.refresh_from_db()
+        assert user.check_password("a-very-long-new-passphrase-9")
+
+    def test_weak_password_is_rejected(self, client):
+        user = self._user("todd@example.com")
+        client.force_login(user)
+        resp = client.post("/accounts/password/change/", {
+            "oldpassword": "old password 123",
+            "password1": "12345678",
+            "password2": "12345678",
+        })
+        assert resp.status_code == 200
+        user.refresh_from_db()
+        assert user.check_password("old password 123")
+
+
+@pytest.mark.django_db
+class TestSetManagerPasswordCommand:
+    """The out-of-band set/reset path (also the forgot-password recovery)."""
+
+    def _run(self, *args):
+        from io import StringIO
+        from django.core.management import call_command
+        out = StringIO()
+        call_command("set_manager_password", *args, stdout=out)
+        return out.getvalue()
+
+    def test_sets_password_on_existing_oauth_user(self):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user(
+            username="todd", email="todd@example.com",
+        )
+        u.set_unusable_password()
+        u.save()
+
+        out = self._run(
+            "todd@example.com", "--password", "a-very-long-passphrase-9",
+        )
+        u.refresh_from_db()
+        assert u.check_password("a-very-long-passphrase-9")
+        assert "Password updated" in out
+
+    def test_generates_and_prints_password_when_omitted(self):
+        from django.contrib.auth import get_user_model
+        get_user_model().objects.create_user(
+            username="todd", email="todd@example.com", password="x",
+        )
+        out = self._run("todd@example.com")
+        assert "Generated password" in out
+
+    def test_rejects_weak_password(self):
+        from django.contrib.auth import get_user_model
+        from django.core.management.base import CommandError
+        get_user_model().objects.create_user(
+            username="todd", email="todd@example.com", password="x",
+        )
+        with pytest.raises(CommandError):
+            self._run("todd@example.com", "--password", "short")
+
+    def test_unknown_email_without_create_errors(self):
+        from django.core.management.base import CommandError
+        with pytest.raises(CommandError):
+            self._run(
+                "nobody@example.com", "--password", "a-very-long-passphrase-9",
+            )
+
+    def test_create_flag_creates_user(self):
+        from django.contrib.auth import get_user_model
+        self._run(
+            "new@example.com", "--password", "a-very-long-passphrase-9",
+            "--create",
+        )
+        assert get_user_model().objects.filter(
+            email__iexact="new@example.com",
+        ).exists()
