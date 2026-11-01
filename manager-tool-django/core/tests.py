@@ -9574,6 +9574,105 @@ class TestResendEmailBackend:
             "message dropped" in record.getMessage() for record in caplog.records
         )
 
+    def test_user_agent_is_pinned(self):
+        """Cloudflare fronts Resend: a request with no UA dies as 403/1010.
+
+        That error looks exactly like an unverified domain, so the header is
+        asserted rather than trusted to `requests`' default.
+        """
+        from core.email_backend import USER_AGENT
+
+        self._manager()
+        assert self._send(self.EMAIL) == 1
+        assert self.calls[0]["headers"]["User-Agent"] == USER_AGENT
+
+    def test_invalid_manager_email_falls_back_to_the_recipient(self, caplog):
+        """Garbage in the Settings form must not cost a manager their link.
+
+        Resend rejects a malformed `reply_to` with 422 and delivers nothing, so
+        the backend substitutes the recipient instead of forwarding the value.
+        """
+        import logging
+
+        caplog.set_level(logging.WARNING, logger="core.email_backend")
+        self._manager(manager_email="not an address")
+        assert self._send(self.EMAIL) == 1
+        assert self.calls[0]["json"]["reply_to"] == [self.EMAIL]
+        assert any(
+            "invalid manager_email" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_recipient_with_a_line_break_is_dropped(self, caplog):
+        """Never hand the provider a value that could become a second header."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger="core.email_backend")
+        self._manager()
+        assert self._send("route@example.com\r\nBcc: evil@example.com") == 0
+        assert self.calls == []
+        assert any(
+            "not a usable address" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_provider_rejection_is_reported_as_a_sentry_message(self, monkeypatch):
+        """`capture_exception()` outside an `except` uploads a blank event.
+
+        Verified against sentry_sdk: calling it with no active exception sends
+        `exception.values: []`, i.e. an alert with no cause. Provider rejections
+        are not exceptions, so they must travel as messages carrying Resend's
+        own detail.
+        """
+        import sentry_sdk
+
+        messages, exceptions = [], []
+        monkeypatch.setattr(
+            sentry_sdk, "capture_message",
+            lambda message, level=None: messages.append((message, level)),
+        )
+        monkeypatch.setattr(
+            sentry_sdk, "capture_exception", lambda exc: exceptions.append(exc),
+        )
+        self._manager()
+        self.reply = FakeResponse(
+            status_code=403,
+            payload={
+                "statusCode": 403,
+                "name": "validation_error",
+                "message": "The mgmt.example.com domain is not verified.",
+            },
+        )
+        assert self._send(self.EMAIL) == 0
+        assert exceptions == []
+        assert messages[0][1] == "error"
+        assert "domain is not verified" in messages[0][0]
+        assert "403" in messages[0][0]
+
+    def test_unexpected_failure_reports_the_exception_object(
+        self, monkeypatch, caplog,
+    ):
+        import logging
+
+        import sentry_sdk
+
+        from core import email_backend
+
+        caplog.set_level(logging.ERROR, logger="core.email_backend")
+        reported = []
+        monkeypatch.setattr(
+            sentry_sdk, "capture_exception", lambda exc: reported.append(exc),
+        )
+        self._manager()
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("database is down")
+
+        monkeypatch.setattr(email_backend, "get_config", boom)
+        assert self._send(self.EMAIL) == 0
+        assert len(reported) == 1
+        assert isinstance(reported[0], RuntimeError)
+
 
 class FakeResponse:
     """Minimal stand-in for a `requests` response (status + JSON body)."""
@@ -9666,6 +9765,50 @@ class TestSendTestEmailCommand:
         )
         with pytest.raises(CommandError, match="Nothing was delivered"):
             call_command("send_test_email", self.EMAIL, stdout=StringIO())
+
+    def test_warns_when_the_backend_is_not_the_resend_one(self):
+        """A console/locmem backend returns 1 without touching the API.
+
+        Without this warning the command reports success and the operator
+        concludes that production mail works.
+        """
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        self._manager()
+        err = StringIO()
+        with override_settings(
+            EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+        ):
+            call_command("send_test_email", self.EMAIL, stdout=StringIO(), stderr=err)
+        assert "does not exercise the Resend API" in err.getvalue()
+
+    def test_warns_about_a_key_that_is_not_a_resend_key(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        self._manager()
+        err = StringIO()
+        with override_settings(EMAIL_API_KEY="sk_live_not_resend"):
+            call_command("send_test_email", self.EMAIL, stdout=StringIO(), stderr=err)
+        assert "does not start with `re_`" in err.getvalue()
+
+    def test_warns_about_the_resend_dev_onboarding_domain(self):
+        """resend.dev only delivers to the Resend account owner's address."""
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        self._manager()
+        err = StringIO()
+        with override_settings(
+            DEFAULT_FROM_EMAIL="Manager Tool <onboarding@resend.dev>",
+        ):
+            call_command("send_test_email", self.EMAIL, stdout=StringIO(), stderr=err)
+        assert "resend.dev" in err.getvalue()
+        assert "account owner" in err.getvalue()
 
 
 @pytest.mark.django_db

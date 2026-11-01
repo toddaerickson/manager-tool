@@ -37,7 +37,9 @@ import logging
 
 import requests
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.mail.backends.base import BaseEmailBackend
+from django.core.validators import validate_email
 
 from core.models import Manager
 from core.services.config import get_config
@@ -45,8 +47,19 @@ from core.services.config import get_config
 logger = logging.getLogger(__name__)
 
 # POST https://api.resend.com/emails -> {"id": "..."} (200) or
-# {"statusCode": ..., "name": ..., "message": ...} (4xx/5xx).
+# {"statusCode": ..., "name": ..., "message": ...} (4xx/5xx). Verified against
+# the live API without a valid key: missing key -> 401 {"name":
+# "missing_api_key"}, bad key -> 401 {"name": "validation_error", "message":
+# "API key is invalid"}, unverified/mismatched From domain -> 403 {"name":
+# "validation_error", "message": "The <domain> domain is not verified..."}.
 RESEND_ENDPOINT = "https://api.resend.com/emails"
+
+# Resend sits behind Cloudflare, which rejects requests that arrive with no
+# User-Agent (or a blocked one) with 403 + error code 1010 *before* the API
+# sees them — an error that looks like a domain/key problem but isn't.
+# `requests` does send `python-requests/x.y`, so this is belt-and-braces:
+# an integration-shaped UA we control instead of one a WAF may block.
+USER_AGENT = "manager-tool-email-backend/1.0"
 
 # A reset link is time-sensitive and a request that hangs holds a worker; the
 # provider answers in well under a second. Overridden by EMAIL_TIMEOUT.
@@ -63,6 +76,23 @@ def _one_line(value):
     typo.
     """
     return (value or "").replace("\r", " ").replace("\n", " ").strip()
+
+
+def _is_address(value):
+    """True for a single, syntactically valid address with no line breaks.
+
+    Resend answers a malformed ``to``/``reply_to`` with 422 and delivers
+    nothing, so a garbage value from the Settings form (``manager_email``) would
+    quietly cost a manager their reset link. Everything that becomes an address
+    in a request body goes through here first.
+    """
+    if not value or "\r" in value or "\n" in value:
+        return False
+    try:
+        validate_email(value)
+    except ValidationError:
+        return False
+    return True
 
 
 def _mask(address):
@@ -127,23 +157,37 @@ class ResendEmailBackend(BaseEmailBackend):
         """Deliver one message; never propagates (see module docstring)."""
         try:
             return self._deliver(message)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Unexpected failure sending %r; message dropped", message.subject,
             )
-            self._report_to_sentry()
+            self._report(
+                f"Resend backend crashed sending {message.subject!r}: {exc}",
+                exc=exc,
+            )
             return False
 
     def _deliver(self, message):
         recipient = self._sole_recipient(message)
         if recipient is None:
             return False
-        if not self._allowed(recipient):
+        if not _is_address(recipient):
+            logger.warning(
+                "Dropping %r: %r is not a usable address (invalid or contains a "
+                "line break)", message.subject, _mask(recipient),
+            )
+            return False
+        # One lookup serves both the allow decision and Reply-To routing;
+        # `manager_email` decryption is not free and this runs on the request
+        # path of the reset form.
+        manager = self._manager(recipient)
+        if manager is None and not self._allowlisted(recipient):
             logger.warning(
                 "Dropping %r: %s is not a manager address and is not listed in "
                 "EMAIL_API_ALLOWED_RECIPIENTS", message.subject, _mask(recipient),
             )
             return False
+
         attachments = getattr(message, "attachments", None) or []
         if attachments:
             logger.warning(
@@ -151,23 +195,27 @@ class ResendEmailBackend(BaseEmailBackend):
                 "and HTML parts only", len(attachments), message.subject,
             )
 
-        payload = self._payload(message, recipient)
+        payload = self._payload(message, recipient, manager)
         response = requests.post(
             self.endpoint,
             json=payload,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
             },
             timeout=self.timeout,
         )
         if response.status_code >= 400:
+            detail = _error_detail(response)
             logger.error(
                 "Resend rejected %r for %s (HTTP %s): %s",
-                message.subject, _mask(recipient), response.status_code,
-                _error_detail(response),
+                message.subject, _mask(recipient), response.status_code, detail,
             )
-            self._report_to_sentry()
+            self._report(
+                f"Resend rejected {message.subject!r} for {_mask(recipient)} "
+                f"(HTTP {response.status_code}): {detail}"
+            )
             return False
         logger.info(
             "Sent %r to %s via Resend (id=%s)",
@@ -188,10 +236,13 @@ class ResendEmailBackend(BaseEmailBackend):
         return recipients[0]
 
     @staticmethod
-    def _allowed(recipient):
-        """Only mail managers we know, plus an explicit operator allowlist."""
-        if Manager.objects.filter(email__iexact=recipient).exists():
-            return True
+    def _manager(recipient):
+        """The manager row for ``recipient``, if any (emails are not unique)."""
+        return Manager.objects.filter(email__iexact=recipient).first()
+
+    @staticmethod
+    def _allowlisted(recipient):
+        """True when an operator listed this address for smoke tests."""
         allowlist = getattr(settings, "EMAIL_API_ALLOWED_RECIPIENTS", "") or ""
         if isinstance(allowlist, str):
             allowlist = allowlist.split(",")
@@ -199,7 +250,7 @@ class ResendEmailBackend(BaseEmailBackend):
             entry.strip().lower() for entry in allowlist if entry and entry.strip()
         }
 
-    def _payload(self, message, recipient):
+    def _payload(self, message, recipient, manager):
         text, html = self._bodies(message)
         payload = {
             "from": self.from_email,
@@ -210,7 +261,7 @@ class ResendEmailBackend(BaseEmailBackend):
             payload["text"] = text
         if html:
             payload["html"] = html
-        reply_to = self._reply_to(recipient)
+        reply_to = self._reply_to(recipient, manager)
         if reply_to:
             payload["reply_to"] = [reply_to]
         return payload
@@ -225,29 +276,49 @@ class ResendEmailBackend(BaseEmailBackend):
         return text, ""
 
     @staticmethod
-    def _reply_to(recipient):
+    def _reply_to(recipient, manager):
         """Route replies to the manager's own mailbox.
 
         Resets are sent from a no-reply address on our domain, so without this
-        a manager who hits Reply talks to nobody.
+        a manager who hits Reply talks to nobody. ``manager_email`` is free text
+        from the Settings form: if it is not a valid address Resend would reject
+        the whole request (422), costing the manager their link — so fall back to
+        the recipient instead of passing garbage through.
         """
-        manager = Manager.objects.filter(email__iexact=recipient).first()
         if manager is None:
             return recipient
-        stored = get_config("manager_email", manager.id, default="")
-        return _one_line(stored) or recipient
+        stored = _one_line(get_config("manager_email", manager.id, default=""))
+        if not stored:
+            return recipient
+        if not _is_address(stored):
+            logger.warning(
+                "Ignoring invalid manager_email for manager %s (%r); replying to "
+                "the recipient instead", manager.id, stored[:40],
+            )
+            return recipient
+        return stored
 
     @staticmethod
-    def _report_to_sentry():
-        """Best effort: reporting a failure must never break delivery."""
+    def _report(summary, exc=None):
+        """Best effort: reporting a failure must never break delivery.
+
+        ``capture_exception()`` is only meaningful inside an ``except`` block —
+        called anywhere else it uploads an event with ``exception.values: []``,
+        i.e. a blank issue that says nothing about what broke. Provider
+        rejections are not exceptions at all, so they go out as messages.
+        """
         try:
-            from sentry_sdk import capture_exception
+            from sentry_sdk import capture_exception, capture_message
         except ImportError:
             logger.debug("sentry_sdk is unavailable; failure was logged only")
             return
         try:
-            capture_exception()
-        except Exception as exc:  # noqa: BLE001 — never let reporting raise
+            if exc is not None:
+                capture_exception(exc)
+            else:
+                capture_message(summary, level="error")
+        except Exception as reporting_error:  # noqa: BLE001 — never raise here
             logger.warning(
-                "Sentry capture failed (%s); failure was logged only", exc,
+                "Sentry capture failed (%s); failure was logged only",
+                reporting_error,
             )

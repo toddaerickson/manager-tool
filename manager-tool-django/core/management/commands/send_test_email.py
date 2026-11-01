@@ -39,12 +39,38 @@ class Command(BaseCommand):
         if not email:
             raise CommandError("Email is required.")
 
-        if not getattr(settings, "EMAIL_API_KEY", ""):
+        key = getattr(settings, "EMAIL_API_KEY", "") or ""
+        if not key:
             raise CommandError(
                 "EMAIL_API_KEY is not set; nothing can be sent. Set it in the "
                 "environment (and DEFAULT_FROM_EMAIL to an address on a domain "
                 "verified in Resend)."
             )
+
+        backend = getattr(settings, "EMAIL_BACKEND", "")
+        if backend != "core.email_backend.ResendEmailBackend":
+            self.stderr.write(self.style.WARNING(
+                f"EMAIL_BACKEND is {backend or '(unset)'!r}, so this run does "
+                "not exercise the Resend API; a success line below proves "
+                "nothing about production."
+            ))
+        if not key.startswith("re_"):
+            self.stderr.write(self.style.WARNING(
+                "EMAIL_API_KEY does not start with `re_`, so it probably is not "
+                "a Resend key; the provider will answer HTTP 401 "
+                "`validation_error: API key is invalid`."
+            ))
+        # The onboarding domain can only mail the address that owns the Resend
+        # account (403: "You can only send testing emails to your own email
+        # address"), which is fine for a first smoke test and wrong for
+        # managers. Say so here rather than after a silent reset.
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "") or ""
+        if "resend.dev" in from_email.lower():
+            self.stderr.write(self.style.WARNING(
+                "DEFAULT_FROM_EMAIL uses resend.dev: Resend only delivers that "
+                "to the account owner's own address. Verify a domain and switch "
+                "DEFAULT_FROM_EMAIL before mailing real managers."
+            ))
 
         if not opts["allow_listed"] and not Manager.objects.filter(
             email__iexact=email,
