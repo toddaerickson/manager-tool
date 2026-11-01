@@ -95,12 +95,58 @@ def _is_address(value):
     return True
 
 
-def _mask(address):
+def _address_part(value):
+    """The bare address inside a ``Name <addr>`` header value.
+
+    ``DEFAULT_FROM_EMAIL`` is routinely written with a display name, which
+    ``validate_email`` rejects outright, so the address is unwrapped first.
+    """
+    value = _one_line(value)
+    if "<" in value and value.endswith(">"):
+        return value[value.rindex("<") + 1 : -1].strip()
+    return value
+
+
+def is_usable_from(value):
+    """True when ``value`` can plausibly be a Resend ``from`` address.
+
+    A dotted domain is required on purpose: ``localhost`` and ``example`` can
+    never be verified in Resend, and an unverified domain is rejected with 403
+    — an error that reads like a key problem. ``mt/settings.py`` ships exactly
+    such a default (``no-reply@localhost``), so this is checked explicitly
+    rather than left to the provider to complain about.
+    """
+    address = _address_part(value)
+    return _is_address(address) and "." in address.rpartition("@")[2]
+
+
+def is_allowlisted(recipient):
+    """True when an operator listed this address for smoke tests.
+
+    This bypasses the "recipient must be a `Manager`" guard, so it exists only
+    for `send_test_email` before a domain is verified and must be empty in
+    production.
+    """
+    allowlist = getattr(settings, "EMAIL_API_ALLOWED_RECIPIENTS", "") or ""
+    if isinstance(allowlist, str):
+        allowlist = allowlist.split(",")
+    return (recipient or "").lower() in {
+        entry.strip().lower() for entry in allowlist if entry and entry.strip()
+    }
+
+
+def mask_address(address):
     """``ada@example.com`` -> ``a***@example.com`` — keep logs useful, not PII."""
     local, _, domain = (address or "").partition("@")
     if not domain:
         return "***"
     return f"{local[:1]}***@{domain}"
+
+
+# Reasons a misconfiguration has already been reported in this process. The
+# reset form is public, so an unconfigured deploy would otherwise file one
+# Sentry event per request; the value here is that *one* alert happens at all.
+_reported_config_errors = set()
 
 
 def _error_detail(response):
@@ -132,9 +178,11 @@ class ResendEmailBackend(BaseEmailBackend):
         super().__init__(fail_silently=fail_silently, **kwargs)
         self.api_key = (getattr(settings, "EMAIL_API_KEY", "") or "").strip()
         self.endpoint = getattr(settings, "EMAIL_API_URL", "") or RESEND_ENDPOINT
-        self.from_email = _one_line(
-            getattr(settings, "DEFAULT_FROM_EMAIL", "")
-        ) or "Manager Tool <no-reply@localhost>"
+        # No fallback here on purpose. The one that used to live here
+        # (`no-reply@localhost`) is syntactically valid and *guaranteed* to be
+        # rejected, so a send failed with a 403 about a domain nobody
+        # configured. `send_messages` treats unset and unusable the same way.
+        self.from_email = _one_line(getattr(settings, "DEFAULT_FROM_EMAIL", ""))
         self.timeout = getattr(settings, "EMAIL_TIMEOUT", None) or DEFAULT_TIMEOUT
 
     # -- BaseEmailBackend --------------------------------------------------
@@ -147,6 +195,25 @@ class ResendEmailBackend(BaseEmailBackend):
                 "EMAIL_API_KEY is not set: %d message(s) dropped, starting with "
                 "%r. Password-reset mail cannot be delivered until it is "
                 "configured.", len(email_messages), email_messages[0].subject,
+            )
+            self._report_once(
+                "no-key",
+                "EMAIL_API_KEY is not set: password-reset mail is being dropped",
+            )
+            return 0
+        if not is_usable_from(self.from_email):
+            logger.error(
+                "DEFAULT_FROM_EMAIL (%r) is unset or not a usable address: %d "
+                "message(s) dropped, starting with %r. Resend rejects an "
+                "unverified From domain with HTTP 403, so this must be an "
+                "address on a domain verified in Resend.",
+                self.from_email or "(unset)", len(email_messages),
+                email_messages[0].subject,
+            )
+            self._report_once(
+                "from",
+                "DEFAULT_FROM_EMAIL is not a usable address: password-reset mail "
+                "is being dropped",
             )
             return 0
         return sum(1 for message in email_messages if self._send_one(message))
@@ -174,17 +241,17 @@ class ResendEmailBackend(BaseEmailBackend):
         if not _is_address(recipient):
             logger.warning(
                 "Dropping %r: %r is not a usable address (invalid or contains a "
-                "line break)", message.subject, _mask(recipient),
+                "line break)", message.subject, mask_address(recipient),
             )
             return False
         # One lookup serves both the allow decision and Reply-To routing;
         # `manager_email` decryption is not free and this runs on the request
         # path of the reset form.
         manager = self._manager(recipient)
-        if manager is None and not self._allowlisted(recipient):
+        if manager is None and not is_allowlisted(recipient):
             logger.warning(
                 "Dropping %r: %s is not a manager address and is not listed in "
-                "EMAIL_API_ALLOWED_RECIPIENTS", message.subject, _mask(recipient),
+                "EMAIL_API_ALLOWED_RECIPIENTS", message.subject, mask_address(recipient),
             )
             return False
 
@@ -210,16 +277,16 @@ class ResendEmailBackend(BaseEmailBackend):
             detail = _error_detail(response)
             logger.error(
                 "Resend rejected %r for %s (HTTP %s): %s",
-                message.subject, _mask(recipient), response.status_code, detail,
+                message.subject, mask_address(recipient), response.status_code, detail,
             )
             self._report(
-                f"Resend rejected {message.subject!r} for {_mask(recipient)} "
+                f"Resend rejected {message.subject!r} for {mask_address(recipient)} "
                 f"(HTTP {response.status_code}): {detail}"
             )
             return False
         logger.info(
             "Sent %r to %s via Resend (id=%s)",
-            message.subject, _mask(recipient), _response_id(response) or "?",
+            message.subject, mask_address(recipient), _response_id(response) or "?",
         )
         return True
 
@@ -239,16 +306,6 @@ class ResendEmailBackend(BaseEmailBackend):
     def _manager(recipient):
         """The manager row for ``recipient``, if any (emails are not unique)."""
         return Manager.objects.filter(email__iexact=recipient).first()
-
-    @staticmethod
-    def _allowlisted(recipient):
-        """True when an operator listed this address for smoke tests."""
-        allowlist = getattr(settings, "EMAIL_API_ALLOWED_RECIPIENTS", "") or ""
-        if isinstance(allowlist, str):
-            allowlist = allowlist.split(",")
-        return recipient.lower() in {
-            entry.strip().lower() for entry in allowlist if entry and entry.strip()
-        }
 
     def _payload(self, message, recipient, manager):
         text, html = self._bodies(message)
@@ -297,6 +354,20 @@ class ResendEmailBackend(BaseEmailBackend):
             )
             return recipient
         return stored
+
+    @staticmethod
+    def _report_once(reason, summary):
+        """Report a misconfiguration once per process.
+
+        The reset form is public and unauthenticated, so a deploy with no
+        `EMAIL_API_KEY` would file one Sentry event per submitted address —
+        noise that hides the *first* event, which is the only one that matters.
+        The caller still logs every time; only the alert is throttled.
+        """
+        if reason in _reported_config_errors:
+            return
+        _reported_config_errors.add(reason)
+        ResendEmailBackend._report(summary)
 
     @staticmethod
     def _report(summary, exc=None):

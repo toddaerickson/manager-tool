@@ -9377,13 +9377,17 @@ class TestResendEmailBackend:
 
     @pytest.fixture(autouse=True)
     def _api_backend(self):
+        from core import email_backend
+
         with override_settings(
             EMAIL_BACKEND="core.email_backend.ResendEmailBackend",
             EMAIL_API_KEY="re_test_key",
             DEFAULT_FROM_EMAIL="Manager Tool <no-reply@mgmt.example.com>",
             EMAIL_API_ALLOWED_RECIPIENTS="",
         ):
+            email_backend._reported_config_errors.clear()
             yield
+            email_backend._reported_config_errors.clear()
 
     @pytest.fixture(autouse=True)
     def _capture_http(self, monkeypatch):
@@ -9489,6 +9493,60 @@ class TestResendEmailBackend:
             for record in caplog.records
         )
 
+    def test_unusable_from_is_refused_before_the_request(self, caplog):
+        """`mt/settings.py` ships `no-reply@localhost`, which can never verify.
+
+        Sending it would produce a 403 naming a domain the operator never chose,
+        so the message is dropped locally with the actual cause instead.
+        """
+        import logging
+
+        caplog.set_level(logging.ERROR, logger="core.email_backend")
+        self._manager()
+        with override_settings(DEFAULT_FROM_EMAIL="Manager Tool <no-reply@localhost>"):
+            assert self._send(self.EMAIL) == 0
+        assert self.calls == []
+        assert any(
+            "DEFAULT_FROM_EMAIL" in record.getMessage() for record in caplog.records
+        )
+
+    def test_missing_key_is_reported_to_sentry_once_per_process(self, monkeypatch):
+        """An unconfigured deploy must alert, without one event per request.
+
+        The reset form is public, so the per-request error log is not enough to
+        notice the misconfiguration and would drown any alert in duplicates.
+        """
+        from core import email_backend
+
+        messages = []
+        monkeypatch.setattr(
+            "sentry_sdk.capture_message", lambda *a, **k: messages.append(a),
+        )
+        monkeypatch.setattr("sentry_sdk.capture_exception", lambda *a, **k: None)
+        email_backend._reported_config_errors.clear()
+        self._manager()
+        with override_settings(EMAIL_API_KEY=""):
+            self._send(self.EMAIL)
+            self._send(self.EMAIL)
+        assert len(messages) == 1
+        assert "EMAIL_API_KEY is not set" in messages[0][0]
+        assert self.calls == []
+
+    def test_unusable_from_is_reported_to_sentry(self, monkeypatch):
+        from core import email_backend
+
+        messages = []
+        monkeypatch.setattr(
+            "sentry_sdk.capture_message", lambda *a, **k: messages.append(a),
+        )
+        monkeypatch.setattr("sentry_sdk.capture_exception", lambda *a, **k: None)
+        email_backend._reported_config_errors.clear()
+        self._manager()
+        with override_settings(DEFAULT_FROM_EMAIL=""):
+            assert self._send(self.EMAIL) == 0
+        assert len(messages) == 1
+        assert "DEFAULT_FROM_EMAIL" in messages[0][0]
+
     def test_api_rejection_is_swallowed_and_logged(self, caplog):
         """Unverified domain / bad key must look like a silent drop, not a 500."""
         import logging
@@ -9528,18 +9586,27 @@ class TestResendEmailBackend:
             assert self._send(self.EMAIL) == 1
         assert self.calls[0]["timeout"] == 7
 
-    def test_from_header_cannot_be_injected(self):
-        """A newline in DEFAULT_FROM_EMAIL must not create a header line."""
+    def test_from_header_cannot_be_injected(self, caplog):
+        """A newline in DEFAULT_FROM_EMAIL must not create a header line.
+
+        Stricter than "sanitise and send": once the newline is neutralised the
+        value is no longer a plain address, so the message is dropped before any
+        request is made.
+        """
+        import logging
+
+        caplog.set_level(logging.ERROR, logger="core.email_backend")
         self._manager()
         with override_settings(
             DEFAULT_FROM_EMAIL=(
                 "Manager Tool <no-reply@mgmt.example.com>\r\nBcc: evil@example.com"
             ),
         ):
-            assert self._send(self.EMAIL) == 1
-        sender = self.calls[0]["json"]["from"]
-        assert "\r" not in sender and "\n" not in sender
-        assert "Bcc:" in sender  # neutralised into the display name, not a header
+            assert self._send(self.EMAIL) == 0
+        assert self.calls == []
+        assert any(
+            "DEFAULT_FROM_EMAIL" in record.getMessage() for record in caplog.records
+        )
 
     def test_attachments_are_dropped_but_the_message_still_sends(self, caplog):
         import logging
@@ -9810,6 +9877,62 @@ class TestSendTestEmailCommand:
         assert "resend.dev" in err.getvalue()
         assert "account owner" in err.getvalue()
 
+    def test_refuses_an_unusable_from_address(self):
+        """The shipped default (`no-reply@localhost`) is a guaranteed 403."""
+        from io import StringIO
+
+        from django.core.management import CommandError, call_command
+
+        from core import email_backend
+
+        self._manager()
+        email_backend._reported_config_errors.clear()
+        with override_settings(DEFAULT_FROM_EMAIL="Manager Tool <no-reply@localhost>"):
+            with pytest.raises(CommandError, match="DEFAULT_FROM_EMAIL"):
+                call_command("send_test_email", self.EMAIL, stdout=StringIO())
+        assert self.calls == []
+
+    def test_allow_listed_requires_actual_membership(self):
+        """`--allow-listed` used to assert nothing and then report nothing sent.
+
+        The backend still enforces the allowlist, so this has to be checked here
+        or the operator gets "check the ERROR log" for a known cause.
+        """
+        from io import StringIO
+
+        from django.core.management import CommandError, call_command
+
+        from core import email_backend
+
+        email_backend._reported_config_errors.clear()
+        with override_settings(EMAIL_API_ALLOWED_RECIPIENTS="someone@else.com"):
+            with pytest.raises(CommandError, match="EMAIL_API_ALLOWED_RECIPIENTS"):
+                call_command(
+                    "send_test_email", "ops@resend.dev", "--allow-listed",
+                    stdout=StringIO(),
+                )
+        assert self.calls == []
+
+    def test_allow_listed_sends_to_a_non_manager_address(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from core import email_backend
+
+        email_backend._reported_config_errors.clear()
+        with override_settings(
+            EMAIL_API_ALLOWED_RECIPIENTS="owner@resend.dev",
+            DEFAULT_FROM_EMAIL="onboarding@resend.dev",
+        ):
+            out = StringIO()
+            call_command(
+                "send_test_email", "owner@resend.dev", "--allow-listed", stdout=out,
+            )
+        assert "accepted by the provider" in out.getvalue()
+        assert self.calls[0]["json"]["to"] == ["owner@resend.dev"]
+        assert self.calls[0]["json"]["from"] == "onboarding@resend.dev"
+
 
 @pytest.mark.django_db
 class TestPasswordResetFlow:
@@ -9969,6 +10092,9 @@ class TestPasswordResetFlow:
         with override_settings(
             EMAIL_BACKEND="core.email_backend.ResendEmailBackend",
             EMAIL_API_KEY="re_test_key",
+            # Without a usable From the backend drops the message before the
+            # request, which would test the wrong branch.
+            DEFAULT_FROM_EMAIL="Manager Tool <no-reply@mgmt.example.com>",
         ):
             resp = self._request_link(client)
         assert resp.status_code == 302
