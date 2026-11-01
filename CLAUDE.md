@@ -2,6 +2,33 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ Read first: production password-reset mail has never been configured
+
+**State at merge of PR #169 (2026-11-01):** the code on `main` is the hardened Resend HTTP-API backend, fully tested, and **no reset email has ever left the app**, because the credentials it needs were never set. If a manager says "the reset link never arrives", that is this — not a code defect. Check the Render log before reading `core/email_backend.py`.
+
+| Thing | State |
+|---|---|
+| `EMAIL_API_KEY` (Resend `re_...`) | **unset in Render.** Declared `sync: false` in `render.yaml`, so the blueprint never sets it, and an empty value boots fine with zero complaints |
+| `DEFAULT_FROM_EMAIL` | **unset in Render.** Must be an address on a domain verified in Resend |
+| Resend domain | **not verified** — SPF/DKIM records were never published |
+| Symptom | `/accounts/password/reset/` says "sent" for *every* address (deliberate: the form must not reveal which addresses exist), nothing is delivered, Render log shows `EMAIL_API_KEY is not set: dropping reset mail for <addr>` or `DEFAULT_FROM_EMAIL ... is not a usable address` |
+
+Remaining work, in this order (do not reorder — item 1 is an active exposure, not a task):
+
+1. **Rotate the manager password that was pasted into a chat transcript.** It was never committed, but it is compromised. On the Render shell: `python manage.py set_manager_password <email>` — a strong password is generated and printed once. Works with no mail configured; this is the break-glass path.
+2. **Resend → Domains:** add the domain, publish the SPF and DKIM records, wait for verification (DNS lag — start this before anything else that isn't item 1). Confirm with `dig +short TXT resend._domainkey.<domain>` and `dig +short TXT send.<domain>`.
+3. **Render → `manager-tool-django` → Environment:** set `EMAIL_API_KEY` and `DEFAULT_FROM_EMAIL="Manager Tool <no-reply@<verified domain>>"`, then redeploy. The blueprint does not do this for you.
+4. **Prove the pipe, don't assume it.** Then grep the Render log for `EMAIL_API_KEY is not set` and `is not a usable address`; both must be absent. Smoke test: `python manage.py send_test_email <your own address>` (see the "Verifying without a verified domain" note below for the pre-verification `onboarding@resend.dev` path).
+5. **End-to-end on the account that actually breaks:** a `Manager` with **zero `Config` rows** (a manager who never set up SMTP — the exact case this backend exists for). Use `/accounts/password/reset/`, confirm arrival, click through to `/dashboard/`, and confirm Resend → Logs shows `delivered`, not `bounced`.
+
+Do not, in a future session:
+
+- Conclude the backend is broken from "no mail arrived" without checking for the two log lines above.
+- Loosen the `Manager` guard in `core/email_backend.py` (send to any address) to make a test easier. That guard is why a reset form exposed to the internet cannot be used to mail arbitrary addresses.
+- Leave `EMAIL_API_ALLOWED_RECIPIENTS` set in production; it bypasses that guard. It is not declared in `render.yaml` on purpose.
+- "Fix" delivery by adding retries. There is no idempotency key, so a retry can double-send; a failure surfaces as an ERROR log plus one Sentry event per process (`_report_once`), which is the intended behaviour.
+- Call it verified after a local test with a console/locmem `EMAIL_BACKEND` — those return success without sending. `send_test_email` warns when it sees one.
+
 ## Project Overview
 
 Manager Tool is a single-manager management coaching journal: 1:1 meeting records, journal, delegations, feedback, goals, decisions, analytics, and an AI coaching layer grounded in a wisdom library of 620 management ideas from 23 books (`365_Great_Management_Ideas.md`).
@@ -81,7 +108,7 @@ One Django migration in `core/migrations/` is the whole change — merges to `ma
 ### Auth & secrets
 
 - Login is email + password via allauth (`/accounts/login/`). Signup stays closed — the email→Manager bridge makes open registration an account-takeover surface. Provision or reset a password with `python manage.py set_manager_password <email>` (omit `--password` to generate and print a strong one). Google OAuth remains mounted as a fallback until a later phase removes it.
-- **Forgot password is self-serve** at `/accounts/password/reset/` (linked from the login page): allauth mails a single-use link that expires in one hour, then signs the manager in at `/dashboard/`. Reset mail goes through `core/email_backend.py`, a Django email backend that POSTs to [Resend](https://resend.com)'s `/emails` API (`EMAIL_API_KEY` + `DEFAULT_FROM_EMAIL` in the environment; the From domain must be verified in Resend or every send is rejected with 403). Calendar invites and the weekly digest still go through each manager's own `Config` SMTP row — only *account* mail uses the API. Consequences to keep in mind:
+- **Forgot password is self-serve** at `/accounts/password/reset/` (linked from the login page) — **not yet live in production: `EMAIL_API_KEY` is unset, see the section at the top of this file**; allauth mails a single-use link that expires in one hour, then signs the manager in at `/dashboard/`. Reset mail goes through `core/email_backend.py`, a Django email backend that POSTs to [Resend](https://resend.com)'s `/emails` API (`EMAIL_API_KEY` + `DEFAULT_FROM_EMAIL` in the environment; the From domain must be verified in Resend or every send is rejected with 403). Calendar invites and the weekly digest still go through each manager's own `Config` SMTP row — only *account* mail uses the API. Consequences to keep in mind:
   - A manager needs no SMTP config to get a reset link, but the app needs `EMAIL_API_KEY` + a verified `DEFAULT_FROM_EMAIL`. With those missing the backend logs `EMAIL_API_KEY is not set ...` (or `Resend rejected ...`) at ERROR and the page still says "sent", so the form can't be used to probe which addresses exist. A From that is unset, has no dotted domain, or contains a line break is refused *before* the request: the shipped default is `no-reply@localhost`, which Resend can never have verified, and failing locally names the actual cause instead of returning a 403 about a domain nobody chose. Both misconfigurations are also sent to Sentry once per process (`_report_once`) — the reset form is public, so per-request events would bury the first one. `set_manager_password` remains the break-glass path.
   - The backend never raises and never relays: it drops any message that isn't addressed to exactly one recipient, and that recipient must have a `Manager` row (or be listed in `EMAIL_API_ALLOWED_RECIPIENTS` for operator smoke tests). Do not "fix" that by relaxing the check — the API key can mail anyone.
   - Replies are routed to the manager's own mailbox via `Reply-To` (the sender is `DEFAULT_FROM_EMAIL`, a no-reply address on our domain).

@@ -109,7 +109,7 @@ Schedule Event has an always-visible Repeats selector. Pick None / Weekly / Mont
 
 ### Manager Profiles & Security
 - Email + password login via django-allauth (complexity-checked; signup closed). Set or reset a password with `python manage.py set_manager_password <email>`; Google OAuth remains available as a fallback.
-- Self-serve "forgot password" at `/accounts/password/reset/`: a single-use link (valid one hour) is emailed through Resend's HTTP API (`EMAIL_API_KEY` + `DEFAULT_FROM_EMAIL`, no per-manager SMTP needed), and a successful reset signs you straight in. If the API key isn't configured, `set_manager_password` is still the recovery path.
+- Self-serve "forgot password" at `/accounts/password/reset/`: a single-use link (valid one hour) is emailed through Resend's HTTP API (`EMAIL_API_KEY` + `DEFAULT_FROM_EMAIL`, no per-manager SMTP needed), and a successful reset signs you straight in. If the API key isn't configured, `set_manager_password` is still the recovery path. **Not yet enabled in production: `EMAIL_API_KEY` is unset — see the section at the top of `CLAUDE.md` for the remaining setup and how to tell this apart from a real failure.**
 - Sensitive config values (API keys, SMTP passwords) encrypted at rest with Fernet
 - Work schedule and timezone configuration
 - Complete data isolation between managers (multi-tenancy via `TenantManager.for_manager`)
