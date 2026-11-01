@@ -109,7 +109,7 @@ Schedule Event has an always-visible Repeats selector. Pick None / Weekly / Mont
 
 ### Manager Profiles & Security
 - Email + password login via django-allauth (complexity-checked; signup closed). Set or reset a password with `python manage.py set_manager_password <email>`; Google OAuth remains available as a fallback.
-- Self-serve "forgot password" at `/accounts/password/reset/`: a single-use link (valid one hour) is emailed from the manager's own SMTP account in Settings, and a successful reset signs you straight in. If SMTP isn't configured, `set_manager_password` is still the recovery path.
+- Self-serve "forgot password" at `/accounts/password/reset/`: a single-use link (valid one hour) is emailed through Resend's HTTP API (`EMAIL_API_KEY` + `DEFAULT_FROM_EMAIL`, no per-manager SMTP needed), and a successful reset signs you straight in. If the API key isn't configured, `set_manager_password` is still the recovery path.
 - Sensitive config values (API keys, SMTP passwords) encrypted at rest with Fernet
 - Work schedule and timezone configuration
 - Complete data isolation between managers (multi-tenancy via `TenantManager.for_manager`)
@@ -250,7 +250,7 @@ Set `DATABASE_URL`, `DJANGO_SECRET_KEY`, and `CONFIG_ENCRYPTION_KEY` in `manager
 
 ## Configuration
 
-1. **Set a password, then sign in** — `python manage.py set_manager_password you@example.com` (add `--create` on a fresh DB). Sign in at `/accounts/login/`; the bridge middleware maps your email to a `Manager` row. Google sign-in remains available as a fallback. Once Settings has your SMTP credentials, `/accounts/password/reset/` also works as self-serve recovery.
+1. **Set a password, then sign in** — `python manage.py set_manager_password you@example.com` (add `--create` on a fresh DB). Sign in at `/accounts/login/`; the bridge middleware maps your email to a `Manager` row. Google sign-in remains available as a fallback. Once `EMAIL_API_KEY` and a verified `DEFAULT_FROM_EMAIL` are set in the environment, `/accounts/password/reset/` also works as self-serve recovery.
 2. **Add your team** — name, role, email
 3. **Start journaling** — the core habit. Even one sentence counts.
 4. **Optional: Add an Anthropic API key** in Settings for Claude-powered coaching + AI daily suggestions
