@@ -183,19 +183,26 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # --- Outbound email + self-serve password reset --------------------------
 
-# Deliberately no global SMTP account: every message is sent from the
-# *recipient manager's* Config row (smtp_server/port/user/password,
-# manager_email), the same credentials calendar invites and the weekly digest
-# use. Allauth sends its password-reset mail through django.core.mail, so this
-# backend is the bridge — see core/email_backend.py. Without it, Django falls
-# back to localhost:25 and every reset request 500s after issuing a token.
-EMAIL_BACKEND = "core.email_backend.ManagerConfigEmailBackend"
-# Only a fallback for the rare message the backend sends without a manager
-# identity; the backend rewrites From: to the manager's own address.
+# Account mail (allauth's password reset) goes through Resend's HTTP API, not
+# SMTP: it has to work for a manager who has never configured an app password,
+# and it should come from a domain we control. Calendar invites and the weekly
+# digest keep using each manager's own SMTP account (they are supposed to come
+# from that manager's mailbox) — see core/services/email.py.
+EMAIL_BACKEND = "core.email_backend.ResendEmailBackend"
+# Resend API key (re_...). Without it account mail is dropped with an ERROR log
+# rather than a 500 — see core/email_backend.py. Deliberately optional so a
+# missing key cannot stop the app from booting.
+EMAIL_API_KEY = env("EMAIL_API_KEY", default="")
+# Must be an address on a domain verified in Resend (SPF/DKIM); an unverified
+# domain is rejected with HTTP 403. Replies go to the manager's own mailbox
+# via the Reply-To the backend sets.
 DEFAULT_FROM_EMAIL = env(
     "DEFAULT_FROM_EMAIL", default="Manager Tool <no-reply@localhost>",
 )
-EMAIL_TIMEOUT = 30  # what the backend hands to SMTP; falls back to SMTP_TIMEOUT
+# Operator smoke tests can mail an address that has no Manager row by listing
+# it here (comma-separated). Empty = known managers only.
+EMAIL_API_ALLOWED_RECIPIENTS = env("EMAIL_API_ALLOWED_RECIPIENTS", default="")
+EMAIL_TIMEOUT = 10  # HTTP request timeout for account mail (reset links)
 # A reset link is a bearer credential for a session on HR-sensitive data;
 # one hour instead of Django's 3-day default.
 PASSWORD_RESET_TIMEOUT = 3600

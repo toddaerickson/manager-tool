@@ -9365,148 +9365,104 @@ class TestSetManagerPasswordCommand:
 
 
 @pytest.mark.django_db
-class TestManagerConfigEmailBackend:
-    """Django mail is routed through the *recipient* manager's SMTP row.
+class TestResendEmailBackend:
+    """Account mail is POSTed to Resend's API, with no relay and no exceptions.
 
-    `core.email_backend.SMTPBackend` is monkeypatched, so the suite never
-    opens a socket; TLS/auth/Bcc handling stays Django's and is not retested
-    here — only the routing and the failure behaviour this app adds.
+    `requests.post` is monkeypatched, so the suite never opens a socket;
+    payload shape and failure handling are what this app adds, and are the only
+    things asserted here.
     """
 
     EMAIL = "route@example.com"
 
     @pytest.fixture(autouse=True)
-    def _routing_backend(self):
+    def _api_backend(self):
         with override_settings(
-            EMAIL_BACKEND="core.email_backend.ManagerConfigEmailBackend",
+            EMAIL_BACKEND="core.email_backend.ResendEmailBackend",
+            EMAIL_API_KEY="re_test_key",
+            DEFAULT_FROM_EMAIL="Manager Tool <no-reply@mgmt.example.com>",
+            EMAIL_API_ALLOWED_RECIPIENTS="",
         ):
             yield
 
     @pytest.fixture(autouse=True)
-    def _capture_smtp(self, monkeypatch):
+    def _capture_http(self, monkeypatch):
         from core import email_backend
 
-        calls = []
+        self.calls = []
+        self.reply = FakeResponse()
 
-        class FakeSMTPBackend:
-            def __init__(self, **kwargs):
-                self.kwargs = kwargs
+        def fake_post(url, **kwargs):
+            self.calls.append({"url": url, **kwargs})
+            if isinstance(self.reply, Exception):
+                raise self.reply
+            return self.reply
 
-            def send_messages(self, messages):
-                calls.extend((self.kwargs, message) for message in messages)
-                return len(messages)
+        monkeypatch.setattr(email_backend.requests, "post", fake_post)
 
-        monkeypatch.setattr(email_backend, "SMTPBackend", FakeSMTPBackend)
-        self.calls = calls
-
-    def _manager(self, email=None, **overrides):
+    def _manager(self, email=None, **config):
         from core.services.config import set_config
 
         email = email or self.EMAIL
         manager = Manager.objects.create(
-            username=f"route_{email}", display_name="Routing Test",
+            username=f"resend_{email}", display_name="Resend Test",
             password_hash="h", email=email,
         )
-        cfg = {
-            "manager_name": "Routing Test",
-            "manager_email": email,
-            "smtp_server": "smtp.example.com",
-            "smtp_port": "587",
-            "smtp_user": email,
-            "smtp_password": "app-password",
-        }
-        cfg.update(overrides)
-        for key, value in cfg.items():
-            if value is not None:
-                set_config(key, manager.id, value)
+        for key, value in config.items():
+            set_config(key, manager.id, value)
         return manager
 
-    def _send(self, to):
+    def _send(self, to, **kwargs):
         from django.core.mail import EmailMessage
 
         return EmailMessage(
             subject="Reset your password", body="body",
-            from_email="no-reply@localhost", to=[to],
+            from_email="ignored@localhost", to=[to], **kwargs,
         ).send()
 
-    def test_sends_through_the_recipient_managers_smtp(self):
+    def test_posts_to_the_resend_endpoint_with_a_bearer_token(self):
+        from core.email_backend import RESEND_ENDPOINT
+
         self._manager()
         assert self._send(self.EMAIL) == 1
         assert len(self.calls) == 1
-        kwargs, message = self.calls[0]
-        assert kwargs["host"] == "smtp.example.com"
-        assert kwargs["port"] == 587
-        assert kwargs["username"] == self.EMAIL
-        assert kwargs["password"] == "app-password"
-        assert kwargs["use_tls"] is True
-        assert kwargs["use_ssl"] is False
-        assert message.from_email == f"Routing Test <{self.EMAIL}>"
+        call = self.calls[0]
+        assert call["url"] == RESEND_ENDPOINT
+        assert call["headers"]["Authorization"] == "Bearer re_test_key"
+        assert call["headers"]["Content-Type"] == "application/json"
+        assert call["json"] == {
+            "from": "Manager Tool <no-reply@mgmt.example.com>",
+            "to": [self.EMAIL],
+            "subject": "Reset your password",
+            "text": "body",
+            "reply_to": [self.EMAIL],
+        }
 
-    def test_port_465_uses_implicit_tls(self):
-        self._manager(smtp_port="465")
-        assert self._send(self.EMAIL) == 1
-        kwargs, _ = self.calls[0]
-        assert kwargs["port"] == 465
-        assert kwargs["use_ssl"] is True
-        assert kwargs["use_tls"] is False
+    def test_html_alternative_and_reply_to_use_the_manager_identity(self):
+        from django.core.mail import EmailMultiAlternatives
 
-    def test_from_falls_back_to_smtp_user_when_manager_email_differs(self):
-        """Gmail/Workspace rewrites or rejects a From it doesn't own."""
-        self._manager(
-            manager_email="alias@example.com", smtp_user="real@example.com",
+        self._manager(manager_email="reply@example.com")
+        message = EmailMultiAlternatives(
+            subject="Reset your password", body="body",
+            from_email="ignored@localhost", to=[self.EMAIL],
         )
-        assert self._send(self.EMAIL) == 1
-        _, message = self.calls[0]
-        assert message.from_email == "Routing Test <real@example.com>"
+        message.attach_alternative("<p>body</p>", "text/html")
+        assert message.send() == 1
+        payload = self.calls[0]["json"]
+        assert payload["text"] == "body"
+        assert payload["html"] == "<p>body</p>"
+        assert payload["reply_to"] == ["reply@example.com"]
 
     def test_non_manager_recipient_is_dropped(self):
         assert self._send("stranger@example.com") == 0
         assert self.calls == []
 
-    def test_manager_without_smtp_config_is_dropped_not_raised(self, caplog):
-        import logging
-
-        caplog.set_level(logging.ERROR, logger="core.email_backend")
-        Manager.objects.create(
-            username="nosmtp", display_name="No SMTP",
-            password_hash="h", email=self.EMAIL,
-        )
-        assert self._send(self.EMAIL) == 0
-        assert self.calls == []
-        assert any(
-            "SMTP is not configured" in record.getMessage()
-            for record in caplog.records
-        )
-
-    def test_another_managers_credentials_are_never_used(self):
-        self._manager(email="known@example.com")
-        assert self._send("other@example.com") == 0
-        assert self.calls == []
-
-    def test_smtp_failure_is_swallowed_and_logged(self, monkeypatch, caplog):
-        import logging
-        import smtplib
-
-        from core import email_backend
-
-        caplog.set_level(logging.ERROR, logger="core.email_backend")
-        self._manager()
-
-        class FailingSMTPBackend:
-            def __init__(self, **kwargs):
-                pass
-
-            def send_messages(self, messages):
-                raise smtplib.SMTPAuthenticationError(535, b"bad credentials")
-
-        monkeypatch.setattr(
-            email_backend, "SMTPBackend", FailingSMTPBackend,
-        )
-        # Must not raise: allauth's reset page has to stay a uniform 200/302.
-        assert self._send(self.EMAIL) == 0
-        assert any(
-            "failed" in record.getMessage() for record in caplog.records
-        )
+    def test_allowlist_permits_an_operator_test_address(self):
+        with override_settings(
+            EMAIL_API_ALLOWED_RECIPIENTS=" ops@example.com , other@example.com ",
+        ):
+            assert self._send("OPS@example.com") == 1
+        assert self.calls[0]["json"]["to"] == ["OPS@example.com"]
 
     def test_multiple_recipients_are_dropped(self):
         from django.core.mail import EmailMessage
@@ -9514,29 +9470,90 @@ class TestManagerConfigEmailBackend:
         self._manager()
         sent = EmailMessage(
             subject="Reset your password", body="body",
-            from_email="no-reply@localhost",
-            to=[self.EMAIL, "someone-else@example.com"],
+            from_email="ignored@localhost",
+            to=[self.EMAIL], cc=["someone-else@example.com"],
         ).send()
         assert sent == 0
         assert self.calls == []
 
+    def test_missing_api_key_drops_the_message_and_logs(self, caplog):
+        import logging
+
+        caplog.set_level(logging.ERROR, logger="core.email_backend")
+        self._manager()
+        with override_settings(EMAIL_API_KEY=""):
+            assert self._send(self.EMAIL) == 0
+        assert self.calls == []
+        assert any(
+            "EMAIL_API_KEY is not set" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_api_rejection_is_swallowed_and_logged(self, caplog):
+        """Unverified domain / bad key must look like a silent drop, not a 500."""
+        import logging
+
+        caplog.set_level(logging.ERROR, logger="core.email_backend")
+        self._manager()
+        self.reply = FakeResponse(
+            status_code=403,
+            payload={
+                "statusCode": 403,
+                "name": "validation_error",
+                "message": "The mgmt.example.com domain is not verified.",
+            },
+        )
+        assert self._send(self.EMAIL) == 0
+        logged = " ".join(record.getMessage() for record in caplog.records)
+        assert "HTTP 403" in logged
+        assert "domain is not verified" in logged
+
+    def test_network_failure_is_swallowed_and_logged(self, caplog):
+        import logging
+
+        import requests
+
+        caplog.set_level(logging.ERROR, logger="core.email_backend")
+        self._manager()
+        self.reply = requests.ConnectionError("api.resend.com unreachable")
+        assert self._send(self.EMAIL) == 0
+        assert any(
+            "message dropped" in record.getMessage() for record in caplog.records
+        )
+
     def test_timeout_comes_from_the_email_timeout_setting(self):
-        """EMAIL_TIMEOUT must actually reach SMTP, or ops tuning it is a lie."""
+        """EMAIL_TIMEOUT must reach the HTTP call, or tuning it is a lie."""
         self._manager()
         with override_settings(EMAIL_TIMEOUT=7):
             assert self._send(self.EMAIL) == 1
-        assert self.calls[0][0]["timeout"] == 7
+        assert self.calls[0]["timeout"] == 7
 
-    def test_from_header_cannot_be_injected_through_config(self):
-        """A newline in manager_name must not create a header line."""
-        self._manager(manager_name="Routing Test\r\nBcc: evil@example.com")
-        assert self._send(self.EMAIL) == 1
-        message = self.calls[0][1]
-        assert "\r" not in message.from_email and "\n" not in message.from_email
-        # Serialised headers: the name is quoted inside From:, never its own line.
-        raw = message.message().as_string()
-        assert "\nBcc:" not in raw and "\rBcc:" not in raw
-        assert message.bcc == []
+    def test_from_header_cannot_be_injected(self):
+        """A newline in DEFAULT_FROM_EMAIL must not create a header line."""
+        self._manager()
+        with override_settings(
+            DEFAULT_FROM_EMAIL=(
+                "Manager Tool <no-reply@mgmt.example.com>\r\nBcc: evil@example.com"
+            ),
+        ):
+            assert self._send(self.EMAIL) == 1
+        sender = self.calls[0]["json"]["from"]
+        assert "\r" not in sender and "\n" not in sender
+        assert "Bcc:" in sender  # neutralised into the display name, not a header
+
+    def test_attachments_are_dropped_but_the_message_still_sends(self, caplog):
+        import logging
+
+        caplog.set_level(logging.WARNING, logger="core.email_backend")
+        self._manager()
+        sent = self._send(
+            self.EMAIL, attachments=[("notes.txt", "hi", "text/plain")],
+        )
+        assert sent == 1
+        assert "attachments" not in self.calls[0]["json"]
+        assert any(
+            "attachment" in record.getMessage() for record in caplog.records
+        )
 
     def test_unexpected_lookup_failure_is_swallowed(self, monkeypatch, caplog):
         """A DB/decryption error must not become a 500 (account oracle)."""
@@ -9547,15 +9564,108 @@ class TestManagerConfigEmailBackend:
         caplog.set_level(logging.ERROR, logger="core.email_backend")
         self._manager()
 
-        def boom(manager_id):
+        def boom(*args, **kwargs):
             raise RuntimeError("database is down")
 
-        monkeypatch.setattr(email_backend, "get_smtp_settings", boom)
+        monkeypatch.setattr(email_backend, "get_config", boom)
         assert self._send(self.EMAIL) == 0
         assert self.calls == []
         assert any(
             "message dropped" in record.getMessage() for record in caplog.records
         )
+
+
+class FakeResponse:
+    """Minimal stand-in for a `requests` response (status + JSON body)."""
+
+    def __init__(self, status_code=200, payload=None, text=""):
+        self.status_code = status_code
+        self._payload = {"id": "re_msg_123"} if payload is None else payload
+        self.text = text
+
+    def json(self):
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+@pytest.mark.django_db
+class TestSendTestEmailCommand:
+    """`manage.py send_test_email` is the operator's verification path."""
+
+    EMAIL = "operator@example.com"
+
+    @pytest.fixture(autouse=True)
+    def _api_backend(self):
+        with override_settings(
+            EMAIL_BACKEND="core.email_backend.ResendEmailBackend",
+            EMAIL_API_KEY="re_test_key",
+            DEFAULT_FROM_EMAIL="Manager Tool <no-reply@mgmt.example.com>",
+            EMAIL_API_ALLOWED_RECIPIENTS="",
+        ):
+            yield
+
+    @pytest.fixture(autouse=True)
+    def _capture_http(self, monkeypatch):
+        from core import email_backend
+
+        self.calls = []
+        self.reply = FakeResponse()
+
+        def fake_post(url, **kwargs):
+            self.calls.append({"url": url, **kwargs})
+            return self.reply
+
+        monkeypatch.setattr(email_backend.requests, "post", fake_post)
+
+    def _manager(self, email=None):
+        email = email or self.EMAIL
+        return Manager.objects.create(
+            username=f"ops_{email}", display_name="Ops", password_hash="h",
+            email=email,
+        )
+
+    def test_sends_through_the_api_to_a_manager_address(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        self._manager()
+        out = StringIO()
+        call_command("send_test_email", self.EMAIL, stdout=out)
+        assert "accepted by the provider" in out.getvalue()
+        assert self.calls[0]["json"]["to"] == [self.EMAIL]
+        assert "test email" in self.calls[0]["json"]["subject"].lower()
+
+    def test_refuses_an_address_the_backend_would_drop(self):
+        from django.core.management import CommandError, call_command
+
+        with pytest.raises(CommandError, match="No Manager row matches"):
+            call_command("send_test_email", "stranger@example.com")
+        assert self.calls == []
+
+    def test_refuses_without_an_api_key(self):
+        from django.core.management import CommandError, call_command
+
+        self._manager()
+        with override_settings(EMAIL_API_KEY=""):
+            with pytest.raises(CommandError, match="EMAIL_API_KEY is not set"):
+                call_command("send_test_email", self.EMAIL)
+        assert self.calls == []
+
+    def test_fails_loudly_when_the_provider_rejects(self):
+        from io import StringIO
+
+        from django.core.management import CommandError, call_command
+
+        self._manager()
+        self.reply = FakeResponse(
+            status_code=403,
+            payload={"statusCode": 403, "name": "validation_error",
+                     "message": "The mgmt.example.com domain is not verified."},
+        )
+        with pytest.raises(CommandError, match="Nothing was delivered"):
+            call_command("send_test_email", self.EMAIL, stdout=StringIO())
 
 
 @pytest.mark.django_db
@@ -9695,32 +9805,33 @@ class TestPasswordResetFlow:
             assert self._request_link(client).status_code == 302
         assert self._request_link(client).status_code == 429
 
-    def test_manager_without_smtp_config_still_gets_the_neutral_page(
+    def test_provider_failure_still_gets_the_neutral_page(
         self, client, monkeypatch, caplog,
     ):
-        """Production path: the routing backend must not turn a missing SMTP
-        row into a 500 (that would be an account-existence oracle)."""
+        """Production path: the API backend must not turn a provider failure into
+        a 500 (that would be an account-existence oracle)."""
         import logging
+
+        import requests
 
         from core import email_backend
 
         caplog.set_level(logging.ERROR, logger="core.email_backend")
         self._account()
 
-        class NoSMTPExpected:
-            def __init__(self, **kwargs):
-                raise AssertionError("no SMTP connection expected")
+        def boom(*args, **kwargs):
+            raise requests.ConnectionError("api.resend.com unreachable")
 
-        monkeypatch.setattr(email_backend, "SMTPBackend", NoSMTPExpected)
+        monkeypatch.setattr(email_backend.requests, "post", boom)
         with override_settings(
-            EMAIL_BACKEND="core.email_backend.ManagerConfigEmailBackend",
+            EMAIL_BACKEND="core.email_backend.ResendEmailBackend",
+            EMAIL_API_KEY="re_test_key",
         ):
             resp = self._request_link(client)
         assert resp.status_code == 302
         assert resp["Location"].endswith("/accounts/password/reset/done/")
         assert any(
-            "SMTP is not configured" in record.getMessage()
-            for record in caplog.records
+            "message dropped" in record.getMessage() for record in caplog.records
         )
 
     def test_token_ttl_is_one_hour(self):

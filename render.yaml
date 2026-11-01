@@ -56,6 +56,14 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Password-reset mail goes out through Resend's HTTP API (not SMTP):
+      # EMAIL_API_KEY is the `re_...` key, and DEFAULT_FROM_EMAIL must be an
+      # address on a domain verified in Resend (unverified -> HTTP 403). With
+      # no key the app still boots; reset mail is dropped with an ERROR log.
+      - key: EMAIL_API_KEY
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        sync: false
 
       # Static config — committed values:
       - key: MANAGER_TOOL_ENV
