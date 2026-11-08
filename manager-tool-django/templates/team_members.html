@@ -54,6 +54,7 @@
         <div>
           <label for="{{ known_form.name.id_for_label }}" class="block text-sm font-medium text-slate-700">Name *</label>
           {{ known_form.name }}
+          {% if known_form.name.errors %}<p class="text-xs text-red-600 mt-1">{{ known_form.name.errors.0 }}</p>{% endif %}
         </div>
         <div>
           <label for="{{ known_form.aliases.id_for_label }}" class="block text-sm font-medium text-slate-700">Nicknames</label>

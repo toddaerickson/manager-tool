@@ -5749,13 +5749,43 @@ class TestSentryStripsPrivatePayloads:
                     {"request": "x"}):
             assert sentry_before_send(bad, None) is not None
 
-    def test_init_flags_set_in_settings(self):
-        # Layer 1 lives in settings.py; read the source so the test runs
-        # without a DSN (Sentry is not initialised under settings_test).
+    def test_init_kwargs_in_settings(self):
+        # Parse the real sentry_sdk.init(...) call: a grep would pass if
+        # the flags only appeared in a comment.
+        import ast
         from pathlib import Path
         src = (Path(__file__).resolve().parent.parent / "mt" / "settings.py").read_text()
-        assert "include_local_variables=False" in src
-        assert 'max_request_body_size="never"' in src
+        calls = [n for n in ast.walk(ast.parse(src))
+                 if isinstance(n, ast.Call) and ast.unparse(n.func) == "sentry_sdk.init"]
+        assert len(calls) == 1
+        kw = {k.arg: ast.unparse(k.value) for k in calls[0].keywords}
+        assert kw["include_local_variables"] == "False"
+        assert kw["max_request_body_size"] == "'never'"
+        assert kw["send_default_pii"] == "False"
+        assert kw["before_send"] == "sentry_before_send"
+        assert kw["before_send_transaction"] == "sentry_before_send"
+
+    def test_headers_and_url_query_removed(self):
+        import json
+        from core.utils import sentry_before_send
+        event = {"request": {"url": "https://x/search/?q=Sarah+Chen", "method": "GET",
+                             "headers": {"Referer": "https://x/search/?q=Sarah+Chen",
+                                         "Hx-Current-Url": "https://x/search/?q=Sarah+Chen"}}}
+        out = sentry_before_send(event, None)
+        assert "Sarah" not in json.dumps(out)
+        assert out["request"]["url"] == "https://x/search/"
+
+    def test_transaction_spans_scrubbed(self):
+        import json
+        from core.utils import sentry_before_send
+        event = {"type": "transaction", "transaction": "/search/",
+                 "request": {"url": "https://x/search/", "query_string": "q=Sarah+Chen"},
+                 "spans": [{"op": "http.client", "description": "GET https://x/?q=Sarah",
+                            "data": {"http.query": "q=Sarah", "url": "https://x/?q=Sarah",
+                                     "http.method": "GET"}}]}
+        out = sentry_before_send(event, None)
+        assert "Sarah" not in json.dumps(out)
+        assert out["spans"][0]["data"] == {"http.method": "GET"}
 
 
 class TestPraiseToFeedbackMigration:

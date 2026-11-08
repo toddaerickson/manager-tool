@@ -21,7 +21,7 @@ from core.models import (
     TeamMember,
 )
 
-TOKEN = re.compile(r"⟦P\d+⟧")
+TOKEN = re.compile(r"⟦[PA]\d+⟧")
 
 
 def _p(*names):
@@ -123,17 +123,38 @@ class TestRandomTokens:
 
 
 class TestNoBypass:
+    _SDK_USE = re.compile(
+        r"\w*Anthropic\w*\("                       # Anthropic(, AsyncAnthropic(, AnthropicBedrock(
+        r"|^\s*(?:import|from)\s+anthropic\b"       # importing the SDK at all
+        r"|\.messages\.(?:create|stream|count_tokens|batches|parse)\b"
+        r"|getattr\([^)]*[\"']messages[\"']"        # getattr(client, "messages")
+        r"|=\s*\w+\.messages\s*$"                   # m = client.messages
+        r"|api\.anthropic\.com",                     # raw HTTP
+        re.MULTILINE,
+    )
+
+    def _is_test_file(self, path):
+        return path.name == "tests.py" or path.name.startswith("test_") or path.name == "conftest.py"
+
     def test_sdk_only_touched_in_llm_module(self):
         root = Path(__file__).resolve().parent.parent
         offenders = []
         for path in root.rglob("*.py"):
             rel = path.relative_to(root).as_posix()
-            if rel.startswith(".venv/") or rel == "coaching/llm.py" or "test" in path.name:
+            if rel.startswith(".venv/") or rel == "coaching/llm.py" or self._is_test_file(path):
                 continue
-            src = path.read_text(encoding="utf-8")
-            if re.search(r"\bAnthropic\w*\(|\.messages\.(create|stream|count_tokens|batches|parse)\b|beta\.messages", src):
+            if self._SDK_USE.search(path.read_text(encoding="utf-8")):
                 offenders.append(rel)
         assert offenders == []
+
+    def test_guard_catches_known_bypasses(self):
+        for snippet in ("c = AsyncAnthropic(api_key=k)", "import anthropic",
+                        "from anthropic import Anthropic", "m = client.messages",
+                        "getattr(client, 'messages')", "httpx.post('https://api.anthropic.com/v1/messages')",
+                        "client.messages.create(model=m)"):
+            assert self._SDK_USE.search(snippet), snippet
+        assert not self._SDK_USE.search("from django.contrib import messages")
+        assert not self._SDK_USE.search("'django.contrib.messages.middleware.MessageMiddleware'")
 
 
 # ---------------------------------------------------------- end to end
@@ -252,7 +273,10 @@ class TestNoNameLeavesAnyCallSite:
 
     def test_system_prompt_carries_placeholder_rule(self, world):
         services.generate_ai_suggestion(world["m"].id)
-        assert "⟦P3⟧" in world["fake"].sent[0]["system"]
+        system = world["fake"].sent[0]["system"]
+        assert "PRIVACY: Names in the data are replaced by placeholders" in system
+        # No concrete example token: the model could copy one.
+        assert not TOKEN.search(system)
 
     def test_pseudonymizer_inactive_after_request(self, world):
         services.generate_ai_suggestion(world["m"].id)
@@ -339,3 +363,136 @@ class TestCapCannotSplitAName:
         monkeypatch.setattr(services, "_get_client", lambda mid: fake)
         services.generate_ai_suggestion(m.id)
         assert "christ" not in fake.body().lower()
+
+
+class TestReviewFixes:
+    """One test per finding from the post-merge review of #170."""
+
+    def test_restore_ignores_tokens_not_emitted_this_request(self):
+        p = _p("Ann Zed", "Bo Yu")
+        assert p.restore("call ⟦P1⟧ and ⟦P2⟧") == "call ⟦P1⟧ and ⟦P2⟧"
+        sent = p.redact("Ann said hi")
+        token = TOKEN.search(sent).group(0)
+        other = "⟦P1⟧" if token == "⟦P2⟧" else "⟦P2⟧"
+        assert p.restore(f"{token} and {other}") == f"Ann Zed and {other}"
+
+    def test_shared_first_name_is_never_pinned_on_one_person(self):
+        p = Pseudonymizer([("Sarah Lee", ["Sarah Lee"]), ("Sarah Kim", ["Sarah Kim"])])
+        sent = p.redact("Sarah Kim said hi. Later Sarah left.")
+        assert "Sarah" not in sent and "⟦A1⟧" in sent
+        assert p.restore(sent) == "Sarah Kim said hi. Later Sarah left."
+
+    def test_particle_names_and_short_nicknames_hidden(self):
+        assert "Le" not in _p("Thanh Le").redact("Le said no")
+        assert "Van" not in _p("Van Nguyen").redact("Van agreed")
+        p = Pseudonymizer([("Diane Whitfield", ["Diane Whitfield", "Di"])])
+        assert p.redact("Di said ok").startswith("⟦P1⟧")
+        # inner particles and lowercase words stay
+        assert _p("Ana de la Cruz").redact("de facto, la la") == "de facto, la la"
+
+    def test_letters_nfkd_does_not_fold(self):
+        assert "Soren" not in _p("Søren Lund").redact("Soren said")
+        assert "Søren" not in _p("Soren Lund").redact("Søren said")
+        out = _p("Łukasz Strauß").redact("Lukasz Strauss and Strauß")
+        assert "Lukasz" not in out and "Strauss" not in out and "Strauß" not in out
+
+    def test_name_does_not_cross_a_sentence_break(self):
+        out = _p("Gwen Park").redact("We met Gwen. Park the idea.")
+        assert out.endswith(". ⟦P1⟧ the idea.") and "Gwen" not in out  # period kept
+        assert "Gwen" not in _p("Gwen Park").redact("gwen.park@corp.com")
+
+    def test_handle_variant_only_in_emails_and_handles(self):
+        p = _p("Jane Ames")
+        assert p.redact("James from finance") == "James from finance"
+        assert "james" not in p.redact("mail james@corp.com or @james").lower()
+
+    def test_cap_never_leaves_half_a_token(self, db):
+        from coaching.services import _clip
+        m = Manager.objects.create(username="half", display_name="H",
+                                   password_hash="x", email="half@example.com")
+        TeamMember.objects.create(manager_id=m.id, name="Sarah Chen")
+        from coaching import llm
+        with llm.PrivateRequest(m.id):
+            for limit in range(50, 66):
+                clipped = _clip("x" * 55 + " Sarah Chen said", limit)
+                assert "⟦" not in clipped or "⟧" in clipped[clipped.rfind("⟦"):], (limit, clipped)
+
+    def test_backstop_pass_catches_unsanitised_text(self, db):
+        from coaching import llm
+        m = Manager.objects.create(username="bs", display_name="B",
+                                   password_hash="x", email="bs@example.com")
+        TeamMember.objects.create(manager_id=m.id, name="Sarah Chen")
+        fake = _FakeClient()
+        with llm.PrivateRequest(m.id) as req:
+            req.send(fake, "sys", "raw field never sanitised: Sarah Chen", max_tokens=5)
+        assert "sarah" not in fake.body().lower()
+
+    def test_prep_brief_cap_cannot_split_a_name(self, world):
+        RunningNote.objects.create(manager_id=world["m"].id, team_member=world["sarah"],
+                                   note_date=date.today().isoformat(),
+                                   content="y" * 190 + " Christopher")
+        TeamMember.objects.create(manager_id=world["m"].id, name="Christopher Lang")
+        services.generate_prep_brief(world["upcoming"].id, world["m"].id)
+        assert "christ" not in world["fake"].body().lower()
+
+    def test_prep_brief_gathers_once_with_a_client(self, world, monkeypatch):
+        calls = []
+        real = services._gather_prep_changes
+        monkeypatch.setattr(services, "_gather_prep_changes",
+                            lambda *a: calls.append(1) or real(*a))
+        services.generate_prep_brief(world["upcoming"].id, world["m"].id)
+        assert len(calls) == 1
+
+    def test_quarterly_gathers_once_with_a_client(self, world, monkeypatch):
+        calls = []
+        real = services._gather_quarter_data
+        monkeypatch.setattr(services, "_gather_quarter_data",
+                            lambda *a: calls.append(1) or real(*a))
+        services.generate_quarterly_review(world["sarah"].id, world["m"].id, "Q4 2026")
+        assert len(calls) == 1
+
+    def test_quarterly_api_error_falls_back_with_real_names(self, world, monkeypatch):
+        class Boom:
+            class messages:
+                @staticmethod
+                def create(**_kw):
+                    raise RuntimeError("api down")
+        monkeypatch.setattr(services, "_get_client", lambda mid: Boom())
+        out = services.generate_quarterly_review(world["sarah"].id, world["m"].id, "Q4 2026")
+        assert "Sarah Chen" in out["text"] and not TOKEN.search(out["text"])
+
+
+class TestRenameAndTombstoneKeepNames:
+    def test_rename_keeps_old_name_as_nickname(self, client, db):
+        m = TestHiddenNamesPage()._login(client)
+        tm = TeamMember.objects.create(manager_id=m.id, name="Sara Jonson", aliases="SJ")
+        client.post(f"/team/{tm.id}/edit/", {"name": "Sarah Johnson", "aliases": "SJ"})
+        tm.refresh_from_db()
+        assert tm.name == "Sarah Johnson" and tm.aliases == "SJ, Sara Jonson"
+        names = [n for _d, ns in privacy.people_for_manager(m.id) for n in ns]
+        assert "Sara Jonson" in names
+
+    def test_edit_without_rename_leaves_aliases(self, client, db):
+        m = TestHiddenNamesPage()._login(client)
+        tm = TeamMember.objects.create(manager_id=m.id, name="Sam Ray", aliases="")
+        client.post(f"/team/{tm.id}/edit/", {"name": "Sam Ray", "aliases": ""})
+        tm.refresh_from_db()
+        assert not tm.aliases
+
+    def test_second_tombstone_with_same_name_merges_nicknames(self, db):
+        from core.management.commands.purge_deleted_team_members import tombstone_former_direct
+        m = Manager.objects.create(username="tomb", display_name="T",
+                                   password_hash="x", email="tomb@example.com")
+        a = TeamMember(manager_id=m.id, name="Alex Kim", aliases="AK")
+        b = TeamMember(manager_id=m.id, name="Alex Kim", aliases="Lexi, ak")
+        tombstone_former_direct(a)
+        tombstone_former_direct(b)
+        kp = KnownPerson.objects.get(manager_id=m.id, name="Alex Kim")
+        assert kp.aliases == "AK, Lexi"
+
+    def test_blank_hidden_name_shows_an_error(self, client, db):
+        m = TestHiddenNamesPage()._login(client)
+        resp = client.post("/team/hidden-names/add/", {"name": "", "aliases": "Di"})
+        assert resp.status_code == 422
+        assert "This field is required" in resp.content.decode()
+        assert not KnownPerson.objects.filter(manager_id=m.id).exists()

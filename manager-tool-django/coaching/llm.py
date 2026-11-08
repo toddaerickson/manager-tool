@@ -25,10 +25,11 @@ except ImportError:
 MODEL = "claude-sonnet-4-6"
 
 _TOKEN_INSTRUCTION = (
-    "\n\nPRIVACY: People in the data are written as placeholders like "
-    "⟦P3⟧. Refer to people only by those exact placeholders, copied "
-    "character for character. Never guess or invent a real name, and "
-    "never create a placeholder that is not in the data."
+    "\n\nPRIVACY: Names in the data are replaced by placeholders: the "
+    "character ⟦, then P or A, then a number, then ⟧. Refer to people only "
+    "by the placeholders that appear in the data, copied character for "
+    "character. Never guess or invent a real name, and never create a "
+    "placeholder that does not appear in the data."
 )
 
 

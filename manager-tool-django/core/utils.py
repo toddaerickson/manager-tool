@@ -38,7 +38,10 @@ def _strip_private_payloads(event):
     1:1 notes and the exact prompt sent to Claude, with real names. The
     init flags in mt/settings.py turn both captures off; this is the
     second layer, so a future flag change or SDK default change cannot
-    re-open the leak. Query strings go too: /search/?q= carries names.
+    re-open the leak. Query strings and headers go too: /search/?q=
+    carries names, and Referer/HX-Current-URL repeat it. Wired to both
+    before_send (errors) and before_send_transaction (performance traces,
+    which before_send never sees).
     """
     def _dicts(items):
         return [i for i in (items if isinstance(items, list) else []) if isinstance(i, dict)]
@@ -53,8 +56,20 @@ def _strip_private_payloads(event):
                 frame.pop("vars", None)
     request = event.get("request")
     if isinstance(request, dict):
-        for field in ("data", "query_string", "cookies"):
+        # Headers go whole: Referer and HX-Current-URL repeat the search
+        # URL (/search/?q=<name>), and none of them is needed to debug.
+        for field in ("data", "query_string", "cookies", "headers"):
             request.pop(field, None)
+        if isinstance(request.get("url"), str):
+            request["url"] = request["url"].split("?", 1)[0]
+    # Performance transactions: span data can repeat the URL/query.
+    for span in _dicts(event.get("spans")):
+        data = span.get("data")
+        if isinstance(data, dict):
+            for k in [k for k in data if "query" in k or "url" in k]:
+                data.pop(k, None)
+        if isinstance(span.get("description"), str) and span.get("op", "").startswith("http"):
+            span["description"] = span["description"].split("?", 1)[0]
 
 
 def sentry_before_send(event, _hint):

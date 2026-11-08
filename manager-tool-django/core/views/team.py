@@ -140,10 +140,12 @@ def team_members_edit(request, member_id: int):
         TeamMember.objects.active_for_manager(manager.id), pk=member_id,
     )
     if request.method == "POST":
+        old_name = member.name
         form = TeamMemberForm(request.POST, instance=member)
         if form.is_valid():
             from django.utils import timezone
             obj = form.save(commit=False)
+            obj.aliases = keep_old_name_hidden(old_name, obj.name, obj.aliases)
             obj.updated_at = timezone.now()
             obj.save()
             log_mutation(manager.id, "update", "TeamMember", obj.id,
@@ -171,13 +173,22 @@ def known_people_add(request):
     if err:
         return err
     form = KnownPersonForm(request.POST)
-    if form.is_valid():
-        person = form.save(commit=False)
-        person.manager_id = manager.id
-        person.source = "manual"
-        person.save()
-        log_mutation(manager.id, "create", "KnownPerson", person.id,
-                     f"Added name hidden from AI: {person.name}")
+    if not form.is_valid():
+        # Re-render with the error: a silent redirect would let the
+        # manager believe a name is hidden when nothing was saved.
+        return render(request, "team_members.html", {
+            "members": TeamMember.objects.active_for_manager(manager.id).order_by("name"),
+            "deleted_members": TeamMember.objects.recently_deleted_for_manager(manager.id),
+            "form": TeamMemberForm(),
+            "known_people": KnownPerson.objects.for_manager(manager.id),
+            "known_form": form,
+        }, status=422)
+    person = form.save(commit=False)
+    person.manager_id = manager.id
+    person.source = "manual"
+    person.save()
+    log_mutation(manager.id, "create", "KnownPerson", person.id,
+                 f"Added name hidden from AI: {person.name}")
     return redirect("team")
 
 
@@ -195,3 +206,16 @@ def known_people_delete(request, person_id: int):
                  f"Removed name hidden from AI: {person.name}")
     person.delete()
     return redirect("team")
+
+
+def keep_old_name_hidden(old_name, new_name, aliases):
+    """On rename, keep the previous name as a nickname: old notes still
+    use it, and dropping it would start sending it to the AI. Restore
+    then maps the old spelling to the current name (same person)."""
+    old = (old_name or "").strip()
+    if not old or old.casefold() == (new_name or "").strip().casefold():
+        return aliases
+    current = [a.strip() for a in (aliases or "").split(",") if a.strip()]
+    if old.casefold() not in {a.casefold() for a in current}:
+        current.append(old)
+    return ", ".join(current)
