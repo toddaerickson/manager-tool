@@ -63,8 +63,9 @@ def _sanitize_user_text(text):
 
 
 def _clip(text, limit):
-    """Sanitise (and tokenise names) first, then cap."""
-    return _sanitize_user_text(text or "")[:limit]
+    """Sanitise (and tokenise names) first, then cap, then drop any token
+    the cap cut in half ("...⟦P1") so the model never sees a fragment."""
+    return privacy.trim_partial_token(_sanitize_user_text(text or "")[:limit])
 
 
 def _wrap_user_input(text):
@@ -319,7 +320,7 @@ RULES:
 - Be specific: name people, reference real situations from their data.
 - If their mood has been low (1-2), be supportive first, then suggest.
 - If they have a streak going, acknowledge it briefly.
-- Never be generic. "Schedule a 1-on-1" is bad. "Schedule a 1-on-1 with ⟦P2⟧ -
+- Never be generic. "Schedule a 1-on-1" is bad. "Schedule a 1-on-1 with <that person> -
   it's been 18 days" is good.
 - Vary the type: sometimes a meeting, sometimes journaling, sometimes feedback,
   sometimes a delegation check-in, sometimes celebration.
@@ -401,7 +402,7 @@ def _build_context(notes, context_type="journal", member_name=None,
         user_block_parts.append(f"TEAM MEMBER: {_sanitize_user_text(member_name)}")
     if prep_data and prep_data.get("active_goals"):
         goal_lines = "; ".join(
-            _sanitize_user_text(g["description"])[:60]
+            _clip(g["description"], 60)
             for g in prep_data["active_goals"][:3]
         )
         user_block_parts.append(f"Goals: {goal_lines}")
@@ -1060,7 +1061,7 @@ def _gather_prep_changes(session, manager_id):
     since = prev.session_date if prev else None  # TEXT 'YYYY-MM-DD'
 
     def _cap(text):
-        return _sanitize_user_text((text or ""))[:_PREP_ITEM_CHARS]
+        return _clip(text, _PREP_ITEM_CHARS)
 
     notes_qs = RunningNote.objects.for_manager(manager_id).filter(
         team_member=member,
@@ -1097,14 +1098,14 @@ def _gather_prep_changes(session, manager_id):
     ]
 
     goals = [
-        f"{_cap(g.description)[:80]} — {g.status or 'not started'}"
+        f"{_clip(g.description, 80)} — {g.status or 'not started'}"
         for g in Goal.objects.for_manager(manager_id)
         .filter(team_member=member)
         .exclude(status__in=["met", "not_met"])[:_PREP_MAX_ITEMS]
     ]
 
     actions = [
-        f"{_cap(a.description)[:120]} ({a.status})"
+        f"{_clip(a.description, 120)} ({a.status})"
         for a in ActionItem.objects.active_for_manager(manager_id)
         .filter(one_on_one_session__team_member=member,
                 status__in=["pending", "in_progress"])
@@ -1114,7 +1115,7 @@ def _gather_prep_changes(session, manager_id):
     return {
         "member_name": member.name,
         "prev_date": since,
-        "prev_followup": _cap(prev.followup_notes)[:400] if prev else "",
+        "prev_followup": _clip(prev.followup_notes, 400) if prev else "",
         "notes": notes,
         "feedback": feedback,
         "goals": goals,
@@ -1160,16 +1161,14 @@ def generate_prep_brief(session_id, manager_id):
     if session is None:
         return None
 
-    changes = _gather_prep_changes(session, manager_id)
-
     client = _get_client(manager_id)
     if client is None:
-        return _prep_brief_fallback(changes)
+        # Local fallback keeps real names: it never leaves the app.
+        return _prep_brief_fallback(_gather_prep_changes(session, manager_id))
 
     with llm.PrivateRequest(manager_id) as req:
-        # Re-gather inside the request so names are tokenised field by
-        # field before the per-item caps (the fallback above keeps real
-        # names because it never leaves the app).
+        # Gathered inside the request so names are tokenised field by
+        # field before the per-item caps.
         changes = _gather_prep_changes(session, manager_id)
         return req.send(client, PREP_BRIEF_SYSTEM,
                         _prep_brief_user_message(changes), max_tokens=600)
@@ -1387,7 +1386,7 @@ def _gather_quarter_data(member, manager_id, quarter):
         date.fromisoformat(end_iso) + timedelta(days=1), dt_time.min))
 
     def _cap(text):
-        return _sanitize_user_text((text or ""))[:_QR_ITEM_CHARS]
+        return _clip(text, _QR_ITEM_CHARS)
 
     goals = [
         f"{_cap(g.description)} — status: {g.status or 'not started'}"
@@ -1471,20 +1470,28 @@ def generate_quarterly_review(member_id, manager_id, quarter):
     if member is None:
         return None
 
-    data = _gather_quarter_data(member, manager_id, quarter)
-    if not any((data["goals"], data["feedback"], data["sessions"],
-                data["convos"], data["delegations"])):
-        return {"text": "", "sparse": True, "note": ""}
+    def _is_sparse(d):
+        return not any((d["goals"], d["feedback"], d["sessions"],
+                        d["convos"], d["delegations"]))
+
+    def _real_data():
+        # Real names: only ever rendered locally (fallback paths).
+        return _gather_quarter_data(member, manager_id, quarter)
 
     client = _get_client(manager_id)
     if client is None:
+        data = _real_data()
+        if _is_sparse(data):
+            return {"text": "", "sparse": True, "note": ""}
         return {"text": _quarterly_review_fallback(data, quarter),
                 "sparse": False, "note": ""}
 
     try:
         with llm.PrivateRequest(manager_id) as req:
-            # Re-gather inside the request: names tokenised before caps.
+            # Gathered inside the request: names tokenised before caps.
             ai_data = _gather_quarter_data(member, manager_id, quarter)
+            if _is_sparse(ai_data):
+                return {"text": "", "sparse": True, "note": ""}
             parts = [
                 "CONTEXT TYPE: quarterly_review",
                 f"QUARTER: {quarter}",
@@ -1509,7 +1516,7 @@ def generate_quarterly_review(member_id, manager_id, quarter):
                             max_tokens=700).strip()
     except Exception:
         logger.exception("Quarterly review AI call failed")
-        return {"text": _quarterly_review_fallback(data, quarter),
+        return {"text": _quarterly_review_fallback(_real_data(), quarter),
                 "sparse": False, "note": (
                     "AI draft failed (API error — check server logs); "
                     "showing the raw quarter record instead."
@@ -1518,7 +1525,7 @@ def generate_quarterly_review(member_id, manager_id, quarter):
     if not text:
         logger.error("Quarterly review AI returned empty output "
                      "(manager=%s member=%s)", manager_id, member_id)
-        return {"text": _quarterly_review_fallback(data, quarter),
+        return {"text": _quarterly_review_fallback(_real_data(), quarter),
                 "sparse": False, "note": (
                     "The AI returned an empty draft; showing the raw "
                     "quarter record instead."

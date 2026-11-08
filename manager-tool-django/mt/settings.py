@@ -332,6 +332,9 @@ if SENTRY_DSN:
             max_request_body_size="never",
             environment=env("MANAGER_TOOL_ENV"),
             before_send=sentry_before_send,
+            # Performance transactions skip before_send entirely and carry
+            # request.query_string + headers (/search/?q=<name>).
+            before_send_transaction=sentry_before_send,
         )
     except Exception as e:
         logging.getLogger(__name__).warning(

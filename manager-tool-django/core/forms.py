@@ -54,7 +54,8 @@ class KnownPersonForm(forms.ModelForm):
         model = KnownPerson
         fields = ["name", "aliases"]
         widgets = {
-            "name": forms.TextInput(attrs={"placeholder": "Full name", "class": _INPUT_CLS}),
+            "name": forms.TextInput(attrs={"placeholder": "Full name", "class": _INPUT_CLS,
+                                           "required": True}),
             "aliases": forms.TextInput(attrs={"placeholder": "Nicknames, comma-separated", "class": _INPUT_CLS}),
         }
 

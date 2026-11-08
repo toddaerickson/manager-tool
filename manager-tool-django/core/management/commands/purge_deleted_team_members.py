@@ -58,10 +58,22 @@ class Command(BaseCommand):
 
 def tombstone_former_direct(tm):
     """Keep a purged member's name + nicknames (nothing else) so the AI
-    privacy filter keeps replacing them in old notes. Idempotent."""
+    privacy filter keeps replacing them in old notes. Idempotent; when a
+    tombstone with this name already exists (two former directs with the
+    same name), the new nicknames are merged in, never dropped."""
     if tm.manager_id is None:
         return
-    KnownPerson.objects.get_or_create(
+    kp, created = KnownPerson.objects.get_or_create(
         manager_id=tm.manager_id, name=tm.name, source="former_direct",
         defaults={"aliases": tm.aliases},
     )
+    if created or not tm.aliases:
+        return
+    existing = [a.strip() for a in (kp.aliases or "").split(",") if a.strip()]
+    seen = {a.casefold() for a in existing}
+    for alias in (a.strip() for a in tm.aliases.split(",")):
+        if alias and alias.casefold() not in seen:
+            existing.append(alias)
+            seen.add(alias.casefold())
+    kp.aliases = ", ".join(existing)
+    kp.save(update_fields=["aliases"])
