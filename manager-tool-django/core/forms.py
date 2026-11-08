@@ -13,7 +13,7 @@ from django import forms
 from .models import (
     ActionItem, CareerConversation, Decision, Delegation, DevelopmentPlan,
     Event, Feedback, Goal, Manager, Milestone, OneOnOneSession, RunningNote,
-    Skill, TeamMember,
+    KnownPerson, Skill, TeamMember,
 )
 
 
@@ -31,9 +31,14 @@ class TeamMemberForm(forms.ModelForm):
 
     class Meta:
         model = TeamMember
-        fields = ["name", "email", "role", "start_date", "notes"]
+        fields = ["name", "aliases", "email", "role", "start_date", "notes"]
+        labels = {"aliases": "Nicknames"}
+        help_texts = {
+            "aliases": "Comma-separated. Hidden from the AI along with the name.",
+        }
         widgets = {
             "name": forms.TextInput(attrs={"placeholder": "Full name", "class": _INPUT_CLS}),
+            "aliases": forms.TextInput(attrs={"placeholder": "Bob, Bobby", "class": _INPUT_CLS}),
             "email": forms.EmailInput(attrs={"placeholder": "name@company.com", "class": _INPUT_CLS}),
             "role": forms.TextInput(attrs={"placeholder": "Engineer / PM / ...", "class": _INPUT_CLS}),
             "notes": forms.Textarea(attrs={"rows": 2, "class": _INPUT_CLS}),
@@ -42,6 +47,16 @@ class TeamMemberForm(forms.ModelForm):
     def clean_start_date(self):
         d = self.cleaned_data.get("start_date")
         return d.isoformat() if d else None
+
+
+class KnownPersonForm(forms.ModelForm):
+    class Meta:
+        model = KnownPerson
+        fields = ["name", "aliases"]
+        widgets = {
+            "name": forms.TextInput(attrs={"placeholder": "Full name", "class": _INPUT_CLS}),
+            "aliases": forms.TextInput(attrs={"placeholder": "Nicknames, comma-separated", "class": _INPUT_CLS}),
+        }
 
 
 # Event types match schema_postgres.sql CHECK constraint

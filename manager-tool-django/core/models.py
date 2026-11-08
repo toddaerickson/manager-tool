@@ -166,6 +166,9 @@ class TeamMember(models.Model):
     # Hard-delete after the undo window happens via a management command
     # wired to a Render Cron in Phase 6.
     deleted_at = models.DateTimeField(blank=True, null=True, db_index=True)
+    # Comma-separated nicknames ("Bob, Bobby"). Never sent to the AI:
+    # they widen what coaching/privacy.py replaces with a token.
+    aliases = models.TextField(blank=True, null=True)
 
     objects = TeamMemberManager()
 
@@ -179,6 +182,31 @@ class TeamMember(models.Model):
         indexes = [
             models.Index(fields=["manager_id"], name="ix_team_members_manager"),
         ]
+
+
+class KnownPerson(models.Model):
+    """A person (not a current TeamMember) whose name must never be sent
+    to the AI provider: former directs (a tombstone written when
+    purge_deleted_team_members hard-deletes them, because old notes
+    still mention them) and anyone the manager lists by hand (boss,
+    peers, clients, candidates). Read by coaching/privacy.py."""
+
+    SOURCE_CHOICES = [("manual", "Added by you"), ("former_direct", "Former direct")]
+
+    manager_id = models.IntegerField(db_index=True)
+    name = models.TextField()
+    aliases = models.TextField(blank=True, null=True)
+    source = models.TextField(choices=SOURCE_CHOICES, default="manual")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = TenantManager()
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = "known_people"
+        ordering = ["name"]
 
 
 class Event(models.Model):

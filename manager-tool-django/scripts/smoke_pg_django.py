@@ -298,6 +298,7 @@ def _exercise_orm() -> None:
     _exercise_todo_soft_delete_and_delegate(m1, m2)
     _exercise_recurring_events_no_orphan(m1)
     _exercise_dashboard_naive_timestamp(m1)
+    _exercise_privacy_names(m1, m2)
 
 
 def _exercise_todo_soft_delete_and_delegate(m1, m2) -> None:
@@ -515,6 +516,51 @@ def _exercise_recurring_events_no_orphan(manager) -> None:
             f"NO-ORPHAN FAIL: {final - initial} orphan event row(s) left after "
             f"forced failure (transaction did not roll back)"
         )
+
+
+def _exercise_privacy_names(m1, m2) -> None:
+    """Privacy PR2 (migration 0017): TeamMember.aliases + known_people on
+    real PG — round-trip, bidirectional tenant isolation, and the purge's
+    tombstone+delete atomicity (forced failure leaves the member AND no
+    tombstone; SQLite autocommit can't prove the rollback)."""
+    from datetime import timedelta
+    from unittest import mock
+
+    from django.core.management import call_command
+    from django.utils import timezone
+
+    from coaching import privacy
+    from core.management.commands import purge_deleted_team_members as purge
+    from core.models import KnownPerson, TeamMember
+
+    _step("privacy: aliases + known_people round-trip and isolation on real PG")
+    TeamMember.objects.create(manager_id=m1.id, name="Smoke Alias", aliases="Smokey, SA")
+    KnownPerson.objects.create(manager_id=m1.id, name="Smoke Boss", aliases="SB")
+    KnownPerson.objects.create(manager_id=m2.id, name="Other Boss")
+    names_m1 = {n for _d, ns in privacy.people_for_manager(m1.id) for n in ns}
+    names_m2 = {n for _d, ns in privacy.people_for_manager(m2.id) for n in ns}
+    assert {"Smoke Alias", "Smokey", "SA", "Smoke Boss", "SB"} <= names_m1
+    assert "Other Boss" not in names_m1, "m1 sees m2's hidden names"
+    assert not ({"Smoke Boss", "Smokey"} & names_m2), "m2 sees m1's hidden names"
+
+    _step("privacy: purge tombstone + delete is atomic (forced failure)")
+    old = timezone.now() - timedelta(days=40)
+    gone = TeamMember.objects.create(manager_id=m1.id, name="Smoke Gone", deleted_at=old)
+    with mock.patch.object(purge, "tombstone_former_direct",
+                           side_effect=RuntimeError("smoke: forced tombstone failure")):
+        try:
+            call_command("purge_deleted_team_members")
+            _bail("forced tombstone failure should have raised")
+        except RuntimeError:
+            pass
+    assert TeamMember.objects.filter(pk=gone.pk).exists(), \
+        "member deleted although its tombstone failed — transaction did not roll back"
+    assert not KnownPerson.objects.filter(name="Smoke Gone").exists()
+
+    call_command("purge_deleted_team_members")
+    assert not TeamMember.objects.filter(pk=gone.pk).exists()
+    kp = KnownPerson.objects.for_manager(m1.id).get(name="Smoke Gone")
+    assert kp.source == "former_direct"
 
 
 def main() -> None:

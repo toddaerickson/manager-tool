@@ -23,5 +23,47 @@
   <div id="deleted-section" class="mt-8">
     {% include "_partials/team_member_deleted_list.html" %}
   </div>
+  <section id="hidden-names" class="mt-8 bg-white border border-slate-200 rounded-md px-3 py-3">
+    <h2 class="font-medium">Other people hidden from the AI</h2>
+    <p class="text-sm text-slate-500 mt-1">
+      Names of your team are already replaced with placeholders before anything is sent to the AI.
+      Add anyone else your notes mention: your boss, peers, clients, candidates.
+      Former team members are added here automatically when they are permanently deleted.
+    </p>
+    {% if known_people %}
+    <table class="min-w-full mt-2">
+      <tbody class="divide-y divide-slate-200">
+        {% for p in known_people %}
+        <tr>
+          <td class="px-4 py-2 text-slate-700">{{ p.name }}{% if p.aliases %} <span class="text-xs text-slate-500">({{ p.aliases }})</span>{% endif %}</td>
+          <td class="px-4 py-2 text-xs text-slate-500">{{ p.get_source_display }}</td>
+          <td class="px-4 py-2 text-right">
+            <form method="post" action="{% url 'known-people-delete' p.id %}">
+              {% csrf_token %}
+              <button type="submit" class="inline-flex items-center min-h-11 sm:min-h-8 px-2 rounded text-xs font-medium text-slate-600 hover:bg-slate-100">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    <form method="post" action="{% url 'known-people-add' %}" class="space-y-3 mt-3">
+      {% csrf_token %}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label for="{{ known_form.name.id_for_label }}" class="block text-sm font-medium text-slate-700">Name *</label>
+          {{ known_form.name }}
+        </div>
+        <div>
+          <label for="{{ known_form.aliases.id_for_label }}" class="block text-sm font-medium text-slate-700">Nicknames</label>
+          {{ known_form.aliases }}
+        </div>
+      </div>
+      <div class="flex justify-end">
+        <button type="submit" class="bg-accent-700 text-white px-4 py-2 rounded hover:bg-accent-800">Add name</button>
+      </div>
+    </form>
+  </section>
 </div>
 {% endblock %}

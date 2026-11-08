@@ -20,16 +20,11 @@ from core.models import (
     ActionItem, Decision, Delegation, Event, Goal, JournalEntry,
     TeamMember,
 )
-from core.services.email import get_config as _get_config
 from core.services.journal import journal_streak as _journal_streak
+from coaching import llm, privacy
 from coaching.models import CoachSuggestion
 
 logger = logging.getLogger(__name__)
-
-try:
-    from anthropic import Anthropic
-except ImportError:
-    Anthropic = None
 
 
 # ---------------------------------------------------------------------------
@@ -52,13 +47,24 @@ _PROMPT_INJECTION_GUARD = (
 
 
 def _sanitize_user_text(text):
-    """Strip literal <user_input> open/close tags from user content."""
+    """Strip literal <user_input> open/close tags from user content, and,
+    while an AI request is being built (coaching/llm.PrivateRequest),
+    replace people's names with tokens. Callers cap length AFTER this,
+    so a cap can never cut a name into an unmatched prefix."""
     if text is None:
         return ""
     s = str(text)
     s = _CLOSE_TAG_RE.sub("[user_input_close_removed]", s)
     s = _OPEN_TAG_RE.sub("[user_input_open_removed]", s)
+    p = privacy.active()
+    if p is not None:
+        s = p.redact(s)
     return s
+
+
+def _clip(text, limit):
+    """Sanitise (and tokenise names) first, then cap."""
+    return _sanitize_user_text(text or "")[:limit]
 
 
 def _wrap_user_input(text):
@@ -313,7 +319,7 @@ RULES:
 - Be specific: name people, reference real situations from their data.
 - If their mood has been low (1-2), be supportive first, then suggest.
 - If they have a streak going, acknowledge it briefly.
-- Never be generic. "Schedule a 1-on-1" is bad. "Schedule a 1-on-1 with Sarah -
+- Never be generic. "Schedule a 1-on-1" is bad. "Schedule a 1-on-1 with ⟦P2⟧ -
   it's been 18 days" is good.
 - Vary the type: sometimes a meeting, sometimes journaling, sometimes feedback,
   sometimes a delegation check-in, sometimes celebration.
@@ -349,18 +355,10 @@ RULES:
 # ---------------------------------------------------------------------------
 
 def _get_client(manager_id):
-    """Get an Anthropic client. Per-manager DB key wins; falls back to
-    the ANTHROPIC_API_KEY env var so the platform can ship with a
-    working default (the Django settings page does not yet expose a
-    per-manager API-key field)."""
-    if Anthropic is None:
-        return None
-    api_key = _get_config("anthropic_api_key", manager_id) or os.environ.get(
-        "ANTHROPIC_API_KEY"
-    )
-    if not api_key:
-        return None
-    return Anthropic(api_key=api_key)
+    """Anthropic client or None. Construction lives in coaching/llm.py
+    (the only module allowed to touch the SDK); this name stays so
+    callers and tests keep one seam to patch."""
+    return llm.build_client(manager_id)
 
 
 # ---------------------------------------------------------------------------
@@ -431,17 +429,11 @@ def get_coaching_response(notes, manager_id, context_type="journal",
     if client is None:
         return _local_fallback(notes, context_type, member_name)
 
-    user_message = _build_context(
-        notes, context_type, member_name, event_type, prep_data)
-
     try:
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=500,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        return message.content[0].text
+        with llm.PrivateRequest(manager_id) as req:
+            user_message = _build_context(
+                notes, context_type, member_name, event_type, prep_data)
+            return req.send(client, SYSTEM_PROMPT, user_message, max_tokens=500)
     except Exception:
         logger.exception("Claude API call failed")
         return (
@@ -672,6 +664,18 @@ def generate_ai_suggestion(manager_id):
     if not client:
         return None
 
+    try:
+        with llm.PrivateRequest(manager_id) as req:
+            user_message = _daily_coach_user_message(manager_id)
+            return req.send(client, DAILY_COACH_SYSTEM, user_message, max_tokens=150)
+    except Exception:
+        logger.exception("Daily coach AI suggestion failed")
+        return None
+
+
+def _daily_coach_user_message(manager_id):
+    """Daily-coach prompt body. Must be called inside llm.PrivateRequest
+    so every user string is tokenised as it is added."""
     today_iso = date.today().isoformat()
     trusted_parts = []
     user_parts = []
@@ -687,7 +691,7 @@ def generate_ai_suggestion(manager_id):
         for j in recent_journal:
             mood_label = {1: "very low", 2: "low", 3: "neutral",
                           4: "good", 5: "great"}.get(j.mood, "unknown")
-            content = _sanitize_user_text((j.content or "")[:200])
+            content = _clip(j.content, 200)
             user_parts.append(f"  {j.entry_date} (mood: {mood_label}): {content}")
 
     # Streak
@@ -709,7 +713,7 @@ def generate_ai_suggestion(manager_id):
             name = _sanitize_user_text(
                 d.team_member.name if d.team_member else "?"
             )
-            task = _sanitize_user_text(d.task[:60])
+            task = _clip(d.task, 60)
             user_parts.append(f"  {name}: {task}")
 
     # Decisions due
@@ -720,12 +724,11 @@ def generate_ai_suggestion(manager_id):
     if decisions_due:
         user_parts.append("DECISIONS DUE FOR REVIEW:")
         for d in decisions_due:
-            title = _sanitize_user_text(d.title[:60])
+            title = _clip(d.title, 60)
             user_parts.append(f"  {title} (review by {d.review_date})")
 
     # Team size
     members = TeamMember.objects.active_for_manager(manager_id)
-    trusted_parts.append(f"TEAM SIZE: {members.count()} direct reports")
 
     # Meeting cadence
     for m in members[:5]:
@@ -760,17 +763,7 @@ def generate_ai_suggestion(manager_id):
         )
     user_message = "\n".join(parts)
 
-    try:
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=150,
-            system=DAILY_COACH_SYSTEM,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        return message.content[0].text
-    except Exception:
-        logger.exception("Daily coach AI suggestion failed")
-        return None
+    return user_message
 
 
 # ---------------------------------------------------------------------------
@@ -792,8 +785,6 @@ def _weekly_plan_user_message(manager_id):
     trusted_parts.append(f"JOURNAL STREAK: {streak} days")
 
     members = TeamMember.objects.active_for_manager(manager_id)
-    trusted_parts.append(f"TEAM SIZE: {members.count()} direct reports")
-
     recent_journal = (
         JournalEntry.objects.for_manager(manager_id)
         .filter(entry_type="daily", entry_date__gte=week_ago_iso)
@@ -804,7 +795,7 @@ def _weekly_plan_user_message(manager_id):
         for j in recent_journal:
             mood_label = {1: "very low", 2: "low", 3: "neutral",
                           4: "good", 5: "great"}.get(j.mood, "—")
-            content = _sanitize_user_text((j.content or "")[:300])
+            content = _clip(j.content, 300)
             user_parts.append(
                 f"  {j.entry_date} (mood: {mood_label}): {content}"
             )
@@ -817,7 +808,7 @@ def _weekly_plan_user_message(manager_id):
     if overdue_actions:
         user_parts.append("OVERDUE ACTION ITEMS:")
         for a in overdue_actions:
-            desc = _sanitize_user_text((a.description or "")[:120])
+            desc = _clip(a.description, 120)
             user_parts.append(f"  due {a.due_date}: {desc}")
 
     overdue_dels = (
@@ -831,7 +822,7 @@ def _weekly_plan_user_message(manager_id):
             name = _sanitize_user_text(
                 d.team_member.name if d.team_member else "?"
             )
-            task = _sanitize_user_text((d.task or "")[:100])
+            task = _clip(d.task, 100)
             user_parts.append(
                 f"  {name} (check-in was {d.check_in_date}): {task}"
             )
@@ -843,7 +834,7 @@ def _weekly_plan_user_message(manager_id):
     if decisions_due:
         user_parts.append("DECISIONS DUE FOR REVIEW:")
         for d in decisions_due:
-            title = _sanitize_user_text((d.title or "")[:100])
+            title = _clip(d.title, 100)
             user_parts.append(f"  review by {d.review_date}: {title}")
 
     active_goals = (
@@ -853,7 +844,7 @@ def _weekly_plan_user_message(manager_id):
     if active_goals:
         user_parts.append("ACTIVE GOALS:")
         for g in active_goals:
-            desc = _sanitize_user_text((g.description or "")[:120])
+            desc = _clip(g.description, 120)
             user_parts.append(f"  Q{g.quarter}: {desc}")
 
     # Meeting cadence per direct
@@ -897,16 +888,10 @@ def generate_weekly_plan(manager_id):
     if not client:
         return None
 
-    user_message = _weekly_plan_user_message(manager_id)
-
     try:
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=600,
-            system=WEEKLY_PLAN_SYSTEM,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        text = message.content[0].text if message.content else ""
+        with llm.PrivateRequest(manager_id) as req:
+            user_message = _weekly_plan_user_message(manager_id)
+            text = req.send(client, WEEKLY_PLAN_SYSTEM, user_message, max_tokens=600)
         return text.strip() or None
     except Exception:
         logger.exception("Weekly plan AI generation failed")
@@ -1181,6 +1166,16 @@ def generate_prep_brief(session_id, manager_id):
     if client is None:
         return _prep_brief_fallback(changes)
 
+    with llm.PrivateRequest(manager_id) as req:
+        # Re-gather inside the request so names are tokenised field by
+        # field before the per-item caps (the fallback above keeps real
+        # names because it never leaves the app).
+        changes = _gather_prep_changes(session, manager_id)
+        return req.send(client, PREP_BRIEF_SYSTEM,
+                        _prep_brief_user_message(changes), max_tokens=600)
+
+
+def _prep_brief_user_message(changes):
     # Trusted metadata outside the tags; user-authored text inside
     # <user_input> (AUDIT M2 pattern, same as _build_context).
     parts = [
@@ -1203,14 +1198,7 @@ def generate_prep_brief(session_id, manager_id):
     parts.append(
         _USER_INPUT_OPEN + "\n" + "\n".join(user_lines) + "\n" + _USER_INPUT_CLOSE
     )
-
-    message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=600,
-        system=PREP_BRIEF_SYSTEM,
-        messages=[{"role": "user", "content": "\n".join(parts)}],
-    )
-    return message.content[0].text
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -1292,26 +1280,20 @@ def draft_sbi(notes, manager_id, member_name=None, feedback_type=None):
         )
         return degraded
 
-    parts = ["CONTEXT TYPE: sbi_draft"]
-    if feedback_type:
-        parts.append(f"FEEDBACK TYPE: {feedback_type}")
-    user_lines = []
-    if member_name:
-        user_lines.append(f"TEAM MEMBER: {_sanitize_user_text(member_name)}")
-    user_lines.append(f"ROUGH NOTES:\n{_sanitize_user_text(notes)}")
-    parts.append(
-        _USER_INPUT_OPEN + "\n" + "\n".join(user_lines) + "\n"
-        + _USER_INPUT_CLOSE
-    )
-
     try:
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=500,
-            system=SBI_DRAFT_SYSTEM,
-            messages=[{"role": "user", "content": "\n".join(parts)}],
-        )
-        text = message.content[0].text if message.content else ""
+        with llm.PrivateRequest(manager_id) as req:
+            parts = ["CONTEXT TYPE: sbi_draft"]
+            if feedback_type:
+                parts.append(f"FEEDBACK TYPE: {feedback_type}")
+            user_lines = []
+            if member_name:
+                user_lines.append(f"TEAM MEMBER: {_sanitize_user_text(member_name)}")
+            user_lines.append(f"ROUGH NOTES:\n{_sanitize_user_text(notes)}")
+            parts.append(
+                _USER_INPUT_OPEN + "\n" + "\n".join(user_lines) + "\n"
+                + _USER_INPUT_CLOSE
+            )
+            text = req.send(client, SBI_DRAFT_SYSTEM, "\n".join(parts), max_tokens=500)
     except Exception:
         logger.exception("SBI draft AI call failed")
         degraded["note"] = (
@@ -1499,35 +1481,32 @@ def generate_quarterly_review(member_id, manager_id, quarter):
         return {"text": _quarterly_review_fallback(data, quarter),
                 "sparse": False, "note": ""}
 
-    parts = [
-        "CONTEXT TYPE: quarterly_review",
-        f"QUARTER: {quarter}",
-        f"COUNTS: goals={len(data['goals'])} feedback={len(data['feedback'])} "
-        f"completed_1on1s={len(data['sessions'])} convos={len(data['convos'])} "
-        f"delegations={len(data['delegations'])}",
-    ]
-    user_lines = [f"TEAM MEMBER: {_sanitize_user_text(data['member_name'])}"]
-    for label, items in (("GOALS THIS QUARTER", data["goals"]),
-                         ("FEEDBACK GIVEN", data["feedback"]),
-                         ("COMPLETED 1:1s", data["sessions"]),
-                         ("CAREER CONVERSATIONS", data["convos"]),
-                         ("DELEGATIONS", data["delegations"])):
-        if items:
-            user_lines.append(label + ":")
-            user_lines.extend(f"- {i}" for i in items)
-    parts.append(
-        _USER_INPUT_OPEN + "\n" + "\n".join(user_lines) + "\n"
-        + _USER_INPUT_CLOSE
-    )
-
     try:
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=700,
-            system=QUARTERLY_REVIEW_SYSTEM,
-            messages=[{"role": "user", "content": "\n".join(parts)}],
-        )
-        text = (message.content[0].text if message.content else "").strip()
+        with llm.PrivateRequest(manager_id) as req:
+            # Re-gather inside the request: names tokenised before caps.
+            ai_data = _gather_quarter_data(member, manager_id, quarter)
+            parts = [
+                "CONTEXT TYPE: quarterly_review",
+                f"QUARTER: {quarter}",
+                f"COUNTS: goals={len(ai_data['goals'])} feedback={len(ai_data['feedback'])} "
+                f"completed_1on1s={len(ai_data['sessions'])} convos={len(ai_data['convos'])} "
+                f"delegations={len(ai_data['delegations'])}",
+            ]
+            user_lines = [f"TEAM MEMBER: {_sanitize_user_text(ai_data['member_name'])}"]
+            for label, items in (("GOALS THIS QUARTER", ai_data["goals"]),
+                                 ("FEEDBACK GIVEN", ai_data["feedback"]),
+                                 ("COMPLETED 1:1s", ai_data["sessions"]),
+                                 ("CAREER CONVERSATIONS", ai_data["convos"]),
+                                 ("DELEGATIONS", ai_data["delegations"])):
+                if items:
+                    user_lines.append(label + ":")
+                    user_lines.extend(f"- {i}" for i in items)
+            parts.append(
+                _USER_INPUT_OPEN + "\n" + "\n".join(user_lines) + "\n"
+                + _USER_INPUT_CLOSE
+            )
+            text = req.send(client, QUARTERLY_REVIEW_SYSTEM, "\n".join(parts),
+                            max_tokens=700).strip()
     except Exception:
         logger.exception("Quarterly review AI call failed")
         return {"text": _quarterly_review_fallback(data, quarter),

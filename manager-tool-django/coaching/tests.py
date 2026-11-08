@@ -279,7 +279,9 @@ class TestWeeklyPlanUserMessage:
         msg = _weekly_plan_user_message(m.id)
         # Trusted parts always present; no user-input section when empty.
         assert "JOURNAL STREAK" in msg
-        assert "TEAM SIZE" in msg
+        # TEAM SIZE was dropped on purpose (privacy plan v3): it helps
+        # re-identify people behind the tokens and adds little.
+        assert "TEAM SIZE" not in msg
 
     def test_sanitizes_injected_close_tag_in_journal(self):
         from datetime import date as _date

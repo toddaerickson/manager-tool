@@ -5696,6 +5696,68 @@ class TestSentryBeforeSend:
         assert out is not None
 
 
+class TestSentryStripsPrivatePayloads:
+    """PR0: Sentry must never receive note text. sentry-sdk 2.x captures
+    frame locals and request bodies by default; both hold journal text,
+    1:1 notes and Claude prompts with real names."""
+
+    def _event(self):
+        frame = {"function": "get_coaching_response",
+                 "vars": {"user_message": "Sarah Chen missed the deadline"}}
+        return {
+            "exception": {"values": [{
+                "type": "APIError", "value": "overloaded",
+                "stacktrace": {"frames": [frame, {"function": "x"}]},
+            }]},
+            "threads": {"values": [{"stacktrace": {"frames": [
+                {"vars": {"notes": "Sarah Chen"}}]}}]},
+            "request": {"url": "https://x/journal/", "method": "POST",
+                        "data": {"content": "Sarah Chen"},
+                        "query_string": "q=Sarah+Chen",
+                        "cookies": {"sessionid": "abc"}},
+        }
+
+    def test_frame_locals_removed(self):
+        from core.utils import sentry_before_send
+        out = sentry_before_send(self._event(), None)
+        for key in ("exception", "threads"):
+            for v in out[key]["values"]:
+                for f in v["stacktrace"]["frames"]:
+                    assert "vars" not in f
+
+    def test_request_body_query_and_cookies_removed(self):
+        from core.utils import sentry_before_send
+        out = sentry_before_send(self._event(), None)
+        assert set(out["request"]) == {"url", "method"}
+
+    def test_no_note_text_anywhere_in_event(self):
+        import json
+        from core.utils import sentry_before_send
+        out = sentry_before_send(self._event(), None)
+        assert "Sarah" not in json.dumps(out)
+
+    def test_exception_type_and_message_kept(self):
+        from core.utils import sentry_before_send
+        out = sentry_before_send(self._event(), None)
+        exc = out["exception"]["values"][0]
+        assert exc["type"] == "APIError" and exc["value"] == "overloaded"
+
+    def test_malformed_shapes_do_not_drop_event(self):
+        from core.utils import sentry_before_send
+        for bad in ({"exception": {"values": "x"}},
+                    {"exception": {"values": [{"stacktrace": "x"}]}},
+                    {"request": "x"}):
+            assert sentry_before_send(bad, None) is not None
+
+    def test_init_flags_set_in_settings(self):
+        # Layer 1 lives in settings.py; read the source so the test runs
+        # without a DSN (Sentry is not initialised under settings_test).
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent / "mt" / "settings.py").read_text()
+        assert "include_local_variables=False" in src
+        assert 'max_request_body_size="never"' in src
+
+
 class TestPraiseToFeedbackMigration:
     """Hard regression for migration 0010.
 
@@ -7925,9 +7987,13 @@ class TestDraftSBI:
         # member + type picks survive the swap
         assert f'value="{tm.id}" selected' in body
         assert 'value="constructive" selected' in body
-        # notes went through the injection-wrapping path with the name
+        # notes went through the injection-wrapping path, with the
+        # direct's name (field AND lowercase mention in the notes)
+        # replaced by a token before it left the app
         prompt = fake.messages.create.call_args.kwargs["messages"][0]["content"]
-        assert "<user_input>" in prompt and "Sarah" in prompt
+        assert "<user_input>" in prompt
+        assert "sarah" not in prompt.lower()
+        assert "⟦P1⟧ kept interrupting" in prompt
 
     def test_empty_notes_is_422(self, client):
         self._setup(client, "empty")
