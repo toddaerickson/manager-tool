@@ -29,6 +29,23 @@ Do not, in a future session:
 - "Fix" delivery by adding retries. There is no idempotency key, so a retry can double-send; a failure surfaces as an ERROR log plus one Sentry event per process (`_report_once`), which is the intended behaviour.
 - Call it verified after a local test with a console/locmem `EMAIL_BACKEND` — those return success without sending. `send_test_email` warns when it sees one.
 
+## ⚠️ Read second: AI privacy — what shipped, what the owner decided, what is still open
+
+**State at merge of PR #170 (2026-11-08):** two layers are live on `main`.
+- **Sentry gets no note text.** sentry-sdk 2.x defaults (`include_local_variables=True`, request bodies captured) uploaded journal text, 1:1 notes and Claude prompts with real names on every logged API failure — verified with the real SDK. Fixed by init flags in `mt/settings.py` plus `core/utils.sentry_before_send` stripping frame vars, request data, query string, cookies.
+- **Names never reach Anthropic.** All six AI call sites go through `coaching/llm.py` (`PrivateRequest`); `coaching/privacy.py` swaps every TeamMember (incl. soft-deleted, plus `aliases`) and every `KnownPerson` (boss/peers listed on the Team page; former directs tombstoned by the purge cron) for a per-request shuffled `⟦Pn⟧` token, and restores names in the reply. Rules for new code are in the Auth & secrets section below.
+
+**Owner decisions (2026-11-08) — do not reverse without asking:**
+- AI stays ON and automatic (journal save, daily dashboard coach, Monday digest). The owner explicitly declined an off switch, click-only mode, payload caps, and a send-preview. Do not reintroduce them unprompted; residual risk is stated below instead.
+- "Private session query" is a false premise: the API has no per-request incognito mode; retention is set by account terms or a zero-data-retention (ZDR) agreement.
+
+**Still open, owner's actions (no code):**
+1. Populate Team → "Other people hidden from the AI" (boss, peers, clients) and nicknames on each member. Until then only stored member names are hidden.
+2. Request a ZDR agreement from Anthropic sales. If refused/slow, the alternative is Claude via Amazon Bedrock or Google Vertex AI — a contained change inside `coaching/llm.py`, but not a one-line swap (model IDs, AWS/GCP credentials, region); verify the host's retention terms first-hand before switching. Record whichever terms apply here.
+3. Confirm whether `SENTRY_DSN` is set in Render (the Sentry fix only matters if it is).
+
+**Residual risk (accepted, not solved):** pseudonymised data is still personal data — context (role, dates, events), misspellings, initials and unlisted nicknames identify people; health/family/PIP content in free text goes out unchanged; mood scores and full journal text are still sent automatically. Do not describe this as anonymised. Anthropic's retention terms were never verified first-hand (vendor pages blocked by the session network); third-party summaries said ~30-day API retention, no training on API data, flagged content kept longer.
+
 ## Project Overview
 
 Manager Tool is a single-manager management coaching journal: 1:1 meeting records, journal, delegations, feedback, goals, decisions, analytics, and an AI coaching layer grounded in a wisdom library of 620 management ideas from 23 books (`365_Great_Management_Ideas.md`).
