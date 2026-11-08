@@ -7987,9 +7987,13 @@ class TestDraftSBI:
         # member + type picks survive the swap
         assert f'value="{tm.id}" selected' in body
         assert 'value="constructive" selected' in body
-        # notes went through the injection-wrapping path with the name
+        # notes went through the injection-wrapping path, with the
+        # direct's name (field AND lowercase mention in the notes)
+        # replaced by a token before it left the app
         prompt = fake.messages.create.call_args.kwargs["messages"][0]["content"]
-        assert "<user_input>" in prompt and "Sarah" in prompt
+        assert "<user_input>" in prompt
+        assert "sarah" not in prompt.lower()
+        assert "⟦P1⟧ kept interrupting" in prompt
 
     def test_empty_notes_is_422(self, client):
         self._setup(client, "empty")

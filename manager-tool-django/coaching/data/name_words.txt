@@ -1,0 +1,24 @@
+# Name parts that are also common English words. A part listed here is
+# replaced only when Capitalised ("Will said"), never in lowercase
+# ("I will"). A part NOT listed is replaced in any case, so a missing
+# entry errs toward hiding too much, never too little.
+ace amber an april art august autumn baker banks bell belle berry bill
+bird black blue bond bone booker bowman brand brave bright brook brooks
+brown buck bush butler cash chance chase cherry clay cliff coal cole
+cook cooper crane crystal dale dash dawn day dean dell diamond dove
+drew duke earl easter ebony edge ellis ember faith fang fern field fields
+fish fisher fletcher ford forest fox frank free frost gale gardner garland
+gay gem gene ginger glass glen gold golden grace grant gray green grey
+guy hall hart harper hawk hazel heath herb hill holly honey hood hope
+hunter hurst ivy jack jade jasmine jay jewel joy june just keen kind king
+knight lamb lance lane lark lee lily long love lucky mark marsh mason
+max may meadow mercy miles mill miller mine moon moore moss nash noble
+north oak ocean olive page palmer park parker pat patience pearl penny
+pepper petal pierce piper poppy porter post pound power powers price
+prince queen rain rains ray reed rich rick river robin rock rocky rose
+rosemary ross ruby rush rusty sage sandy savage scott sharp shaw short
+silver sky skye slate smith snow sol sparrow spencer spring stark steel
+sterling stone storm stout strong sue summer sunny swan sweet taylor
+temple thorn tiger toy trinity troy true tucker turner victor violet
+wade walker ward warren waters webb west white wild will willow winter
+wolf wood woods wren young

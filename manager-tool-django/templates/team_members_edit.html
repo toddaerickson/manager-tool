@@ -20,6 +20,11 @@
           {% if form.name.errors %}<p class="text-xs text-red-600 mt-1">{{ form.name.errors.0 }}</p>{% endif %}
         </div>
         <div>
+          <label for="{{ form.aliases.id_for_label }}" class="block text-sm font-medium text-slate-700">Nicknames</label>
+          {{ form.aliases }}
+          <p class="text-xs text-slate-500 mt-1">{{ form.aliases.help_text }}</p>
+        </div>
+        <div>
           <label for="{{ form.email.id_for_label }}" class="block text-sm font-medium text-slate-700">Email</label>
           {{ form.email }}
           {% if form.email.errors %}<p class="text-xs text-red-600 mt-1">{{ form.email.errors.0 }}</p>{% endif %}

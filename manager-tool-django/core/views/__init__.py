@@ -12,6 +12,8 @@ from core.views._common import (  # noqa: F401
 )
 from core.views.events import dashboard_overview  # noqa: F401
 from core.views.team import (  # noqa: F401
+    known_people_add,
+    known_people_delete,
     team_members_add,
     team_members_delete,
     team_members_edit,

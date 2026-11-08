@@ -7,9 +7,10 @@ Wired to a Render Cron in Phase 6. Idempotent — safe to run repeatedly.
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand
+from django.db import transaction
 from django.utils import timezone
 
-from core.models import TeamMember, TeamMemberManager
+from core.models import KnownPerson, TeamMember, TeamMemberManager
 from core.services.audit import log_mutation
 
 
@@ -38,11 +39,29 @@ class Command(BaseCommand):
         # actor="system" tags this as cron-driven so /audit/?actor=user
         # stays a clean operator view.
         rows = list(qs)
-        for tm in rows:
-            log_mutation(
-                tm.manager_id, "delete", "TeamMember", tm.id,
-                f"Cron purge of soft-deleted member: {tm.name}",
-                actor="system",
-            )
-        qs.delete()
+        # Tombstone + delete in one transaction: old notes still mention
+        # these people, so their names must stay on the list
+        # coaching/privacy.py hides from the AI. A purge that deleted the
+        # member but lost the tombstone would silently start sending
+        # their name; rolling both back is the safe failure.
+        with transaction.atomic():
+            for tm in rows:
+                tombstone_former_direct(tm)
+                log_mutation(
+                    tm.manager_id, "delete", "TeamMember", tm.id,
+                    f"Cron purge of soft-deleted member: {tm.name}",
+                    actor="system",
+                )
+            qs.delete()
         self.stdout.write(f"Hard-deleted {len(rows)} TeamMember row(s)")
+
+
+def tombstone_former_direct(tm):
+    """Keep a purged member's name + nicknames (nothing else) so the AI
+    privacy filter keeps replacing them in old notes. Idempotent."""
+    if tm.manager_id is None:
+        return
+    KnownPerson.objects.get_or_create(
+        manager_id=tm.manager_id, name=tm.name, source="former_direct",
+        defaults={"aliases": tm.aliases},
+    )

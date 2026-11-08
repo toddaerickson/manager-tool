@@ -9,9 +9,11 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from core.models import (
+    KnownPerson,
     TeamMember,
 )
 from core.forms import (
+    KnownPersonForm,
     TeamMemberForm,
 )
 from core.services.audit import log_mutation
@@ -37,6 +39,8 @@ def team_members_list(request):
         "members": members,
         "deleted_members": deleted,
         "form": TeamMemberForm(),
+        "known_people": KnownPerson.objects.for_manager(manager.id),
+        "known_form": KnownPersonForm(),
     })
 
 
@@ -156,3 +160,38 @@ def team_members_edit(request, member_id: int):
     return render(request, "team_members_edit.html", {"form": form, "member": member})
 
 
+
+
+@login_required
+@require_http_methods(["POST"])
+def known_people_add(request):
+    """Add a person (boss, peer, client, candidate) whose name the AI
+    privacy filter must hide. Plain POST + redirect: low-traffic form."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    form = KnownPersonForm(request.POST)
+    if form.is_valid():
+        person = form.save(commit=False)
+        person.manager_id = manager.id
+        person.source = "manual"
+        person.save()
+        log_mutation(manager.id, "create", "KnownPerson", person.id,
+                     f"Added name hidden from AI: {person.name}")
+    return redirect("team")
+
+
+@login_required
+@require_http_methods(["POST"])
+def known_people_delete(request, person_id: int):
+    """Remove a hidden name. Cross-tenant ids 404 (row looks absent)."""
+    manager, err = _require_manager(request)
+    if err:
+        return err
+    person = get_object_or_404(
+        KnownPerson.objects.for_manager(manager.id), pk=person_id,
+    )
+    log_mutation(manager.id, "delete", "KnownPerson", person.id,
+                 f"Removed name hidden from AI: {person.name}")
+    person.delete()
+    return redirect("team")
