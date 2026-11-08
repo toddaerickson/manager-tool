@@ -30,12 +30,48 @@ def redact_db_credentials(text: str) -> str:
     return _DB_URL_CRED_RE.sub(r"\1***@", text)
 
 
+def _strip_private_payloads(event):
+    """Remove the parts of a Sentry event that can carry note text.
+
+    sentry-sdk captures, by default, every stack frame's local variables
+    and the HTTP request body. In this app those hold journal entries,
+    1:1 notes and the exact prompt sent to Claude, with real names. The
+    init flags in mt/settings.py turn both captures off; this is the
+    second layer, so a future flag change or SDK default change cannot
+    re-open the leak. Query strings go too: /search/?q= carries names.
+    """
+    def _dicts(items):
+        return [i for i in (items if isinstance(items, list) else []) if isinstance(i, dict)]
+
+    for key in ("exception", "threads"):
+        container = event.get(key)
+        values = container.get("values") if isinstance(container, dict) else None
+        for value in _dicts(values):
+            stacktrace = value.get("stacktrace")
+            frames = stacktrace.get("frames") if isinstance(stacktrace, dict) else None
+            for frame in _dicts(frames):
+                frame.pop("vars", None)
+    request = event.get("request")
+    if isinstance(request, dict):
+        for field in ("data", "query_string", "cookies"):
+            request.pop(field, None)
+
+
 def sentry_before_send(event, _hint):
-    """Sentry `before_send` hook: redact DB URIs from exception text before
+    """Sentry `before_send` hook: strip note text (frame locals, request
+    body, query string) and redact DB URIs from exception text before
     sending. Sentry's default scrubber catches query params (`?password=`)
     but not Postgres userinfo (`user:pw@host`). Wire via
     `sentry_sdk.init(..., before_send=sentry_before_send)`.
     """
+    try:
+        _strip_private_payloads(event)
+    except Exception:
+        # Fail closed: if the shape is unexpected, drop the event rather
+        # than risk uploading note text. Losing one error report is the
+        # cheaper failure.
+        logger.warning("sentry_before_send could not strip payloads; event dropped")
+        return None
     try:
         for exc in (event.get("exception") or {}).get("values", []) or []:
             if exc.get("value"):

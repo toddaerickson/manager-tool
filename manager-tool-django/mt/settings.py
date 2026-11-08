@@ -325,6 +325,11 @@ if SENTRY_DSN:
             integrations=[DjangoIntegration()],
             traces_sample_rate=0.1,
             send_default_pii=False,
+            # Both default ON in sentry-sdk 2.x. Frame locals and request
+            # bodies here are journal text, 1:1 notes and the prompt sent
+            # to Claude, with real names. before_send strips them too.
+            include_local_variables=False,
+            max_request_body_size="never",
             environment=env("MANAGER_TOOL_ENV"),
             before_send=sentry_before_send,
         )
